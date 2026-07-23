@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "0.8.0",
+  "scanId": "20260612-qidian-newsign",
+  "platform": "qidian",
+  "platformName": "起点中文网",
+  "channel": "male",
+  "board": "newsign",
+  "contentLength": "long",
+  "sourceUrl": "https://www.qidian.com/rank/newsign/",
+  "captureMode": "mobile-ssr",
+  "capturedAt": "2026-06-12T10:00:00+08:00",
+  "dataQuality": {
+    "status": "ok",
+    "validItems": 1,
+    "rawItems": 1,
+    "warnings": []
+  }
+}

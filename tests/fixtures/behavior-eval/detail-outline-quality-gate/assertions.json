@@ -1,0 +1,9 @@
+{
+  "assertions": [
+    "routes_to_long_write",
+    "runs_detail_outline_quality_check",
+    "underfilled_outline_produces_no_prose",
+    "accepted_outline_advances_to_chapter_brief",
+    "result_packet_contains_workflow_and_hash"
+  ]
+}

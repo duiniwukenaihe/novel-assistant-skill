@@ -1,0 +1,2996 @@
+{
+  "privateRegistries": [],
+  "privateRegistryCount": 0,
+  "schemaVersion": "1.0.0",
+  "status": "ok",
+  "templateCount": 15,
+  "templates": [
+    {
+      "default_completion_policy": "stage_then_confirm",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": false,
+      "stages": [
+        {
+          "allowed_next": [
+            "market_positioning"
+          ],
+          "completion_conditions": [
+            "project_type_lock.completed"
+          ],
+          "description": "确认新书类型、目标平台、题材方向、目标读者、篇幅和是否使用对标/拆文素材；不得直接写正文。",
+          "owner_module": "story-workflow",
+          "required_inputs": [],
+          "requires_user_confirm": true,
+          "risk_level": "low",
+          "stage_id": "project_type_lock"
+        },
+        {
+          "allowed_next": [
+            "core_promise"
+          ],
+          "completion_conditions": [
+            "market_positioning.completed"
+          ],
+          "description": "完成市场定位、题材卖点、读者承诺和差异化判断。",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "project_type_lock"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "market_positioning"
+        },
+        {
+          "allowed_next": [
+            "character_design"
+          ],
+          "completion_conditions": [
+            "core_promise.completed"
+          ],
+          "description": "锁定核心设定、金手指/核心能力、主线承诺、爽点承诺和不可偏离边界。",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "market_positioning"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "core_promise"
+        },
+        {
+          "allowed_next": [
+            "plot_engine"
+          ],
+          "completion_conditions": [
+            "character_design.completed"
+          ],
+          "description": "设计主角、关键配角、反派、关系压力、人物不变量和成长曲线。",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "core_promise"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "character_design"
+        },
+        {
+          "allowed_next": [
+            "macro_outline"
+          ],
+          "completion_conditions": [
+            "plot_engine.completed"
+          ],
+          "description": "设计剧情引擎、冲突循环、钩子债表、升级节奏和长期可写性。",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "character_design"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "plot_engine"
+        },
+        {
+          "allowed_next": [
+            "volume_outline"
+          ],
+          "completion_conditions": [
+            "macro_outline.completed"
+          ],
+          "description": "形成全书总纲、主线阶段、关键节点、卷级目标和风险点。",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "plot_engine"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "macro_outline"
+        },
+        {
+          "allowed_next": [
+            "first_detail_outline"
+          ],
+          "completion_conditions": [
+            "volume_outline.completed"
+          ],
+          "description": "生成第一卷卷纲、卷内节奏、爆点安排、人物状态推进和卷尾承诺。",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "macro_outline"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "volume_outline"
+        },
+        {
+          "allowed_next": [
+            "start_ready_handoff"
+          ],
+          "completion_conditions": [
+            "first_detail_outline.completed"
+          ],
+          "description": "生成前置细纲，至少覆盖开篇可写章节、章节标题、节尾钩子、人物状态和质量门。",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "volume_outline"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "first_detail_outline"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "start_ready_handoff.completed"
+          ],
+          "description": "输出开写前交接包：下一步进入长篇日更/单章 workflow，而不是在启动流程里直接写正文。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "first_detail_outline"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "start_ready_handoff"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {
+          "character_design": "brief_or_contract",
+          "core_promise": "brief_or_contract",
+          "first_detail_outline": "brief_or_contract",
+          "macro_outline": "macro_contract",
+          "market_positioning": "source_or_material",
+          "plot_engine": "brief_or_contract",
+          "project_type_lock": "workflow_preflight",
+          "start_ready_handoff": "handoff_and_next",
+          "volume_outline": "macro_contract"
+        },
+        "unit_type": "book_startup"
+      },
+      "workflow_type": "long_startup"
+    },
+    {
+      "default_completion_policy": "stage_then_confirm",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": false,
+      "stages": [
+        {
+          "allowed_next": [
+            "material_source_choice"
+          ],
+          "completion_conditions": [
+            "project_type_lock.completed"
+          ],
+          "description": "确认短篇目标平台、题材、目标情绪、是否从脑洞卡/素材库/新鲜素材进入；不得直接写正文。",
+          "owner_module": "story-workflow",
+          "required_inputs": [],
+          "requires_user_confirm": true,
+          "risk_level": "low",
+          "stage_id": "project_type_lock"
+        },
+        {
+          "allowed_next": [
+            "material_card"
+          ],
+          "completion_conditions": [
+            "material_source_choice.completed"
+          ],
+          "description": "选择素材来源：检查未完成短篇、抓取或学习新鲜素材、从已有素材开写、审阅或回炉已有短篇。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "project_type_lock"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "low",
+          "stage_id": "material_source_choice"
+        },
+        {
+          "allowed_next": [
+            "short_setting"
+          ],
+          "completion_conditions": [
+            "material_card.completed"
+          ],
+          "description": "形成素材卡/脑洞卡，锁定标题承诺、现实入口、爆点、反转、风险和可写路线。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "material_source_choice"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "material_card"
+        },
+        {
+          "allowed_next": [
+            "platform_genre_lock"
+          ],
+          "completion_conditions": [
+            "short_setting.completed"
+          ],
+          "description": "生成短篇设定：人物、关系、动机、真实场景、核心冲突、情绪债和结尾价值。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "material_card"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "short_setting"
+        },
+        {
+          "allowed_next": [
+            "rhythm_pattern_selection"
+          ],
+          "completion_conditions": [
+            "platform_genre_lock.completed"
+          ],
+          "description": "一次只确认一个目标平台配置和一张题材方法卡，锁定开篇承诺、阅读停顿、结尾兑现、证据来源与可信度；确认前可继续聊天、纠偏或换方向，不写小纲或正文。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "short_setting"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "platform_genre_lock"
+        },
+        {
+          "allowed_next": [
+            "section_outline"
+          ],
+          "completion_conditions": [
+            "rhythm_pattern_selection.completed"
+          ],
+          "description": "选择短篇节奏套路、爽点类型、反转方式和钩子兑现。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "platform_genre_lock"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "rhythm_pattern_selection"
+        },
+        {
+          "allowed_next": [
+            "section_plan_lock"
+          ],
+          "completion_conditions": [
+            "section_outline.completed"
+          ],
+          "description": "生成小节大纲；每节必须同时锁定上一节钩子承接、压力变化、场景动作、可见阻力、角色选择、本节兑现、关系变化、代价与新钩子。连续查表/看文件不算剧情。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "rhythm_pattern_selection"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "section_outline"
+        },
+        {
+          "allowed_next": [
+            "first_section_brief"
+          ],
+          "completion_conditions": [
+            "section_plan_lock.completed"
+          ],
+          "description": "锁定总小节数、发布形态、当前第 1 节目标、全篇小节标题与扩容/缩容规则。标题必须展示给用户确认，无标题也要明确锁定。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "section_outline"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "section_plan_lock"
+        },
+        {
+          "allowed_next": [
+            "start_ready_handoff"
+          ],
+          "completion_conditions": [
+            "first_section_brief.completed"
+          ],
+          "description": "生成第 1 节 Brief，锁定视角、人物称谓、场景物件、主动动作、节尾钩子和禁写漂移点；逐项映射第 1 节大纲合同的稳定 ID，不得临场改剧情。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "section_plan_lock"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "first_section_brief"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "start_ready_handoff.completed"
+          ],
+          "description": "输出开写前交接包：下一步进入短篇正文小节 workflow，而不是在启动流程里直接写正文。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "first_section_brief"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "start_ready_handoff"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {
+          "first_section_brief": "brief_or_contract",
+          "material_card": "source_or_material",
+          "material_source_choice": "source_or_material",
+          "platform_genre_lock": "brief_or_contract",
+          "project_type_lock": "workflow_preflight",
+          "rhythm_pattern_selection": "brief_or_contract",
+          "section_outline": "brief_or_contract",
+          "section_plan_lock": "brief_or_contract",
+          "short_setting": "brief_or_contract",
+          "start_ready_handoff": "handoff_and_next"
+        },
+        "unit_type": "short_story_startup"
+      },
+      "workflow_type": "short_startup"
+    },
+    {
+      "default_completion_policy": "stage_then_confirm",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": false,
+      "stages": [
+        {
+          "allowed_next": [
+            "runtime_setup"
+          ],
+          "completion_conditions": [
+            "project_type_lock.completed"
+          ],
+          "description": "确认这是新项目初始化、已有项目迁移还是空目录准备写作；不创建正文。",
+          "owner_module": "story-workflow",
+          "required_inputs": [],
+          "requires_user_confirm": true,
+          "risk_level": "low",
+          "stage_id": "project_type_lock"
+        },
+        {
+          "allowed_next": [
+            "directory_schema"
+          ],
+          "completion_conditions": [
+            "runtime_setup.completed"
+          ],
+          "description": "部署或刷新 hooks、rules、agents、scripts、references 和 .story-deployed。",
+          "owner_module": "story-setup",
+          "required_inputs": [
+            "project_type_lock"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "runtime_setup"
+        },
+        {
+          "allowed_next": [
+            "workflow_memory_init"
+          ],
+          "completion_conditions": [
+            "directory_schema.completed"
+          ],
+          "description": "建立或确认长篇/短篇/拆文/导入所需目录结构，不覆盖用户资产。",
+          "owner_module": "story-setup",
+          "required_inputs": [
+            "runtime_setup"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "directory_schema"
+        },
+        {
+          "allowed_next": [
+            "start_ready_handoff"
+          ],
+          "completion_conditions": [
+            "workflow_memory_init.completed"
+          ],
+          "description": "初始化 workflow 任务目录、偏好记忆、上下文入口和任务收件箱。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "directory_schema"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "workflow_memory_init"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "start_ready_handoff.completed"
+          ],
+          "description": "输出项目准备完成后的可选下一步：新长篇、新短篇、导入、拆文或审阅。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "workflow_memory_init"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "start_ready_handoff"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {
+          "directory_schema": "state_integration",
+          "project_type_lock": "workflow_preflight",
+          "runtime_setup": "state_integration",
+          "start_ready_handoff": "handoff_and_next",
+          "workflow_memory_init": "state_integration"
+        },
+        "unit_type": "project_setup"
+      },
+      "workflow_type": "project_setup"
+    },
+    {
+      "default_completion_policy": "stage_then_confirm",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result",
+          "asset_revision",
+          "review_decision",
+          "downstream_effects",
+          "lifecycle_transition_request",
+          "result_write_set"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": false,
+      "stages": [
+        {
+          "allowed_next": [
+            "story_bible"
+          ],
+          "asset_target": {
+            "id": "current-book",
+            "kind": "book"
+          },
+          "completion_conditions": [
+            "positioning.completed"
+          ],
+          "description": "锁定平台、读者、题材、核心卖点和预期体量。",
+          "lifecycle_node": "positioning",
+          "owner_module": "story-long-write",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "",
+            "required": false
+          },
+          "risk_level": "low",
+          "stage_id": "positioning",
+          "write_set": [
+            "设定/**",
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "master_outline"
+          ],
+          "asset_target": {
+            "id": "current-story-bible",
+            "kind": "story_bible"
+          },
+          "completion_conditions": [
+            "story_bible.completed"
+          ],
+          "description": "建立故事核心、人物不变量、世界规则和持续剧情引擎。",
+          "lifecycle_node": "story_bible",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "positioning"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "",
+            "required": false
+          },
+          "risk_level": "medium",
+          "stage_id": "story_bible",
+          "write_set": [
+            "设定/**",
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "master_outline_review"
+          ],
+          "asset_target": {
+            "id": "current-master-outline",
+            "kind": "master_outline"
+          },
+          "completion_conditions": [
+            "master_outline.completed"
+          ],
+          "description": "设计全书主线、阶段、成长、升级和结局兑现。",
+          "lifecycle_node": "master_outline",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "story_bible"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "",
+            "required": false
+          },
+          "risk_level": "medium",
+          "stage_id": "master_outline",
+          "write_set": [
+            "大纲/**",
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "master_outline",
+            "volume_outline"
+          ],
+          "asset_target": {
+            "id": "current-master-outline",
+            "kind": "master_outline"
+          },
+          "completion_conditions": [
+            "master_outline_review.completed"
+          ],
+          "description": "审阅总纲的故事核、因果链、长期承诺和可持续性。",
+          "lifecycle_node": "master_outline_review",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "master_outline"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "master_outline",
+            "required": true
+          },
+          "risk_level": "medium",
+          "stage_id": "master_outline_review",
+          "write_set": [
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "volume_outline_review"
+          ],
+          "asset_target": {
+            "id": "current-volume",
+            "kind": "volume"
+          },
+          "completion_conditions": [
+            "volume_outline.completed"
+          ],
+          "description": "设计当前卷目标、阻力、代价、人物变化和跨卷承接。",
+          "lifecycle_node": "volume_outline",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "master_outline_review"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "",
+            "required": false
+          },
+          "risk_level": "medium",
+          "stage_id": "volume_outline",
+          "write_set": [
+            "大纲/**",
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "volume_outline",
+            "stage_detail_outline"
+          ],
+          "asset_target": {
+            "id": "current-volume",
+            "kind": "volume"
+          },
+          "completion_conditions": [
+            "volume_outline_review.completed"
+          ],
+          "description": "审阅当前卷对总纲的贡献及上下卷接口。",
+          "lifecycle_node": "volume_outline_review",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "volume_outline"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "volume_outline",
+            "required": true
+          },
+          "risk_level": "medium",
+          "stage_id": "volume_outline_review",
+          "write_set": [
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "detail_outline_review"
+          ],
+          "asset_target": {
+            "id": "current-story-stage",
+            "kind": "story_stage"
+          },
+          "completion_conditions": [
+            "stage_detail_outline.completed"
+          ],
+          "description": "按剧情阶段设计连续事件、因果、冲突升级和回收位置。",
+          "lifecycle_node": "stage_detail_outline",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "volume_outline_review"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "",
+            "required": false
+          },
+          "risk_level": "medium",
+          "stage_id": "stage_detail_outline",
+          "write_set": [
+            "大纲/**",
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "stage_detail_outline",
+            "chapter_brief"
+          ],
+          "asset_target": {
+            "id": "current-story-stage",
+            "kind": "story_stage"
+          },
+          "completion_conditions": [
+            "detail_outline_review.completed"
+          ],
+          "description": "审阅阶段细纲的基础可写性和按风险激活的专业维度。",
+          "lifecycle_node": "detail_outline_review",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "stage_detail_outline"
+          ],
+          "requires_user_confirm": false,
+          "result_contract": "detail_outline_quality_v1",
+          "review_requirement": {
+            "failure_return": "stage_detail_outline",
+            "required": true
+          },
+          "risk_level": "medium",
+          "stage_id": "detail_outline_review",
+          "write_set": [
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "brief_review"
+          ],
+          "asset_target": {
+            "id": "current-chapter",
+            "kind": "chapter"
+          },
+          "completion_conditions": [
+            "chapter_brief.completed"
+          ],
+          "description": "锁定当前章节的视角、场景目标、阻力、动作、信息和承接。",
+          "lifecycle_node": "chapter_brief",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "detail_outline_review"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "",
+            "required": false
+          },
+          "risk_level": "medium",
+          "stage_id": "chapter_brief",
+          "write_set": [
+            "大纲/**",
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "chapter_brief",
+            "prose"
+          ],
+          "asset_target": {
+            "id": "current-chapter",
+            "kind": "chapter"
+          },
+          "completion_conditions": [
+            "brief_review.completed"
+          ],
+          "description": "确认 Brief 可写、与细纲一致且不把关键剧情留给正文临场生成。",
+          "lifecycle_node": "brief_review",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "chapter_brief"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "chapter_brief",
+            "required": true
+          },
+          "risk_level": "medium",
+          "stage_id": "brief_review",
+          "write_set": [
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "prose_acceptance"
+          ],
+          "asset_target": {
+            "id": "current-chapter",
+            "kind": "chapter"
+          },
+          "completion_conditions": [
+            "prose.completed"
+          ],
+          "description": "只生产已通过 Brief 的当前章节正文候选。",
+          "lifecycle_node": "prose",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "brief_review"
+          ],
+          "requires_user_confirm": true,
+          "review_requirement": {
+            "failure_return": "",
+            "required": false
+          },
+          "risk_level": "high",
+          "stage_id": "prose",
+          "write_set": [
+            "追踪/story-system/work/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "prose",
+            "chapter_commit"
+          ],
+          "asset_target": {
+            "id": "current-chapter",
+            "kind": "chapter"
+          },
+          "completion_conditions": [
+            "prose_acceptance.completed"
+          ],
+          "description": "执行当前正文的机器质量门和创作质量门。",
+          "lifecycle_node": "prose_acceptance",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "prose"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "prose",
+            "required": true
+          },
+          "risk_level": "medium",
+          "stage_id": "prose_acceptance",
+          "write_set": [
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "chapter_brief",
+            "milestone_review"
+          ],
+          "asset_target": {
+            "id": "current-chapter",
+            "kind": "chapter"
+          },
+          "completion_conditions": [
+            "chapter_commit.completed"
+          ],
+          "description": "原子接受正文和事实增量，并投影到追踪与记忆。",
+          "lifecycle_node": "chapter_commit",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "prose_acceptance"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "",
+            "required": false
+          },
+          "risk_level": "high",
+          "stage_id": "chapter_commit",
+          "write_set": [
+            "正文/**",
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "chapter_commit",
+            "stage_detail_outline",
+            "chapter_brief",
+            "volume_acceptance"
+          ],
+          "asset_target": {
+            "id": "current-milestone",
+            "kind": "milestone"
+          },
+          "completion_conditions": [
+            "milestone_review.completed"
+          ],
+          "description": "在剧情阶段结束后复盘角色、主线、承诺、钩子和质量债。",
+          "lifecycle_node": "milestone_review",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "chapter_commit"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "chapter_commit",
+            "required": true
+          },
+          "risk_level": "medium",
+          "stage_id": "milestone_review",
+          "write_set": [
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "milestone_review",
+            "volume_outline",
+            "book_acceptance"
+          ],
+          "asset_target": {
+            "id": "current-volume",
+            "kind": "volume"
+          },
+          "completion_conditions": [
+            "volume_acceptance.completed"
+          ],
+          "description": "检查卷级兑现并完成跨卷交接。",
+          "lifecycle_node": "volume_acceptance",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "milestone_review"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "milestone_review",
+            "required": true
+          },
+          "risk_level": "medium",
+          "stage_id": "volume_acceptance",
+          "write_set": [
+            "追踪/**"
+          ]
+        },
+        {
+          "allowed_next": [
+            "volume_acceptance"
+          ],
+          "asset_target": {
+            "id": "current-book",
+            "kind": "book"
+          },
+          "completion_conditions": [
+            "book_acceptance.completed"
+          ],
+          "description": "验收全书承诺、人物终局、钩子闭环、结构和发布资产。",
+          "lifecycle_node": "book_acceptance",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "volume_acceptance"
+          ],
+          "requires_user_confirm": false,
+          "review_requirement": {
+            "failure_return": "volume_acceptance",
+            "required": true
+          },
+          "risk_level": "medium",
+          "stage_id": "book_acceptance",
+          "write_set": [
+            "追踪/**"
+          ]
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {
+          "book_acceptance": "handoff_and_next",
+          "brief_review": "quality_gate",
+          "chapter_brief": "brief_or_contract",
+          "chapter_commit": "state_integration",
+          "detail_outline_review": "quality_gate",
+          "master_outline": "macro_contract",
+          "master_outline_review": "quality_gate",
+          "milestone_review": "quality_gate",
+          "positioning": "workflow_preflight",
+          "prose": "draft_or_execute",
+          "prose_acceptance": "machine_quality_gate",
+          "stage_detail_outline": "macro_contract",
+          "story_bible": "source_or_material",
+          "volume_acceptance": "quality_gate",
+          "volume_outline": "macro_contract",
+          "volume_outline_review": "quality_gate"
+        },
+        "unit_type": "book_lifecycle"
+      },
+      "workflow_type": "long_write"
+    },
+    {
+      "default_completion_policy": "stage_then_confirm",
+      "production_kernel": "short-section-production-v2",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": false,
+      "stages": [
+        {
+          "allowed_next": [
+            "material_source_choice"
+          ],
+          "completion_conditions": [
+            "project_type_lock.completed"
+          ],
+          "description": "确认短篇目标平台、题材、目标情绪和素材入口；不得直接写正文。",
+          "owner_module": "story-workflow",
+          "required_inputs": [],
+          "requires_user_confirm": true,
+          "risk_level": "low",
+          "stage_id": "project_type_lock"
+        },
+        {
+          "allowed_next": [
+            "material_card"
+          ],
+          "completion_conditions": [
+            "material_source_choice.completed"
+          ],
+          "description": "选择检查现有素材、使用已有素材、学习新鲜素材或直接输入脑洞。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "project_type_lock"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "low",
+          "stage_id": "material_source_choice"
+        },
+        {
+          "allowed_next": [
+            "short_setting"
+          ],
+          "completion_conditions": [
+            "material_card.completed"
+          ],
+          "description": "",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "material_source_choice"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "material_card"
+        },
+        {
+          "allowed_next": [
+            "platform_genre_lock"
+          ],
+          "completion_conditions": [
+            "short_setting.completed"
+          ],
+          "description": "",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "material_card"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "short_setting"
+        },
+        {
+          "allowed_next": [
+            "rhythm_pattern_selection"
+          ],
+          "completion_conditions": [
+            "platform_genre_lock.completed"
+          ],
+          "description": "一次只确认一个目标平台配置和一张题材方法卡，锁定开篇承诺、阅读停顿、结尾兑现、证据来源与可信度；确认前可继续聊天、纠偏或换方向，只更新设定与大纲元数据。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "short_setting"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "platform_genre_lock"
+        },
+        {
+          "allowed_next": [
+            "section_outline"
+          ],
+          "completion_conditions": [
+            "rhythm_pattern_selection.completed"
+          ],
+          "description": "在平台题材契约确认后，选择短篇主节奏/辅节奏、爽点套路、反转方式和兑现方式；至少覆盖爽文打脸、公开审判、亲情断亲、追妻火葬场、死人文学、规则怪谈、身份反转、重生复仇等候选，并写入设定.md。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "platform_genre_lock"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "rhythm_pattern_selection"
+        },
+        {
+          "allowed_next": [
+            "section_plan_lock"
+          ],
+          "completion_conditions": [
+            "section_outline.completed"
+          ],
+          "description": "生成并验收小节故事引擎：上一节钩子承接、压力变化、场景动作、可见阻力、角色选择、本节兑现、关系变化和代价必须齐全；重复钩子/兑现或另起无关调查线均阻断；高潮兑现核心承诺，结尾落责任后果。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "rhythm_pattern_selection"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "section_outline"
+        },
+        {
+          "allowed_next": [
+            "short_structure_impact_audit"
+          ],
+          "completion_conditions": [
+            "section_plan_lock.completed"
+          ],
+          "description": "锁定短篇总小节数、目标字数带、发布形态、每节功能、小节标题、当前节序号和全篇完成分支；标题必须展示并取得用户确认，无标题也要明确锁定。未确定总小节/完成条件/标题锁，不得进入 Brief 或正文。扩容、缩容、插节、合并、删节和重排必须回到这里。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "section_outline"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "section_plan_lock"
+        },
+        {
+          "allowed_next": [
+            "hook_value_gate"
+          ],
+          "completion_conditions": [
+            "short_structure_impact_audit.completed"
+          ],
+          "description": "检查扩容/缩容/插节/合并/删节/重排对素材卡、设定、节奏套路、小节大纲、已生成 Brief、采用锚点、候选稿、正文索引和发布合并稿的影响；输出保留/失效/重算清单，通过后才进入看点价值门。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "section_plan_lock"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "short_structure_impact_audit"
+        },
+        {
+          "allowed_next": [
+            "short_setting",
+            "section_outline",
+            "section_brief"
+          ],
+          "completion_conditions": [
+            "hook_value_gate.completed"
+          ],
+          "description": "核对标题承诺、人物动机、现实因果、冲突升级、爽点、爆点、情绪债、节尾钩子；完整但不吸引人必须回设定或小节大纲重构，不得直接写正文。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "short_structure_impact_audit"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "hook_value_gate"
+        },
+        {
+          "allowed_next": [
+            "draft_section"
+          ],
+          "completion_conditions": [
+            "section_brief.completed"
+          ],
+          "description": "生成当前小节 Brief，锁定视角、人物称谓、主角主动动作、场景物件、因果推进、节尾钩子和禁写漂移点。必须逐项映射当前小节大纲合同的稳定 ID，不得换掉核心爆点或后果。生成后停在正文写前确认，不自动写正文。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "hook_value_gate"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "section_brief"
+        },
+        {
+          "allowed_next": [
+            "section_machine_gate"
+          ],
+          "completion_conditions": [
+            "draft_section.completed"
+          ],
+          "description": "每次只写一个小节，完成后必须进入当前小节机器门，不得连续追加下一节。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "section_brief"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "high",
+          "stage_id": "draft_section"
+        },
+        {
+          "allowed_next": [
+            "section_repair_loop",
+            "story_value_gate"
+          ],
+          "completion_conditions": [
+            "section_machine_gate.completed"
+          ],
+          "description": "运行当前小节机器门：字数/格式、AI 句式、工程词、破折号密度、退化/复读。blocking 未清零时只进入 section_repair_loop。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "current_section_draft"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "section_machine_gate"
+        },
+        {
+          "allowed_next": [
+            "section_machine_gate"
+          ],
+          "completion_conditions": [
+            "section_repair_loop.completed"
+          ],
+          "description": "只修当前小节机器门 blocking，保留事实、人物、钩子和小节功能；修完回机器门复扫。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "section_machine_gate"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "section_repair_loop"
+        },
+        {
+          "allowed_next": [
+            "feedback_impact_sync",
+            "section_brief",
+            "section_accept_anchor"
+          ],
+          "completion_conditions": [
+            "story_value_gate.completed"
+          ],
+          "description": "后台审查当前小节是否值得读：人物动机、现实因果、冲突升级、爽点/爆点、主角能动性、节尾钩子、大纲忠实度和本节功能完成。十一项判断与每个大纲 ID 都必须引用正文原句；空泛的「均通过」无效。通过后统一显示正文采用决策。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "section_machine_gate"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "story_value_gate"
+        },
+        {
+          "allowed_next": [
+            "feedback_apply_patch"
+          ],
+          "completion_conditions": [
+            "feedback_impact_sync.completed"
+          ],
+          "description": "只读分析用户反馈影响层级：表达层、当前 Brief、规划层或结构层；输出受影响文件、保留项、失效项、重算项、建议回写顺序，以及 revision_groups（每组目标、小节范围、完成条件），不直接修改正文或规划资产。影响两个及以上小节、跨节钩子、压力曲线或高潮/结尾职责时必须先回受影响范围的小节大纲，不得从 Brief 或正文补写开始；只展示 workflow 返回的作者选项，不发明命令。",
+          "owner_module": "story-workflow",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "feedback_impact_sync"
+        },
+        {
+          "allowed_next": [
+            "section_repair_loop",
+            "section_brief",
+            "short_setting",
+            "section_outline",
+            "section_plan_lock"
+          ],
+          "completion_conditions": [
+            "feedback_apply_patch.completed"
+          ],
+          "description": "按已确认的影响计划回写：表达层只修当前节；当前节故事调整先重建 Brief；人物动机、关键因果、反转、节奏或后续承接冲突先更新设定/小节大纲并使旧 Brief 失效；扩缩容、插节、合并、删节或重排先回计划锁定和结构影响审计。跨节回写必须继承 revision_groups，供作者查看阶段目标并逐节推进。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "feedback_impact_sync"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "high",
+          "stage_id": "feedback_apply_patch"
+        },
+        {
+          "allowed_next": [
+            "next_section_brief",
+            "full_story_assembly"
+          ],
+          "completion_conditions": [
+            "section_accept_anchor.completed"
+          ],
+          "description": "采用当前小节为 canonical 正文，记录小节摘要、人物状态、承接钩子、质量门结果、当前节序号和剩余小节；未写锚点不得生成下一节。若总小节已完成，进入全篇组装。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "story_value_gate"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "section_accept_anchor"
+        },
+        {
+          "allowed_next": [
+            "draft_section"
+          ],
+          "completion_conditions": [
+            "next_section_brief.completed"
+          ],
+          "description": "自动生成下一小节 Brief，读取已采用小节锚点、正文末尾、用户反馈和质量债，并校验作品内篇幅基准；明显偏离时调整目标或记录结构例外理由。生成后停在正文写前确认，不自动写正文。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "section_accept_anchor"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "next_section_brief"
+        },
+        {
+          "allowed_next": [
+            "full_story_review"
+          ],
+          "completion_conditions": [
+            "full_story_assembly.completed"
+          ],
+          "description": "确认所有计划小节均已采用，合并/整理正文.md，生成全篇节序索引、缺节检查、节尾承接检查和发布前完整稿。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "section_accept_anchor"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "full_story_assembly"
+        },
+        {
+          "allowed_next": [
+            "deslop",
+            "feedback_impact_sync"
+          ],
+          "completion_conditions": [
+            "full_story_review.completed"
+          ],
+          "description": "执行一次全篇总编辑验收：开篇场景化与信息负载、小节功能/篇幅曲线、配角主动性、对手动机、主角身份效用、高潮跑道、结尾后果和标题承诺必须引用正文证据。通过后进入表达清理；需要回炉时把问题交给反馈影响链，先确认规划回写范围，不直接改正文。",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "full_story_assembly"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "full_story_review"
+        },
+        {
+          "allowed_next": [
+            "final_check"
+          ],
+          "completion_conditions": [
+            "deslop.completed"
+          ],
+          "description": "只在故事层可进入表达清理后处理 AI 套话、重复解释、工程词和标点；提交前必须比较去 AI 前后逐节篇幅与全篇删损。显著删损时只补回动作、反应、后果和承接，不按字数差额机械灌水。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "full_story_review"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "deslop"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "final_check.completed"
+          ],
+          "description": "验证节数、正式稿哈希、去 AI 保真回执和发布完整性；只有“去 AI 后保真通过”或作者明确接受结构例外才可完成。",
+          "owner_module": "story-short-write",
+          "required_inputs": [
+            "deslop"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "final_check"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {
+          "deslop": "quality_gate",
+          "draft_section": "draft_or_execute",
+          "feedback_apply_patch": "brief_or_contract",
+          "feedback_impact_sync": "review_or_validate",
+          "final_check": "handoff_and_next",
+          "full_story_assembly": "state_integration",
+          "full_story_review": "quality_gate",
+          "hook_value_gate": "quality_gate",
+          "material_card": "source_or_material",
+          "material_source_choice": "source_or_material",
+          "next_section_brief": "brief_or_contract",
+          "platform_genre_lock": "brief_or_contract",
+          "project_type_lock": "workflow_preflight",
+          "rhythm_pattern_selection": "brief_or_contract",
+          "section_accept_anchor": "state_integration",
+          "section_brief": "brief_or_contract",
+          "section_machine_gate": "machine_quality_gate",
+          "section_outline": "brief_or_contract",
+          "section_plan_lock": "brief_or_contract",
+          "section_repair_loop": "draft_or_execute",
+          "short_setting": "brief_or_contract",
+          "short_structure_impact_audit": "quality_gate",
+          "story_value_gate": "quality_gate"
+        },
+        "unit_type": "section"
+      },
+      "workflow_type": "short_write"
+    },
+    {
+      "default_completion_policy": "stage_then_confirm",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": false,
+      "stages": [
+        {
+          "allowed_next": [
+            "evidence_scan"
+          ],
+          "completion_conditions": [
+            "range_lock.completed"
+          ],
+          "description": "",
+          "owner_module": "story-workflow",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "range_lock"
+        },
+        {
+          "allowed_next": [
+            "classify_findings"
+          ],
+          "completion_conditions": [
+            "evidence_scan.completed"
+          ],
+          "description": "",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "range_lock"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "evidence_scan"
+        },
+        {
+          "allowed_next": [
+            "repair_plan"
+          ],
+          "completion_conditions": [
+            "classify_findings.completed"
+          ],
+          "description": "",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "evidence_scan"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "classify_findings"
+        },
+        {
+          "allowed_next": [
+            "user_scope_choice"
+          ],
+          "completion_conditions": [
+            "repair_plan.completed"
+          ],
+          "description": "",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "classify_findings"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "repair_plan"
+        },
+        {
+          "allowed_next": [
+            "repair_execution_plan"
+          ],
+          "completion_conditions": [
+            "user_scope_choice.completed"
+          ],
+          "description": "",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "repair_plan"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "medium",
+          "stage_id": "user_scope_choice"
+        },
+        {
+          "allowed_next": [
+            "staged_repair_candidate"
+          ],
+          "completion_conditions": [
+            "repair_execution_plan.completed"
+          ],
+          "description": "",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "user_scope_choice"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "repair_execution_plan"
+        },
+        {
+          "allowed_next": [
+            "repair_machine_gate"
+          ],
+          "completion_conditions": [
+            "staged_repair_candidate.completed"
+          ],
+          "description": "",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "repair_execution_plan"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "high",
+          "stage_id": "staged_repair_candidate"
+        },
+        {
+          "allowed_next": [
+            "staged_repair_candidate",
+            "execute_repair"
+          ],
+          "completion_conditions": [
+            "repair_machine_gate.completed"
+          ],
+          "description": "",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "staged_repair_candidate"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "repair_machine_gate"
+        },
+        {
+          "allowed_next": [
+            "recheck"
+          ],
+          "completion_conditions": [
+            "execute_repair.completed"
+          ],
+          "description": "",
+          "owner_module": "story-long-write",
+          "required_inputs": [
+            "repair_machine_gate"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "high",
+          "stage_id": "execute_repair"
+        },
+        {
+          "allowed_next": [
+            "closure"
+          ],
+          "completion_conditions": [
+            "recheck.completed"
+          ],
+          "description": "",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "execute_repair"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "recheck"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "closure.completed"
+          ],
+          "description": "",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "recheck"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "closure"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {
+          "classify_findings": "quality_gate",
+          "closure": "handoff_and_next",
+          "evidence_scan": "source_or_material",
+          "execute_repair": "state_integration",
+          "range_lock": "workflow_preflight",
+          "recheck": "quality_gate",
+          "repair_execution_plan": "brief_or_contract",
+          "repair_machine_gate": "machine_quality_gate",
+          "repair_plan": "brief_or_contract",
+          "staged_repair_candidate": "draft_or_execute",
+          "user_scope_choice": "brief_or_contract"
+        },
+        "unit_type": "range_or_fix_item"
+      },
+      "workflow_type": "review_repair"
+    },
+    {
+      "default_completion_policy": "stage_then_confirm",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": false,
+      "stages": [
+        {
+          "allowed_next": [
+            "plan_contract"
+          ],
+          "completion_conditions": [
+            "scope_lock.completed"
+          ],
+          "description": "锁定当前短篇项目、完整作品或用户指定小节范围；只读验收，不修改正文、设定或小节大纲。",
+          "owner_module": "story-workflow",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "scope_lock"
+        },
+        {
+          "allowed_next": [
+            "review_plan"
+          ],
+          "completion_conditions": [
+            "plan_contract.completed"
+          ],
+          "description": "只运行一次短篇验收入口，核对正文来源、素材卡、设定、小节大纲、总节数、跨节钩子和高潮/结尾职责。没有可审阅正文才阻断；规划格式或内容风险逐节记录，但不阻止只读正文审阅。",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "scope_lock"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "plan_contract"
+        },
+        {
+          "allowed_next": [
+            "review_execute"
+          ],
+          "completion_conditions": [
+            "review_plan.completed"
+          ],
+          "description": "生成紧凑 Evidence Plan：覆盖每一小节、相邻承接和全篇兑现；规划存在风险时把规划兑现结论标为暂定，同时保留逐节补全清单，不把内部批次或 agent 数量暴露给作者。",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "plan_contract"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "review_plan"
+        },
+        {
+          "allowed_next": [
+            "continuity_synthesis"
+          ],
+          "completion_conditions": [
+            "review_execute.completed"
+          ],
+          "description": "按计划执行逐节只读审阅；每节必须有 verdict 和证据，不能只展示最严重的若干节后暗示其余小节无问题。",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "review_plan"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "review_execute"
+        },
+        {
+          "allowed_next": [
+            "review_report"
+          ],
+          "completion_conditions": [
+            "continuity_synthesis.completed"
+          ],
+          "description": "综合跨节因果、人物连续性、钩子回收、压力曲线、高潮兑现、结尾后果和平台阅读体验。",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "review_execute"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "continuity_synthesis"
+        },
+        {
+          "allowed_next": [
+            "user_scope_choice"
+          ],
+          "completion_conditions": [
+            "review_report.completed"
+          ],
+          "description": "输出全篇验收报告、逐节状态表和分级修复队列；默认只读，不覆盖创作资产。",
+          "owner_module": "story-review",
+          "required_inputs": [
+            "continuity_synthesis"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "review_report"
+        },
+        {
+          "allowed_next": [
+            "repair_handoff"
+          ],
+          "completion_conditions": [
+            "user_scope_choice.completed"
+          ],
+          "description": "向作者展示四个数字选项：全部修复、先修高价值项、只保存报告、输入其他要求；推荐项必须标注（推荐）。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "review_report"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "low",
+          "stage_id": "user_scope_choice"
+        },
+        {
+          "allowed_next": [
+            "closure"
+          ],
+          "completion_conditions": [
+            "repair_handoff.completed"
+          ],
+          "description": "根据作者选择创建或恢复短篇回炉任务，把受影响层级交回 short_write；审阅模块不得直接改稿。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "user_scope_choice"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "repair_handoff"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "closure.completed"
+          ],
+          "description": "保存验收结论、修复任务关系与下一步，不把审阅任务拆成多个作者任务。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "repair_handoff"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "closure"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {
+          "closure": "handoff_and_next",
+          "continuity_synthesis": "quality_gate",
+          "plan_contract": "quality_gate",
+          "repair_handoff": "state_integration",
+          "review_execute": "review_or_validate",
+          "review_plan": "brief_or_contract",
+          "review_report": "state_integration",
+          "scope_lock": "workflow_preflight",
+          "user_scope_choice": "brief_or_contract"
+        },
+        "unit_type": "short_story_review"
+      },
+      "workflow_type": "short_review"
+    },
+    {
+      "default_completion_policy": "full_auto",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": true,
+      "stages": [
+        {
+          "allowed_next": [
+            "chapter_index"
+          ],
+          "completion_conditions": [
+            "source_preflight.completed"
+          ],
+          "description": "",
+          "owner_module": "story-long-analyze",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "source_preflight"
+        },
+        {
+          "allowed_next": [
+            "batch_extract"
+          ],
+          "completion_conditions": [
+            "chapter_index.completed"
+          ],
+          "description": "",
+          "owner_module": "story-long-analyze",
+          "required_inputs": [
+            "source_preflight"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "chapter_index"
+        },
+        {
+          "allowed_next": [
+            "grounding_check"
+          ],
+          "completion_conditions": [
+            "batch_extract.completed"
+          ],
+          "description": "",
+          "owner_module": "story-long-analyze",
+          "required_inputs": [
+            "chapter_index"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "batch_extract"
+        },
+        {
+          "allowed_next": [
+            "aggregate"
+          ],
+          "completion_conditions": [
+            "grounding_check.completed"
+          ],
+          "description": "",
+          "owner_module": "story-long-analyze",
+          "required_inputs": [
+            "batch_extract"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "grounding_check"
+        },
+        {
+          "allowed_next": [
+            "craft_absorption"
+          ],
+          "completion_conditions": [
+            "aggregate.completed"
+          ],
+          "description": "",
+          "owner_module": "story-long-analyze",
+          "required_inputs": [
+            "grounding_check"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "aggregate"
+        },
+        {
+          "allowed_next": [
+            "final_report"
+          ],
+          "completion_conditions": [
+            "craft_absorption.completed"
+          ],
+          "description": "",
+          "owner_module": "story-long-analyze",
+          "required_inputs": [
+            "aggregate"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "craft_absorption"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "final_report.completed"
+          ],
+          "description": "",
+          "owner_module": "story-long-analyze",
+          "required_inputs": [
+            "craft_absorption"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "final_report"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {},
+        "unit_type": "workflow_batch"
+      },
+      "workflow_type": "long_analyze"
+    },
+    {
+      "default_completion_policy": "full_auto",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": true,
+      "stages": [
+        {
+          "allowed_next": [
+            "source_lock"
+          ],
+          "completion_conditions": [
+            "scan_preflight.completed"
+          ],
+          "description": "确认目标平台、题材方向、时间窗口和数据获取边界；不把历史印象当作当前榜单。",
+          "owner_module": "story-long-scan",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "scan_preflight"
+        },
+        {
+          "allowed_next": [
+            "scan_execute"
+          ],
+          "completion_conditions": [
+            "source_lock.completed"
+          ],
+          "description": "锁定官方、用户提供或明确标注的辅助数据源，记录抓取时间、来源与适用范围。",
+          "owner_module": "story-long-scan",
+          "required_inputs": [
+            "scan_preflight"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "source_lock"
+        },
+        {
+          "allowed_next": [
+            "trend_validation"
+          ],
+          "completion_conditions": [
+            "scan_execute.completed"
+          ],
+          "description": "采集并归一化榜单样本，提取可复核的题材、书名、指标和跨样本模式。",
+          "owner_module": "story-long-scan",
+          "required_inputs": [
+            "source_lock"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "scan_execute"
+        },
+        {
+          "allowed_next": [
+            "artifact_assembly"
+          ],
+          "completion_conditions": [
+            "trend_validation.completed"
+          ],
+          "description": "验证样本覆盖、时间有效性、来源标注与趋势证据；不足时保留观察项，不升级为选题结论。",
+          "owner_module": "story-long-scan",
+          "required_inputs": [
+            "scan_execute"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "trend_validation"
+        },
+        {
+          "allowed_next": [
+            "closure"
+          ],
+          "completion_conditions": [
+            "artifact_assembly.completed"
+          ],
+          "description": "生成扫榜报告、趋势信号、选题候选和作者吸收卡，并保留数据来源与验证证据。",
+          "owner_module": "story-long-scan",
+          "required_inputs": [
+            "trend_validation"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "artifact_assembly"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "closure.completed"
+          ],
+          "description": "交接可验证的市场输入与下一步选题或拆文建议，不直接改写书籍设定。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "artifact_assembly"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "closure"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {
+          "artifact_assembly": "state_integration",
+          "closure": "handoff_and_next",
+          "scan_execute": "draft_or_execute",
+          "scan_preflight": "workflow_preflight",
+          "source_lock": "source_or_material",
+          "trend_validation": "quality_gate"
+        },
+        "unit_type": "scan_batch"
+      },
+      "workflow_type": "long_scan"
+    },
+    {
+      "default_completion_policy": "full_auto",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": true,
+      "stages": [
+        {
+          "allowed_next": [
+            "source_lock"
+          ],
+          "completion_conditions": [
+            "scan_preflight.completed"
+          ],
+          "description": "确认短篇平台、情绪赛道、样本窗口和数据获取边界；不把旧风口当作当前结论。",
+          "owner_module": "story-short-scan",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "scan_preflight"
+        },
+        {
+          "allowed_next": [
+            "scan_execute"
+          ],
+          "completion_conditions": [
+            "source_lock.completed"
+          ],
+          "description": "锁定官方、用户提供或明确标注的辅助数据源，记录抓取时间、来源与有效期。",
+          "owner_module": "story-short-scan",
+          "required_inputs": [
+            "scan_preflight"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "source_lock"
+        },
+        {
+          "allowed_next": [
+            "trend_validation"
+          ],
+          "completion_conditions": [
+            "scan_execute.completed"
+          ],
+          "description": "采集并归一化短篇榜单样本，提取情绪触发、传播点、题材标签和饱和风险。",
+          "owner_module": "story-short-scan",
+          "required_inputs": [
+            "source_lock"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "scan_execute"
+        },
+        {
+          "allowed_next": [
+            "artifact_assembly"
+          ],
+          "completion_conditions": [
+            "trend_validation.completed"
+          ],
+          "description": "验证样本覆盖、时间有效性、来源标注与趋势证据；不把单点样本写成可复制的故事结构。",
+          "owner_module": "story-short-scan",
+          "required_inputs": [
+            "scan_execute"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "trend_validation"
+        },
+        {
+          "allowed_next": [
+            "closure"
+          ],
+          "completion_conditions": [
+            "artifact_assembly.completed"
+          ],
+          "description": "生成短篇市场报告、情绪趋势、选题候选和复扫时间，并保留来源与验证证据。",
+          "owner_module": "story-short-scan",
+          "required_inputs": [
+            "trend_validation"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "artifact_assembly"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "closure.completed"
+          ],
+          "description": "交接市场输入给短篇创作或拆文，不直接生成短篇正文。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "artifact_assembly"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "closure"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {
+          "artifact_assembly": "state_integration",
+          "closure": "handoff_and_next",
+          "scan_execute": "draft_or_execute",
+          "scan_preflight": "workflow_preflight",
+          "source_lock": "source_or_material",
+          "trend_validation": "quality_gate"
+        },
+        "unit_type": "scan_batch"
+      },
+      "workflow_type": "short_scan"
+    },
+    {
+      "default_completion_policy": "full_auto",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": true,
+      "stages": [
+        {
+          "allowed_next": [
+            "source_lock"
+          ],
+          "completion_conditions": [
+            "analysis_preflight.completed"
+          ],
+          "description": "确认合法持有的拆解对象、目标范围、模式和续跑状态；拆解只读，不写新故事正文。",
+          "owner_module": "story-short-analyze",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "analysis_preflight"
+        },
+        {
+          "allowed_next": [
+            "analysis_execute"
+          ],
+          "completion_conditions": [
+            "source_lock.completed"
+          ],
+          "description": "锁定原文来源、可读范围、章节或段落切片及禁抄边界，避免混入无来源推断。",
+          "owner_module": "story-short-analyze",
+          "required_inputs": [
+            "analysis_preflight"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "source_lock"
+        },
+        {
+          "allowed_next": [
+            "source_validation"
+          ],
+          "completion_conditions": [
+            "analysis_execute.completed"
+          ],
+          "description": "提取故事核、情绪结构、人物关系变化、反转铺垫和可迁移技巧，并建立原文证据关联。",
+          "owner_module": "story-short-analyze",
+          "required_inputs": [
+            "source_lock"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "analysis_execute"
+        },
+        {
+          "allowed_next": [
+            "artifact_assembly"
+          ],
+          "completion_conditions": [
+            "source_validation.completed"
+          ],
+          "description": "验证覆盖范围、证据对应、禁抄边界和输出完整性；证据不足的结论必须降级为待验证项。",
+          "owner_module": "story-short-analyze",
+          "required_inputs": [
+            "analysis_execute"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "source_validation"
+        },
+        {
+          "allowed_next": [
+            "closure"
+          ],
+          "completion_conditions": [
+            "artifact_assembly.completed"
+          ],
+          "description": "生成拆文报告、情节节点、写作手法、元数据和受限 memory_updates 建议。",
+          "owner_module": "story-short-analyze",
+          "required_inputs": [
+            "source_validation"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "artifact_assembly"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "closure.completed"
+          ],
+          "description": "交接技巧卡与结构启发，要求下游重新确认新故事的因果、人物和结尾承诺。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "artifact_assembly"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "closure"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {
+          "analysis_execute": "draft_or_execute",
+          "analysis_preflight": "workflow_preflight",
+          "artifact_assembly": "state_integration",
+          "closure": "handoff_and_next",
+          "source_lock": "source_or_material",
+          "source_validation": "quality_gate"
+        },
+        "unit_type": "analysis_batch"
+      },
+      "workflow_type": "short_analyze"
+    },
+    {
+      "default_completion_policy": "stage_then_confirm",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": false,
+      "stages": [
+        {
+          "allowed_next": [
+            "input_lock"
+          ],
+          "completion_conditions": [
+            "cover_preflight.completed"
+          ],
+          "description": "确认书名、作者名、平台尺寸、输出目录、参考图与现有封面状态；封面不修改叙事资产。",
+          "owner_module": "story-cover",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "cover_preflight"
+        },
+        {
+          "allowed_next": [
+            "visual_direction"
+          ],
+          "completion_conditions": [
+            "input_lock.completed"
+          ],
+          "description": "锁定书籍信息、题材、视觉关键词、平台规格、目标文件和覆盖策略。",
+          "owner_module": "story-cover",
+          "required_inputs": [
+            "cover_preflight"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "input_lock"
+        },
+        {
+          "allowed_next": [
+            "generation_confirmation"
+          ],
+          "completion_conditions": [
+            "visual_direction.completed"
+          ],
+          "description": "形成可审阅的题材视觉方向、提示词与输出命名方案，明确是否新建或覆盖既有封面。",
+          "owner_module": "story-cover",
+          "required_inputs": [
+            "input_lock"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "visual_direction"
+        },
+        {
+          "allowed_next": [
+            "generate_cover_execute"
+          ],
+          "completion_conditions": [
+            "generation_confirmation.completed"
+          ],
+          "description": "在调用图像生成或覆盖任何现有封面前，必须取得用户对视觉方向、目标文件和覆盖策略的明确确认。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "visual_direction"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "high",
+          "stage_id": "generation_confirmation"
+        },
+        {
+          "allowed_next": [
+            "output_validation"
+          ],
+          "completion_conditions": [
+            "generate_cover_execute.completed"
+          ],
+          "description": "按已确认的提示词生成封面或执行已确认的覆盖，保存版本化源文件与提示词副本。",
+          "owner_module": "story-cover",
+          "required_inputs": [
+            "generation_confirmation"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "high",
+          "stage_id": "generate_cover_execute"
+        },
+        {
+          "allowed_next": [
+            "artifact_assembly"
+          ],
+          "completion_conditions": [
+            "output_validation.completed"
+          ],
+          "description": "验证图像可打开、尺寸比例、书名与作者名可读性、无水印和目标平台安全区。",
+          "owner_module": "story-cover",
+          "required_inputs": [
+            "generate_cover_execute"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "output_validation"
+        },
+        {
+          "allowed_next": [
+            "closure"
+          ],
+          "completion_conditions": [
+            "artifact_assembly.completed"
+          ],
+          "description": "整理封面文件、提示词、规格、验证记录和可复用的视觉方向交接包。",
+          "owner_module": "story-cover",
+          "required_inputs": [
+            "output_validation"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "artifact_assembly"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "closure.completed"
+          ],
+          "description": "交接已验证的封面产物与路径；不得把封面方向反向写入故事设定。",
+          "owner_module": "story-workflow",
+          "required_inputs": [
+            "artifact_assembly"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "closure"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {
+          "artifact_assembly": "state_integration",
+          "closure": "handoff_and_next",
+          "cover_preflight": "workflow_preflight",
+          "generate_cover_execute": "draft_or_execute",
+          "generation_confirmation": "brief_or_contract",
+          "input_lock": "source_or_material",
+          "output_validation": "quality_gate",
+          "visual_direction": "brief_or_contract"
+        },
+        "unit_type": "cover_asset"
+      },
+      "workflow_type": "cover"
+    },
+    {
+      "default_completion_policy": "full_auto",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": true,
+      "stages": [
+        {
+          "allowed_next": [
+            "source_discovery"
+          ],
+          "completion_conditions": [
+            "query_lock.completed"
+          ],
+          "description": "",
+          "owner_module": "story-import",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "query_lock"
+        },
+        {
+          "allowed_next": [
+            "candidate_verify"
+          ],
+          "completion_conditions": [
+            "source_discovery.completed"
+          ],
+          "description": "",
+          "owner_module": "story-import",
+          "required_inputs": [
+            "query_lock"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "source_discovery"
+        },
+        {
+          "allowed_next": [
+            "download_or_import"
+          ],
+          "completion_conditions": [
+            "candidate_verify.completed"
+          ],
+          "description": "",
+          "owner_module": "story-import",
+          "required_inputs": [
+            "source_discovery"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "candidate_verify"
+        },
+        {
+          "allowed_next": [
+            "quality_reconcile"
+          ],
+          "completion_conditions": [
+            "download_or_import.completed"
+          ],
+          "description": "",
+          "owner_module": "story-import",
+          "required_inputs": [
+            "candidate_verify"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "high",
+          "stage_id": "download_or_import"
+        },
+        {
+          "allowed_next": [
+            "handoff"
+          ],
+          "completion_conditions": [
+            "quality_reconcile.completed"
+          ],
+          "description": "",
+          "owner_module": "story-import",
+          "required_inputs": [
+            "download_or_import"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "quality_reconcile"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "handoff.completed"
+          ],
+          "description": "",
+          "owner_module": "story-import",
+          "required_inputs": [
+            "quality_reconcile"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "handoff"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {},
+        "unit_type": "workflow_batch"
+      },
+      "workflow_type": "download_import"
+    },
+    {
+      "default_completion_policy": "stage_then_confirm",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": false,
+      "stages": [
+        {
+          "allowed_next": [
+            "diagnose"
+          ],
+          "completion_conditions": [
+            "scope_lock.completed"
+          ],
+          "description": "",
+          "owner_module": "story-deslop",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "scope_lock"
+        },
+        {
+          "allowed_next": [
+            "repair_copy_or_in_place"
+          ],
+          "completion_conditions": [
+            "diagnose.completed"
+          ],
+          "description": "",
+          "owner_module": "story-deslop",
+          "required_inputs": [
+            "scope_lock"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "diagnose"
+        },
+        {
+          "allowed_next": [
+            "fact_preservation"
+          ],
+          "completion_conditions": [
+            "repair_copy_or_in_place.completed"
+          ],
+          "description": "",
+          "owner_module": "story-deslop",
+          "required_inputs": [
+            "diagnose"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "high",
+          "stage_id": "repair_copy_or_in_place"
+        },
+        {
+          "allowed_next": [
+            "prose_gate"
+          ],
+          "completion_conditions": [
+            "fact_preservation.completed"
+          ],
+          "description": "",
+          "owner_module": "story-deslop",
+          "required_inputs": [
+            "repair_copy_or_in_place"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "fact_preservation"
+        },
+        {
+          "allowed_next": [
+            "closure"
+          ],
+          "completion_conditions": [
+            "prose_gate.completed"
+          ],
+          "description": "",
+          "owner_module": "story-deslop",
+          "required_inputs": [
+            "fact_preservation"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "medium",
+          "stage_id": "prose_gate"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "closure.completed"
+          ],
+          "description": "",
+          "owner_module": "story-deslop",
+          "required_inputs": [
+            "prose_gate"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "closure"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {},
+        "unit_type": "workflow_batch"
+      },
+      "workflow_type": "deslop"
+    },
+    {
+      "default_completion_policy": "stage_then_confirm",
+      "recovery": {
+        "on_missing_result_packet": "run_workflow_recover_before_reexecution",
+        "on_output_failure": "pause_at_checkpoint_and_record_blocking_reason",
+        "preserve_last_trusted_artifact": true,
+        "resume_from": "last_trusted_artifact_or_current_stage"
+      },
+      "result_contract": {
+        "required_fields": [
+          "outputs",
+          "changed_files",
+          "evidence",
+          "verification_result",
+          "checkpoint_state",
+          "output_health_result"
+        ],
+        "version": 2
+      },
+      "safe_full_auto": false,
+      "stages": [
+        {
+          "allowed_next": [
+            "deployment_check"
+          ],
+          "completion_conditions": [
+            "version_check.completed"
+          ],
+          "description": "",
+          "owner_module": "story-setup",
+          "required_inputs": [],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "version_check"
+        },
+        {
+          "allowed_next": [
+            "refresh_runtime"
+          ],
+          "completion_conditions": [
+            "deployment_check.completed"
+          ],
+          "description": "",
+          "owner_module": "story-setup",
+          "required_inputs": [
+            "version_check"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "deployment_check"
+        },
+        {
+          "allowed_next": [
+            "migration_decision"
+          ],
+          "completion_conditions": [
+            "refresh_runtime.completed"
+          ],
+          "description": "",
+          "owner_module": "story-setup",
+          "required_inputs": [
+            "deployment_check"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "high",
+          "stage_id": "refresh_runtime"
+        },
+        {
+          "allowed_next": [
+            "verification"
+          ],
+          "completion_conditions": [
+            "migration_decision.completed"
+          ],
+          "description": "",
+          "owner_module": "story-setup",
+          "required_inputs": [
+            "refresh_runtime"
+          ],
+          "requires_user_confirm": true,
+          "risk_level": "high",
+          "stage_id": "migration_decision"
+        },
+        {
+          "allowed_next": [],
+          "completion_conditions": [
+            "verification.completed"
+          ],
+          "description": "",
+          "owner_module": "story-setup",
+          "required_inputs": [
+            "migration_decision"
+          ],
+          "requires_user_confirm": false,
+          "risk_level": "low",
+          "stage_id": "verification"
+        }
+      ],
+      "unit_lifecycle_contract": {
+        "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+        "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+        "required_sequence": [
+          "brief_or_contract",
+          "draft_or_execute",
+          "machine_quality_gate",
+          "quality_gate",
+          "state_integration",
+          "handoff_and_next"
+        ],
+        "stage_roles": {},
+        "unit_type": "workflow_batch"
+      },
+      "workflow_type": "setup_update"
+    }
+  ]
+}

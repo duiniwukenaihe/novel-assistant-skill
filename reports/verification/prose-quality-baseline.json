@@ -1,0 +1,215 @@
+{
+  "schemaVersion": "2.0.0",
+  "corpusVersion": "v1",
+  "detectorVersion": "prose-quality-benchmark@2.0.0;check-ai-patterns@4a229baf6ffe;check-degeneration@edad5d169333",
+  "sourceIdentity": {
+    "identityVersion": "prose-quality-inputs-v1",
+    "benchmarkSourceHash": "sha256:b335f53916848263b70ed6e5c3aca8015d1ae6802ea5d0652a16aca546f488c6",
+    "corpusContentHash": "sha256:2037b41726e31eac56d3558bb292c6018b400488b10dac6fe8bbd0d10ce31b95",
+    "detectorSourceHashes": {
+      "check-ai-patterns": "sha256:4a229baf6ffebaf3d192b536f9e4f7d92ebf6a86646002ad62dbbb856227e3b2",
+      "check-degeneration": "sha256:edad5d1693334fe98688323db89da0385c9bc827cbe0fbc50a1e5e28f71bdfb8"
+    },
+    "sourceCommit": "3be28360cd84d4a89dafcaafe8d86a10a040e71c",
+    "sourceTree": "21fad41be59e6e9fc6b5d0525b6996996d9538d5"
+  },
+  "benchmarkSourceHash": "sha256:b335f53916848263b70ed6e5c3aca8015d1ae6802ea5d0652a16aca546f488c6",
+  "corpusContentHash": "sha256:2037b41726e31eac56d3558bb292c6018b400488b10dac6fe8bbd0d10ce31b95",
+  "precision": 0.5,
+  "recall": 0.666667,
+  "falsePositiveRate": 0.5,
+  "falseNegativeRate": 0.333333,
+  "metrics": {
+    "precision": {
+      "status": "available",
+      "value": 0.5,
+      "numerator": 2,
+      "denominator": 4
+    },
+    "recall": {
+      "status": "available",
+      "value": 0.666667,
+      "numerator": 2,
+      "denominator": 3
+    },
+    "falsePositiveRate": {
+      "status": "available",
+      "value": 0.5,
+      "numerator": 2,
+      "denominator": 4
+    },
+    "falseNegativeRate": {
+      "status": "available",
+      "value": 0.333333,
+      "numerator": 1,
+      "denominator": 3
+    }
+  },
+  "metricsBySeverity": {
+    "advisory": {
+      "precision": {
+        "status": "available",
+        "value": 0,
+        "numerator": 0,
+        "denominator": 2
+      },
+      "recall": {
+        "status": "available",
+        "value": 0,
+        "numerator": 0,
+        "denominator": 3
+      },
+      "falsePositiveRate": {
+        "status": "available",
+        "value": 0.5,
+        "numerator": 2,
+        "denominator": 4
+      },
+      "falseNegativeRate": {
+        "status": "available",
+        "value": 1,
+        "numerator": 3,
+        "denominator": 3
+      }
+    },
+    "blocking": {
+      "precision": {
+        "status": "available",
+        "value": 1,
+        "numerator": 2,
+        "denominator": 2
+      },
+      "recall": {
+        "status": "available",
+        "value": 0.666667,
+        "numerator": 2,
+        "denominator": 3
+      },
+      "falsePositiveRate": {
+        "status": "available",
+        "value": 0,
+        "numerator": 0,
+        "denominator": 4
+      },
+      "falseNegativeRate": {
+        "status": "available",
+        "value": 0.333333,
+        "numerator": 1,
+        "denominator": 3
+      }
+    }
+  },
+  "severityCalibration": {
+    "policyVersion": "explicit-severity-v1",
+    "counts": {
+      "evaluated": 0,
+      "matched": 0,
+      "underEscalated": 0,
+      "overEscalated": 0
+    },
+    "mismatches": []
+  },
+  "aggregationPolicy": {
+    "version": "severity-any-v1",
+    "rule": "A record is detected when it has one or more advisory or blocking findings.",
+    "includedSeverities": [
+      "advisory",
+      "blocking"
+    ]
+  },
+  "counts": {
+    "confusionMatrix": {
+      "truePositive": 2,
+      "falsePositive": 2,
+      "trueNegative": 2,
+      "falseNegative": 1
+    },
+    "bySeverity": {
+      "advisory": {
+        "findingCount": 2,
+        "recordCount": 2,
+        "confusionMatrix": {
+          "truePositive": 0,
+          "falsePositive": 2,
+          "trueNegative": 2,
+          "falseNegative": 3
+        }
+      },
+      "blocking": {
+        "findingCount": 4,
+        "recordCount": 2,
+        "confusionMatrix": {
+          "truePositive": 2,
+          "falsePositive": 0,
+          "trueNegative": 4,
+          "falseNegative": 1
+        }
+      }
+    }
+  },
+  "misses": [
+    {
+      "id": "case-001",
+      "category": "functional-em-dash",
+      "kind": "false_positive",
+      "expectedDetection": false,
+      "detectorFindings": [
+        {
+          "detector": "check-ai-patterns",
+          "file": "01-case-001.txt",
+          "line": 1,
+          "column": 12,
+          "type": "em-dash",
+          "severity": "advisory",
+          "message": "少量有功能破折号可保留；若只是万能停顿，按功能改成动作 beat、短句、逗号或句号。",
+          "excerpt": "然传来玻璃碎裂声——他握紧门把，先把"
+        }
+      ]
+    },
+    {
+      "id": "case-006",
+      "category": "template-cliche",
+      "kind": "false_negative",
+      "expectedDetection": true,
+      "detectorFindings": []
+    },
+    {
+      "id": "case-007",
+      "category": "legitimate-not-is-contrast",
+      "kind": "false_positive",
+      "expectedDetection": false,
+      "detectorFindings": [
+        {
+          "detector": "check-ai-patterns",
+          "file": "07-case-007.txt",
+          "line": 1,
+          "column": 2,
+          "type": "not-is-comparison",
+          "severity": "advisory",
+          "message": "检测到孤立对比句；仅在缺少人物语气或叙事功能时调整，不因单次出现阻断正文。",
+          "excerpt": "不是示弱，是把话留到明天再说"
+        }
+      ]
+    }
+  ],
+  "corpus": {
+    "mode": "fixture_set",
+    "sourcePath": "<local-user-path>/data/skill/novel-assistant-skill/tests/fixtures/prose-quality",
+    "recordCount": 7,
+    "coverage": [
+      "author-approved-prose",
+      "engineering-term-leak",
+      "functional-em-dash",
+      "legitimate-not-is-contrast",
+      "natural-short-paragraphs",
+      "repetition-degeneration",
+      "template-cliche"
+    ],
+    "groups": {
+      "accepted": 4,
+      "rejected": 3,
+      "boundary": 1
+    }
+  },
+  "calibrationPolicy": "Detectors are evaluated as-is; actual misses are recorded for human adjudication and must not be tuned away solely by this corpus."
+}

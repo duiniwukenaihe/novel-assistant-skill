@@ -1,0 +1,28 @@
+{
+  "scenario_id": "short-sixth-section-transition",
+  "summary": "私有短篇第 6 节写完后,单命令阶段推进器必须直接进入 section_machine_gate,不得转入源码排障、批量临时脚本生成或重复转换循环。",
+  "fixture": "short-sixth-section",
+  "expected_advance": {
+    "final_stage": "section_machine_gate",
+    "recovery_count_on_clean_transition": 0,
+    "transition_retries_max": 1,
+    "result_packet_required": true
+  },
+  "release_gates": {
+    "temporary_script_count": 0,
+    "managed_runtime_file_changes": 0,
+    "platform_debug_scripts_introduced": false,
+    "private_overlay_downgrade_blocked": true,
+    "same_transition_retry_exceeds_one_blocked": true
+  },
+  "telemetry": {
+    "model_turns": "recorded_from_host_or_unavailable",
+    "tool_calls": "recorded_from_host_or_unavailable",
+    "output_tokens": "recorded_from_host_or_unavailable",
+    "cache_read_tokens": "recorded_from_host_or_unavailable",
+    "transition_retries": "recorded_from_stage_controller",
+    "temporary_script_count": "scanned_from_project_scripts",
+    "final_stage": "read_from_focused_task"
+  },
+  "notes": "Token 统计只记录宿主返回的真实值;宿主不提供时标记 unavailable,以 model turns/tool calls 作为代理指标。不伪造跨模型统一费用。确定性覆盖由 test-workflow-stage-controller / test-interactive-tool-budget / test-workflow-state-machine / test-workflow-host-adapters / test-runtime-sync 承担;真实付费 Claude Code RC 验收与三端本地私有安装为独立发布候选操作,不在本确定性矩阵内。"
+}

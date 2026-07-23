@@ -1,0 +1,15 @@
+{
+  "scanId": "20260612-qidian-newsign",
+  "signals": [
+    {
+      "id": "S-urban-gaowu-rise",
+      "kind": "genre",
+      "label": "都市高武回升",
+      "strength": 0.78,
+      "evidenceCount": 1,
+      "representativeTitles": ["旧账号异常水印"],
+      "validUntil": "2026-06-26",
+      "risk": "竞争升温"
+    }
+  ]
+}

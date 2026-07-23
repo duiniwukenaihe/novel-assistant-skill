@@ -1,0 +1,26 @@
+{
+  "counters": {
+    "chunks": 1,
+    "provider_failures": 0,
+    "tool_failures": 0
+  },
+  "events": [
+    {
+      "evidence": {
+        "count": 13,
+        "term": "修真修真修真"
+      },
+      "reason": "model_degradation_repeated_term"
+    }
+  ],
+  "evidence": {
+    "count": 13,
+    "term": "修真修真修真"
+  },
+  "last_activity_at_ms": "<timestamp-ms>",
+  "started_at_ms": "<timestamp-ms>",
+  "status": "blocked",
+  "stop_reason": "model_degradation_repeated_term",
+  "total_bytes": 240,
+  "window_chars": 80
+}

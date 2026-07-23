@@ -1,0 +1,45 @@
+{
+  "status": "pass",
+  "task": "commercial-production-closure Task 1",
+  "sourceCommit": "f44b549cbcf4af16b3f642aba6d596552f72b66e",
+  "checks": [
+    {
+      "command": "bats tests/test-plan-evidence-check.bats",
+      "exit": 0,
+      "result": "56/56 plan evidence gate regressions passed"
+    },
+    {
+      "command": "bats tests/test-chapter-commit.bats tests/test-chapter-commit-integration.bats tests/test-story-memory-migration.bats tests/test-story-memory-context-assembler.bats",
+      "exit": 0,
+      "result": "28/28 chapter and memory regressions passed"
+    },
+    {
+      "command": "bats tests/test-workflow-recovery.bats tests/test-workflow-state-invariants.bats tests/test-workflow-review-batches.bats tests/test-workflow-runtime-supervisor.bats",
+      "exit": 0,
+      "result": "23/23 workflow memory regressions passed"
+    },
+    {
+      "command": "bats tests/test-workflow-host-adapters.bats tests/test-workflow-stream-health.bats tests/test-workflow-runner.bats tests/test-workflow-runner-bundle.bats",
+      "exit": 0,
+      "result": "26/26 runner and host adapter regressions passed"
+    }
+  ],
+  "planChecks": [
+    "docs/superpowers/plans/2026-07-10-chapter-commit-memory-projection.md",
+    "docs/superpowers/plans/2026-07-10-workflow-memory-production-hardening.md",
+    "docs/superpowers/plans/2026-07-10-workflow-runner-host-adapters.md",
+    "docs/superpowers/plans/2026-07-10-commercial-production-closure.md"
+  ],
+  "staticChecks": [
+    {
+      "command": "node --check scripts/plan-evidence-check.js",
+      "exit": 0,
+      "result": "syntax check passed"
+    },
+    {
+      "command": "git diff --check",
+      "exit": 0,
+      "result": "no whitespace errors"
+    }
+  ]
+}

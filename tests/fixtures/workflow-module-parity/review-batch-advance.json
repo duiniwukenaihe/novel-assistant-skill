@@ -1,0 +1,414 @@
+{
+  "current_stage": "evidence_scan",
+  "interaction_contract": "continue_confirmed_internal_stage",
+  "narrative_scope": "1-8 章",
+  "next_candidates": [],
+  "next_user_action": "",
+  "pending_action": null,
+  "progress": "50%",
+  "remaining_stages": [
+    "evidence_scan",
+    "classify_findings",
+    "repair_plan",
+    "user_scope_choice",
+    "repair_execution_plan",
+    "staged_repair_candidate",
+    "repair_machine_gate",
+    "execute_repair",
+    "recheck",
+    "closure"
+  ],
+  "schemaVersion": "1.0.0",
+  "stage_execution": {
+    "action_id": "auto_continue_internal",
+    "asset_target": {},
+    "batch_id": "002",
+    "batch_scope": "5-8",
+    "completion_boundary": "stage_completed",
+    "confirmation_context": null,
+    "confirmation_token": "",
+    "execution_boundary": {
+      "capabilities": {
+        "checkpoint": true,
+        "exact_usage": false,
+        "host_execution_mode": "cooperative_interactive",
+        "process_liveness": false,
+        "result_packet": true,
+        "stream_abort": false
+      },
+      "host_execution_mode": "cooperative_interactive",
+      "token_source": "unavailable",
+      "visible_cost_source": "不可用",
+      "visible_execution_mode": "协作模式"
+    },
+    "expected_result_packet": "追踪/workflow/tasks/<workflow-id>/result-packets/evidence_scan.batch-002.result.json",
+    "host_execution_mode": "cooperative_interactive",
+    "lifecycle_node": "",
+    "owner_module": "story-review",
+    "required_inputs": [
+      "range_lock"
+    ],
+    "requires_user_confirm": false,
+    "resume_hint": "等待 evidence_scan result packet；不要回到待确认状态。",
+    "review_requirement": {},
+    "risk_level": "medium",
+    "selected_number": 0,
+    "stage_attempt_id": "sa-<workflow-id>",
+    "stage_description": "",
+    "stage_id": "evidence_scan",
+    "started_at": "<timestamp>",
+    "status": "running",
+    "step_id": "evidence_scan",
+    "write_set": []
+  },
+  "status": "stage_started",
+  "task": {
+    "book_root": ".",
+    "branch_id": "<workflow-id>",
+    "branch_status": "active",
+    "canonical_write_audit": {
+      "accepted_paths": [],
+      "changed_paths": [],
+      "declared_write_set": [],
+      "reason": "no_declared_canonical_write_set",
+      "schemaVersion": "1.0.0",
+      "status": "ok",
+      "unmanaged_paths": []
+    },
+    "canonical_write_set": [],
+    "completion_policy": "stage_then_confirm",
+    "context_paths": {
+      "artifacts_dir": "追踪/workflow/tasks/<workflow-id>/artifacts",
+      "context_jsonl": "追踪/workflow/tasks/<workflow-id>/context.jsonl",
+      "journal_jsonl": "追踪/workflow/tasks/<workflow-id>/journal.jsonl",
+      "result_packets_dir": "追踪/workflow/tasks/<workflow-id>/result-packets",
+      "verify_jsonl": "追踪/workflow/tasks/<workflow-id>/verify.jsonl"
+    },
+    "current_stage": "evidence_scan",
+    "current_step": "evidence_scan",
+    "execution_boundary": {
+      "capabilities": {
+        "checkpoint": true,
+        "exact_usage": false,
+        "host_execution_mode": "cooperative_interactive",
+        "process_liveness": false,
+        "result_packet": true,
+        "stream_abort": false
+      },
+      "host_execution_mode": "cooperative_interactive",
+      "token_source": "unavailable",
+      "visible_cost_source": "不可用",
+      "visible_execution_mode": "协作模式"
+    },
+    "host_execution_mode": "cooperative_interactive",
+    "last_selection": {
+      "action_id": "continue_next_stage",
+      "book_root": "<project-root>",
+      "confirmation_input": "1",
+      "description": "",
+      "execution_contract": {
+        "completion_boundary": "stage_completed",
+        "forbidden_interpretations": [],
+        "max_units": null,
+        "mode": "exact_selected_option",
+        "stop_after": ""
+      },
+      "label": "继续锁定审阅范围（推荐）",
+      "pending_action_id": "<pending_action_id>",
+      "requires_user_confirm": false,
+      "risk_level": "low",
+      "selected_at": "<timestamp>",
+      "selected_number": 1,
+      "selection_expires_at": "<timestamp>",
+      "selection_id": "pa-range_lock",
+      "state_version": 1,
+      "target_files": [],
+      "target_scope": "",
+      "target_stage": "range_lock",
+      "visible_choice_hash": "<visible_choice_hash>"
+    },
+    "lifecycle": {
+      "completed_at": "<timestamp>",
+      "previous_workflow_id": "",
+      "scope": "1-8",
+      "started_at": "<timestamp>",
+      "status": "active",
+      "switch_reason": "",
+      "updated_at": "<timestamp>",
+      "user_goal": "审阅 1-8 章"
+    },
+    "machine": {
+      "allowed_actions": [
+        "await_result_packet",
+        "pause"
+      ],
+      "completed_stages": [
+        "range_lock"
+      ],
+      "last_execution_event": "stage_started",
+      "last_result_packet": "追踪/workflow/tasks/<workflow-id>/result-packets/range_lock.result.json",
+      "last_transition": "stage_completed",
+      "next_stop_reason": "stage_running_waiting_result_packet",
+      "remaining_stages": [
+        "evidence_scan",
+        "classify_findings",
+        "repair_plan",
+        "user_scope_choice",
+        "repair_execution_plan",
+        "staged_repair_candidate",
+        "repair_machine_gate",
+        "execute_repair",
+        "recheck",
+        "closure"
+      ],
+      "template_version": "1.0.0"
+    },
+    "memory_projection": {
+      "applied": 0,
+      "confirmation_required": 0,
+      "recorded": 0,
+      "status": "no_updates"
+    },
+    "pending_action": null,
+    "production_kernel": "",
+    "recommended_next": [
+      {
+        "action_id": "start_new_workflow",
+        "label": "继续下一批",
+        "number": 1
+      }
+    ],
+    "result_contract_version": 2,
+    "result_history": {
+      "path": "追踪/workflow/tasks/<workflow-id>/result-history/range_lock/workflow/sa-<workflow-id>.result.json",
+      "section_index": null,
+      "stage_attempt_id": "sa-<workflow-id>",
+      "stage_id": "range_lock",
+      "status": "archived"
+    },
+    "review_batches": {
+      "aggregate_status": "running",
+      "batches": [
+        {
+          "accepted_result_packet": "追踪/workflow/tasks/<workflow-id>/result-packets/evidence_scan.batch-001.result.json",
+          "id": "001",
+          "plan_entry_id": "batch-001",
+          "range": "1-4",
+          "status": "completed",
+          "unresolved_dimensions": []
+        },
+        {
+          "accepted_result_packet": "追踪/workflow/tasks/<workflow-id>/result-packets/evidence_scan.batch-002.result.json",
+          "id": "002",
+          "plan_entry_id": "batch-002",
+          "range": "5-8",
+          "status": "pending",
+          "unresolved_dimensions": []
+        }
+      ],
+      "completed_count": 1,
+      "next_batch_id": "002",
+      "parent_scope": "1-8",
+      "schemaVersion": "2.0.0",
+      "task_dir": "追踪/workflow/tasks/<workflow-id>",
+      "total_count": 2,
+      "workflow_id": "<workflow-id>"
+    },
+    "review_evidence_policy": {
+      "completion_scope": "1-8 章",
+      "mode": "dynamic_evidence_plan",
+      "read_assets": [
+        "master_outline",
+        "volume_outline",
+        "stage_detail_outline",
+        "chapter_brief",
+        "prose_unit"
+      ],
+      "target_kind": "prose_unit",
+      "target_ref": "1-8 章",
+      "upstream_dependencies": [
+        "master_outline",
+        "volume_outline",
+        "stage_detail_outline",
+        "chapter_brief"
+      ],
+      "use_dynamic_batches": true,
+      "user_visible_batches": false
+    },
+    "review_plan_digest": "<review_plan_digest>",
+    "review_plan_path": "追踪/workflow/tasks/<workflow-id>/review-plan.json",
+    "review_target": {
+      "kind": "prose_unit",
+      "narrative_scope": "1-8 章",
+      "target_ref": "1-8 章",
+      "visible_label": "审阅1-8 章"
+    },
+    "rpd_path": "追踪/workflow/tasks/<workflow-id>/rpd.md",
+    "runtime_guard": {
+      "adaptive_budget_policy": {
+        "batch_handoff_budget": "proportional_to_completed_units",
+        "mode": "scope_and_batch_dynamic",
+        "range_summary_budget": "proportional_to_open_findings",
+        "visible_reply_budget": "summary_only"
+      },
+      "checkpoint_policy": {
+        "checkpoint_path": "追踪/workflow/tasks/<workflow-id>/task.json",
+        "expected_result_packet": "追踪/workflow/tasks/<workflow-id>/result-packets/evidence_scan.batch-002.result.json",
+        "project_root": ".",
+        "resume_from": "evidence_scan"
+      },
+      "heartbeat": {
+        "current_batch": "5-8",
+        "latest_trusted_artifact": "追踪/workflow/tasks/<workflow-id>/result-packets/evidence_scan.batch-001.result.json",
+        "updated_at": "<timestamp>",
+        "workflow_id": "<workflow-id>"
+      },
+      "max_retry_budget": {
+        "on_exhausted": "pause_at_checkpoint",
+        "provider_error": 1,
+        "same_failure": 1,
+        "same_tool_error": 1
+      },
+      "output_health_gate": {
+        "policy": "block_polluted_output_and_preserve_last_trusted_artifact",
+        "script": "scripts/output-pollution-check.js"
+      },
+      "stall_policy": {
+        "heartbeat_timeout_minutes": 60,
+        "on_stall": "pause_at_checkpoint"
+      },
+      "token_cost_governance": {
+        "cost_ledger_path": "追踪/workflow/token-cost-ledger.jsonl",
+        "cost_summary_path": "追踪/workflow/token-cost-summary.json",
+        "ledger_path": "追踪/workflow/token-cost-ledger.jsonl",
+        "model_routing_policy": "cheap_extract_for_mechanical_standard_for_review_deep_for_global_arbitration",
+        "retry_budget_result": "pending",
+        "tool_output_filter": "persist_full_output_and_inject_summary_only"
+      },
+      "token_estimate": {
+        "agent_count": 2,
+        "batch_size": 8,
+        "estimated_unit_window": 8,
+        "input_chars_estimate": 28000,
+        "input_files": 8,
+        "output_chars_budget": 6400,
+        "risk_level": "medium"
+      }
+    },
+    "scope": "1-8",
+    "stage_execution": {
+      "action_id": "auto_continue_internal",
+      "asset_target": {},
+      "batch_id": "002",
+      "batch_scope": "5-8",
+      "completion_boundary": "stage_completed",
+      "confirmation_context": null,
+      "confirmation_token": "",
+      "execution_boundary": {
+        "capabilities": {
+          "checkpoint": true,
+          "exact_usage": false,
+          "host_execution_mode": "cooperative_interactive",
+          "process_liveness": false,
+          "result_packet": true,
+          "stream_abort": false
+        },
+        "host_execution_mode": "cooperative_interactive",
+        "token_source": "unavailable",
+        "visible_cost_source": "不可用",
+        "visible_execution_mode": "协作模式"
+      },
+      "expected_result_packet": "追踪/workflow/tasks/<workflow-id>/result-packets/evidence_scan.batch-002.result.json",
+      "host_execution_mode": "cooperative_interactive",
+      "lifecycle_node": "",
+      "owner_module": "story-review",
+      "required_inputs": [
+        "range_lock"
+      ],
+      "requires_user_confirm": false,
+      "resume_hint": "等待 evidence_scan result packet；不要回到待确认状态。",
+      "review_requirement": {},
+      "risk_level": "medium",
+      "selected_number": 0,
+      "stage_attempt_id": "sa-<workflow-id>",
+      "stage_description": "",
+      "stage_id": "evidence_scan",
+      "started_at": "<timestamp>",
+      "status": "running",
+      "step_id": "evidence_scan",
+      "write_set": []
+    },
+    "state_version": 4,
+    "status": "running",
+    "task_dir": "追踪/workflow/tasks/<workflow-id>",
+    "task_family_id": "<task-family-id>",
+    "unit_lifecycle": {
+      "closure_rule": "stage_done_is_not_workflow_done; always emit handoff/recommended_next before completed",
+      "completed_roles": [
+        "workflow_preflight"
+      ],
+      "current_role": "source_or_material",
+      "current_scope": "1-8",
+      "current_stage": "evidence_scan",
+      "failure_policy": "stall_or_bad_output_blocks_current_unit_not_entire_project; preserve last trusted artifact",
+      "last_quality_gate": "",
+      "last_trusted_artifact": "",
+      "required_sequence": [
+        "brief_or_contract",
+        "draft_or_execute",
+        "machine_quality_gate",
+        "quality_gate",
+        "state_integration",
+        "handoff_and_next"
+      ],
+      "stage_roles": {
+        "classify_findings": "quality_gate",
+        "closure": "handoff_and_next",
+        "evidence_scan": "source_or_material",
+        "execute_repair": "state_integration",
+        "range_lock": "workflow_preflight",
+        "recheck": "quality_gate",
+        "repair_execution_plan": "brief_or_contract",
+        "repair_machine_gate": "machine_quality_gate",
+        "repair_plan": "brief_or_contract",
+        "staged_repair_candidate": "draft_or_execute",
+        "user_scope_choice": "brief_or_contract"
+      },
+      "status": "active",
+      "unit_type": "range_or_fix_item",
+      "updated_at": "<timestamp>"
+    },
+    "updated_at": "<timestamp>",
+    "user_goal": "审阅 1-8 章",
+    "workflow_id": "<workflow-id>",
+    "workflow_owner": "story-review",
+    "workflow_profile": "public",
+    "workflow_registry": {
+      "owner_module": "story-review",
+      "profile": "public",
+      "registry_digest": "",
+      "registry_id": "public"
+    },
+    "workflow_type": "review_repair"
+  },
+  "visible_label": "审阅1-8 章",
+  "visible_response": {
+    "completion_required_before_reply": true,
+    "context_read_command": "",
+    "execution_command": "",
+    "execution_workdir": ".",
+    "interaction_mode": "resume_stage",
+    "render_mode": "silent_resume",
+    "requires_user_confirm": false,
+    "resume_hint": "等待 evidence_scan result packet；不要回到待确认状态。",
+    "selection_contract": "resume_running_stage",
+    "status": "stage_execution_resume_ready",
+    "terminal_reply_allowed_on": [
+      "workflow_choice_required",
+      "workflow_completed",
+      "host_tool_call_failed_after_retry",
+      "retry_budget_exhausted"
+    ],
+    "text": ""
+  }
+}

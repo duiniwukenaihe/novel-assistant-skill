@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "0.8.0",
+  "chapterId": "第001章",
+  "contractPath": "追踪/章节契约/第001章.md",
+  "beats": [
+    {
+      "id": "B1",
+      "type": "conflict",
+      "summary": "主角公开拒绝错误任务",
+      "emotion": "压迫",
+      "mustShowOnPage": true,
+      "promiseIds": ["P-旧账号水印"],
+      "expectedPayoff": false
+    },
+    {
+      "id": "B2",
+      "type": "hook",
+      "summary": "旧账号异常水印在章尾出现",
+      "emotion": "疑问",
+      "mustShowOnPage": true,
+      "promiseIds": ["P-旧账号水印"],
+      "expectedPayoff": false
+    }
+  ],
+  "required": {
+    "conflictBeat": true,
+    "emotionTurn": true,
+    "chapterEndHook": true
+  }
+}

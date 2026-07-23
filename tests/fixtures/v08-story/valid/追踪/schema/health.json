@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "0.8.0",
+  "status": "warn",
+  "updatedAt": "2026-06-12T10:00:00+08:00",
+  "summary": {
+    "chapters": 1,
+    "openPromises": 1,
+    "overduePromises": 0,
+    "failedAudits": 0,
+    "missingBeatSheets": 0
+  },
+  "issues": [
+    {
+      "code": "Promise_Open",
+      "severity": "P3",
+      "target": "P-旧账号水印",
+      "message": "伏笔已建立，等待后续升温",
+      "suggestedAction": "第002章交接包继续继承该伏笔"
+    }
+  ]
+}

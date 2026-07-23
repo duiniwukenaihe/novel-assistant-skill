@@ -1,0 +1,31 @@
+{
+  "adapter": "fake",
+  "execution_boundary": {
+    "capabilities": {
+      "checkpoint": true,
+      "exact_usage": false,
+      "host_execution_mode": "managed_runner",
+      "process_liveness": false,
+      "result_packet": true,
+      "stream_abort": false
+    },
+    "host_execution_mode": "managed_runner",
+    "token_source": "unavailable",
+    "visible_cost_source": "不可用",
+    "visible_execution_mode": "托管运行"
+  },
+  "expected_result_packet": "追踪/workflow/tasks/<workflow-id>/result-packets/range_lock.result.json",
+  "host_execution_mode": "managed_runner",
+  "invocation": {
+    "args": [
+      "<repo-root>/tests/fixtures/fake-workflow-host.js",
+      "success"
+    ],
+    "command": "/opt/homebrew/Cellar/node/26.3.0/bin/node",
+    "cwd": "<project-root>",
+    "shell": false
+  },
+  "project_root": "<project-root>",
+  "stage_id": "range_lock",
+  "status": "dry_run"
+}

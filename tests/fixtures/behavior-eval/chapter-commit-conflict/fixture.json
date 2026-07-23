@@ -1,0 +1,11 @@
+{
+  "fixture": "chapter-commit-conflict",
+  "canonicalAsset": "正文/第1卷/第002章_夜雨.md",
+  "preparedCommit": "追踪/workflow/chapter-commit-prepared.json",
+  "requiredOutcome": "blocked_chapter_commit_conflict",
+  "assertions": [
+    "concurrent_change",
+    "accept_blocked",
+    "canonical_unchanged"
+  ]
+}

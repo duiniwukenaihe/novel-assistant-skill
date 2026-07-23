@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "0.8.0",
+  "bookTitle": "旧账号异常水印",
+  "mode": "longform",
+  "currentChapter": 1,
+  "currentVolume": "第1卷",
+  "status": "drafting",
+  "updatedAt": "2026-06-12T10:00:00+08:00",
+  "activeArc": "主角拒绝错误任务后追查旧账号",
+  "nextAction": {
+    "id": "write-next-chapter",
+    "label": "写第002章",
+    "reason": "第001章交接包已生成，下一章细纲存在"
+  }
+}

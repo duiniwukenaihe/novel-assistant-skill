@@ -1,0 +1,44 @@
+{
+  "cost_ledger_path": "<project-root>/追踪/workflow/token-cost-ledger.jsonl",
+  "cost_summary_path": "<project-root>/追踪/workflow/token-cost-summary.json",
+  "event": {
+    "cache_hit": true,
+    "cache_read_tokens": 11,
+    "cache_write_tokens": 7,
+    "created_at": "<timestamp>",
+    "duration_ms": 4567,
+    "estimated_tokens": 0,
+    "event": "cost_observed",
+    "event_id": "event-token-parity",
+    "failure_count": 1,
+    "findings": [
+      {
+        "code": "invalid_host_usage_metric",
+        "severity": "warning"
+      }
+    ],
+    "input_chars": 130000,
+    "input_files": 55,
+    "input_tokens": 321,
+    "model_class": "deep_reasoning",
+    "module": "story-review",
+    "output_chars": 5000,
+    "output_tokens": 123,
+    "retry_count": 1,
+    "stage": "evidence_scan",
+    "status": "failed",
+    "task_complexity": "low",
+    "token_source": "host",
+    "tool_calls": 7,
+    "waste_signals": [
+      "model_mismatch",
+      "failure_retry_waste",
+      "tool_noise_waste",
+      "context_thickening_waste",
+      "cache_reuse_opportunity"
+    ],
+    "workflow_id": "<workflow-id>",
+    "workflow_type": "review_repair"
+  },
+  "status": "appended"
+}

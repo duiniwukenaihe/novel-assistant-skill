@@ -1,0 +1,11 @@
+{
+  "fixture": "review-repair-gate",
+  "canonicalAsset": "正文/第1卷/第001章_试炼.md",
+  "stagedCandidate": "追踪/workflow/staged-repair-candidate.json",
+  "requiredOutcome": "blocked_canonical_transaction_required",
+  "assertions": [
+    "staged_candidate",
+    "canonical_unchanged",
+    "transaction_required"
+  ]
+}

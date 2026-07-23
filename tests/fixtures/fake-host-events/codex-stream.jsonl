@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"fake-thread"}
+{"type":"event_msg","payload":{"type":"agent_message","message":"已选择单入口路由。"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":980,"cached_input_tokens":220,"output_tokens":275}}}}
+{"type":"turn.completed","status":"completed","duration_ms":1210}

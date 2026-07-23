@@ -1,0 +1,90 @@
+{
+  "fixture": "short-sixth-section",
+  "summary": "固化短篇逐节写正文时第六节 draft_next_section 完成后必须直接进入 section_machine_gate 的回归场景；控制器 scripts/workflow-stage-controller.js 缺失时本测试为 RED。",
+  "scenario_id": "short-sixth-section-runaway-regression",
+  "workflow": {
+    "workflow_id": "wf-short-sixth",
+    "workflow_type": "short_write",
+    "workflow_profile": "private",
+    "workflow_owner": "private-short-extension",
+    "scope": "第6节",
+    "status": "running",
+    "current_stage": "draft_next_section",
+    "current_step": "draft_next_section",
+    "completion_policy": "stage_then_confirm",
+    "book_root": "."
+  },
+  "machine": {
+    "completed_stages": [
+      "startup_scan", "startup_menu", "freshness_window", "info_source_pool", "material_learning",
+      "project_seed", "short_setting", "platform_genre_lock", "rhythm_pattern_selection",
+      "section_outline", "section_plan_lock", "short_structure_impact_audit", "hook_retention_gate",
+      "first_section_brief", "draft_first_section", "section_machine_gate", "quality_gate",
+      "section_accept_anchor",
+      "next_section_brief", "draft_next_section", "section_machine_gate", "quality_gate",
+      "section_accept_anchor",
+      "next_section_brief", "draft_next_section", "section_machine_gate", "quality_gate",
+      "section_accept_anchor",
+      "next_section_brief", "draft_next_section", "section_machine_gate", "quality_gate",
+      "section_accept_anchor",
+      "next_section_brief", "draft_next_section", "section_machine_gate", "quality_gate",
+      "section_accept_anchor",
+      "next_section_brief"
+    ],
+    "remaining_stages": ["draft_next_section", "section_machine_gate", "quality_gate", "section_accept_anchor", "next_section_brief", "draft_next_section", "short_deslop", "final_check"]
+  },
+  "accepted_sections": [
+    {"section_index": 1, "anchor_path": "追踪/private-short-extension/section-001-anchor.json"},
+    {"section_index": 2, "anchor_path": "追踪/private-short-extension/section-002-anchor.json"},
+    {"section_index": 3, "anchor_path": "追踪/private-short-extension/section-003-anchor.json"},
+    {"section_index": 4, "anchor_path": "追踪/private-short-extension/section-004-anchor.json"},
+    {"section_index": 5, "anchor_path": "追踪/private-short-extension/section-005-anchor.json"}
+  ],
+  "anchor_quality_result": {
+    "machine_gate": "pass",
+    "story_value_gate": "pass",
+    "repetition_gate": "pass",
+    "length_policy": {"blocking": false, "verdict": "baseline_not_established"}
+  },
+  "canonical_asset": {
+    "path": "正文.md",
+    "sections": [
+      {"index": 1, "title": "第001节 旧账号水印", "body": "# 第001节 旧账号水印\n\n后台突然冒出一笔不属于她的罚单。林昭先截屏，再要求主管重复规则；主管试图拔线，她直接把记录投到大厅屏幕上，围观骑手开始录音。\n"},
+      {"index": 2, "title": "第002节 证据链", "body": "# 第002节 证据链\n\n罚单来源被指认为一个旧账号。林昭顺线调出登录记录，发现账号背后的人曾和主管同部门，她保存完整调用日志作为后续追查的入口。\n"},
+      {"index": 3, "title": "第003节 公开质询", "body": "# 第003节 公开质询\n\n晨会上林昭当众抛出旧账号的调度截图，逼主管在录音环境下解释。主管含糊带过，区域经理开始介入，林昭拿到一份非正式的内部调查授权。\n"},
+      {"index": 4, "title": "第004节 反咬一口", "body": "# 第004节 反咬一口\n\n主管以违规外传为由先发制人，要求林昭停职。林昭把投屏记录和围观录音整理成证据包提交，区域经理暂缓处分，并承诺七天内给结论。\n"},
+      {"index": 5, "title": "第005节 真相浮现", "body": "# 第005节 真相浮现\n\n调查结果出来：旧账号确实被用于转移罚单，主管被停职。林昭没有罢休，她想找到账号背后的真正持有人，这把火已经烧到平台调度链的最上层。\n"}
+    ]
+  },
+  "sixth_section_brief": {
+    "path": "写作Brief_第006节.md",
+    "body": "# 写作Brief 第006节\n\n## 本节目标\n- 核心事件：林昭拿到旧账号的后台操作日志，第一次正面接触到真正持有人留下的痕迹。\n- 目标情绪：从被动申诉转为主动设伏，紧张感升级。\n- 开篇钩子：日志里出现一段她从没见过的备注，写着她自己的工号。\n- 爽点：她在对方没察觉的情况下，反向锁定了操作终端所在的仓库编号。\n- 承接：第005节真相比平台更深，本节必须把追查推进到具体物理位置。\n- 后续债务：持有人身份仍未揭晓，留给下一节。\n\n## 验收标准\n- 必须出现旧账号备注、林昭的工号、仓库编号三项可见证据。\n- 不得编造平台没有的接口或数据来源。\n- 字数带：800-1200 字。\n"
+  },
+  "result_packet": {
+    "path": "追踪/workflow/tasks/wf-short-sixth/result-packets/draft_next_section.result.json",
+    "payload": {
+      "workflow_id": "wf-short-sixth",
+      "workflow_type": "short_write",
+      "stage_id": "draft_next_section",
+      "step_id": "draft_next_section",
+      "step_status": "completed",
+      "verification_result": "pass",
+      "changed_files": ["正文.md"]
+    }
+  },
+  "expected_advance": {
+    "next_stage": "section_machine_gate",
+    "recovery_count": 0,
+    "forbidden_recovery_paths": ["scripts/debug-", "scripts/scan-", "scripts/find-", "scripts/inspect-"]
+  },
+  "assertions": [
+    "draft_next_section_advances_to_section_machine_gate",
+    "recovery_count_zero_on_clean_transition",
+    "no_debug_scan_find_inspect_scripts_introduced"
+  ],
+  "requirements": [
+    "本测试运行时 scripts/workflow-stage-controller.js 尚不存在，因此 advance 调用必然失败，构成 TDD 的 RED 阶段。",
+    "Task 3 实现 controller 后，本测试应变 GREEN：next_stage 必须是 section_machine_gate，recovery_count 必须是 0。",
+    "controller 不得通过新建 scripts/debug-*、scripts/scan-*、scripts/find-*、scripts/inspect-* 来排障；仓库内出现任意一类即视为失控事故复发。"
+  ]
+}

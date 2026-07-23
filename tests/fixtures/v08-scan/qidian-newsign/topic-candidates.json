@@ -1,0 +1,16 @@
+{
+  "scanId": "20260612-qidian-newsign",
+  "candidates": [
+    {
+      "id": "T-urban-gaowu-account",
+      "title": "旧账号异常水印 + 都市高武",
+      "platformFit": ["qidian", "fanqie"],
+      "difficulty": "medium",
+      "expectedLength": "80-150万字",
+      "whyNow": "新人榜出现高武/账号类卖点。",
+      "starterHook": "主角发现被封禁的旧账号仍在替自己完成任务。",
+      "risks": ["设定解释成本高"],
+      "nextValidation": "拆 3 本同类新书黄金三章"
+    }
+  ]
+}

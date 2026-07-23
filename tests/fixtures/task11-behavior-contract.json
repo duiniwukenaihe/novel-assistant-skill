@@ -1,0 +1,161 @@
+{
+  "schemaVersion": "1.0.0",
+  "cases": [
+    {
+      "id": "bare_invocation_docks",
+      "type": "long_write",
+      "request": {
+        "invocation": "bare",
+        "bookId": null,
+        "chapters": [],
+        "outline": { "status": "missing" },
+        "chapterBriefs": [],
+        "chapterContracts": [],
+        "genreCards": []
+      }
+    },
+    {
+      "id": "outline_underfilled_blocks",
+      "type": "long_write",
+      "request": {
+        "invocation": "explicit",
+        "bookId": "book-alpha",
+        "chapters": [1],
+        "outline": { "status": "underfilled" },
+        "chapterBriefs": [
+          {
+            "chapter": 1,
+            "status": "underfilled",
+            "goal": "查清失踪账册",
+            "pressure": "守门人拒绝放行",
+            "irreversibleChange": "主角暴露真实身份",
+            "handoff": "账册转移到码头"
+          }
+        ],
+        "chapterContracts": [],
+        "genreCards": []
+      }
+    },
+    {
+      "id": "fourth_chapter_is_deferred",
+      "type": "long_write",
+      "request": {
+        "invocation": "explicit",
+        "bookId": "book-alpha",
+        "chapters": [1, 2, 3, 4],
+        "outline": { "status": "passed" },
+        "chapterBriefs": [
+          { "chapter": 1, "status": "passed", "goal": "找到证人", "pressure": "追兵封路", "irreversibleChange": "证人公开站队", "handoff": "线索指向仓库" },
+          { "chapter": 2, "status": "passed", "goal": "进入仓库", "pressure": "仓库起火", "irreversibleChange": "同伴受伤", "handoff": "发现半张航图" },
+          { "chapter": 3, "status": "passed", "goal": "补全航图", "pressure": "对手抢先交易", "irreversibleChange": "主角交出旧身份", "handoff": "航图指向离岛" },
+          { "chapter": 4, "status": "passed", "goal": "抵达离岛", "pressure": "风暴封航", "irreversibleChange": "船队分裂", "handoff": "主角独自上岸" }
+        ],
+        "chapterContracts": [
+          { "chapter": 1, "status": "passed", "allowedFacts": ["证人知道仓库位置"] },
+          { "chapter": 2, "status": "passed", "allowedFacts": ["仓库保存航图"] },
+          { "chapter": 3, "status": "passed", "allowedFacts": ["航图缺失一半"] },
+          { "chapter": 4, "status": "passed", "allowedFacts": ["离岛被风暴封锁"] }
+        ],
+        "primaryGenre": "suspense",
+        "genreCards": [
+          {
+            "id": "suspense-card",
+            "genre": "suspense",
+            "scenePressure": "证据随时会被销毁",
+            "readerPromise": "每场戏推进一条可核验证据",
+            "visibleActions": ["追查", "对质"],
+            "languageBoundary": "只写角色可感知线索",
+            "avoid": ["旁白提前揭底"],
+            "sourceSample": "upstream-private-example",
+            "complianceSelfReview": "internal-only",
+            "metadata": { "rank": 1, "source": "upstream" }
+          },
+          {
+            "id": "romance-card",
+            "genre": "romance",
+            "scenePressure": "关系误解加深",
+            "readerPromise": "关系发生可见变化",
+            "visibleActions": ["试探"],
+            "languageBoundary": "不替角色解释感情",
+            "avoid": ["无因果和好"],
+            "sourceSample": "internal-example",
+            "metadata": { "rank": 2 }
+          }
+        ]
+      }
+    },
+    {
+      "id": "single_genre_card_is_sanitized",
+      "type": "long_write",
+      "request": {
+        "invocation": "explicit",
+        "bookId": "book-beta",
+        "chapters": [8],
+        "outline": { "status": "passed" },
+        "chapterBriefs": [
+          { "chapter": 8, "status": "passed", "goal": "逼问证词", "pressure": "证人准备翻供", "irreversibleChange": "证词进入公开记录", "handoff": "矛头指向议会" }
+        ],
+        "chapterContracts": [
+          { "chapter": 8, "status": "passed", "allowedFacts": ["证人曾见过密信"] }
+        ],
+        "primaryGenre": "suspense",
+        "genreCards": [
+          {
+            "id": "suspense-card",
+            "genre": "suspense",
+            "scenePressure": "证据随时会失效",
+            "readerPromise": "推进一条可核验证据",
+            "visibleActions": ["对质"],
+            "languageBoundary": "只写当前视角可见线索",
+            "avoid": ["提前揭底"],
+            "sourceSample": "must-not-enter-writer-packet",
+            "complianceSelfReview": "must-not-enter-writer-packet",
+            "metadata": { "source": "must-not-enter-writer-packet" }
+          },
+          {
+            "id": "fantasy-card",
+            "genre": "fantasy",
+            "scenePressure": "能力代价升级",
+            "readerPromise": "展示能力规则",
+            "visibleActions": ["试炼"],
+            "languageBoundary": "按设定写能力",
+            "avoid": ["凭空升级"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "advisory_does_not_rewrite",
+      "type": "deslop",
+      "request": {
+        "facts": ["主角已经交出钥匙"],
+        "structure": ["对质", "交出钥匙", "守门人放行"],
+        "findings": [
+          { "code": "task_block_density", "severity": "advisory" },
+          { "code": "metaphor_density", "severity": "advisory" }
+        ],
+        "proposedEdits": [
+          { "kind": "line_break", "target": "paragraph-2" },
+          { "kind": "punctuation_swap", "target": "paragraph-3" },
+          { "kind": "function_word_swap", "target": "paragraph-4" }
+        ]
+      }
+    },
+    {
+      "id": "anti_pandering_preserves_story",
+      "type": "deslop",
+      "request": {
+        "facts": ["主角已经交出钥匙", "守门人亲眼见证"],
+        "structure": ["对质", "交出钥匙", "守门人放行"],
+        "findings": [
+          { "code": "external_detector_score", "severity": "advisory" }
+        ],
+        "antiPandering": true,
+        "proposedOutput": {
+          "facts": ["主角没有交出钥匙"],
+          "structure": ["守门人放行", "对质", "交出钥匙"]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "query": "绿珠会暴露什么身份",
+  "entries": [
+    {
+      "fact_id": "fact.green-pearl.identity",
+      "subject": "绿珠",
+      "predicate": "身份",
+      "object": "圣女",
+      "aliases": ["绿珠", "小绿"],
+      "dependencies": ["血脉觉醒"],
+      "scope": {"book": "current", "volume": "第1卷"},
+      "evidence": [{"path": "追踪/伏笔.md"}],
+      "status": "active"
+    },
+    {
+      "fact_id": "fact.bloodline.trigger",
+      "subject": "血脉觉醒",
+      "predicate": "触发",
+      "object": "圣女印记显现",
+      "aliases": ["圣女印记"],
+      "dependencies": [],
+      "scope": {"book": "current", "volume": "第1卷"},
+      "evidence": [{"path": "追踪/时间线.md"}],
+      "status": "active"
+    },
+    {
+      "fact_id": "fact.saintess-peak",
+      "subject": "圣女峰",
+      "predicate": "地点",
+      "object": "宗门后山",
+      "aliases": ["圣女峰"],
+      "dependencies": [],
+      "scope": {"book": "current", "volume": "第7卷"},
+      "evidence": [{"path": "设定/地点.md"}],
+      "status": "active"
+    },
+    {
+      "fact_id": "fact.green-pearl.old",
+      "subject": "绿珠",
+      "predicate": "身份",
+      "object": "魔女",
+      "aliases": ["绿珠"],
+      "dependencies": [],
+      "scope": {"book": "current"},
+      "evidence": [{"path": "追踪/旧稿.md"}],
+      "status": "superseded",
+      "valid_to": "commit-new"
+    }
+  ],
+  "expected_top_ids": ["fact.green-pearl.identity", "fact.bloodline.trigger"],
+  "prohibited_ids": ["fact.green-pearl.old"]
+}

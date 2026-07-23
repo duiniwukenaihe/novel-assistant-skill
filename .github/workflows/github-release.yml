@@ -1,0 +1,80 @@
+name: Publish GitHub release artifact
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: github-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'duiniwukenaihe/novel-assistant-skill'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate release tag and changelog
+        run: |
+          git tag --points-at HEAD | grep -Fxq "$RELEASE_TAG"
+          grep -Fq "## $RELEASE_TAG " CHANGELOG.md
+
+      - name: Audit public tree
+        run: node scripts/public-release-audit.js --json
+
+      - name: Run focused production smoke
+        run: node scripts/production-smoke-matrix.js --json
+
+      - name: Verify public workflow ownership
+        run: |
+          node scripts/workflow-state-machine.js templates --json > "$RUNNER_TEMP/workflow-templates.json"
+          node - "$RUNNER_TEMP/workflow-templates.json" <<'NODE'
+          const fs = require('fs');
+          const data = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const templates = data.templates || data.workflow_templates || [];
+          const short = templates.find((item) => item.workflow_type === 'short_write');
+          if (Number(data.privateRegistryCount || 0) !== 0) throw new Error('private registry is present');
+          if (!short) throw new Error('public short_write workflow is missing');
+          const stages = short.stages || short.stage_plan || [];
+          const forbidden = stages.filter((stage) => /private/i.test(String(stage.owner_module || stage.owner || '')));
+          if (forbidden.length) throw new Error('private workflow owner is present');
+          if (templates.some((item) => item.workflow_type === 'private_short_startup')) {
+            throw new Error('private_short_startup is present');
+          }
+          NODE
+
+      - name: Build reproducible install artifact
+        run: bash scripts/build-github-release-artifact.sh "$RELEASE_TAG" dist "$RELEASE_TAG"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* \
+              --verify-tag \
+              --title "novel-assistant $RELEASE_TAG" \
+              --generate-notes
+          fi

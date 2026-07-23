@@ -1,0 +1,3 @@
+{"type":"message_start","message":{"usage":{"input_tokens":1200,"cache_read_input_tokens":180,"cache_creation_input_tokens":60}}}
+{"type":"content_block_delta","delta":{"text":"路由完成，正在返回可见结果。"}}
+{"type":"result","subtype":"success","duration_ms":1450,"usage":{"input_tokens":1200,"output_tokens":340,"cache_read_input_tokens":180,"cache_creation_input_tokens":60}}

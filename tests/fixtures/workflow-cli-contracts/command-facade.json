@@ -1,0 +1,193 @@
+{
+  "templates": {
+    "status": "ok",
+    "keys": [
+      "privateRegistries",
+      "privateRegistryCount",
+      "schemaVersion",
+      "status",
+      "templateCount",
+      "templates"
+    ],
+    "workflow_type": "",
+    "task_status": "",
+    "current_stage": "",
+    "target_stage": "",
+    "action_id": "",
+    "selected_number": 0,
+    "candidate_actions": [],
+    "migration_item_count": 0
+  },
+  "create": {
+    "status": "created",
+    "keys": [
+      "preserved_previous_task",
+      "previous_workflow_id",
+      "schemaVersion",
+      "status",
+      "task"
+    ],
+    "workflow_type": "long_startup",
+    "task_status": "running",
+    "current_stage": "project_type_lock",
+    "target_stage": "",
+    "action_id": "",
+    "selected_number": 0,
+    "candidate_actions": [],
+    "migration_item_count": 0
+  },
+  "inspect": {
+    "status": "ok",
+    "keys": [
+      "focus_pointer_findings",
+      "focus_pointer_status",
+      "schemaVersion",
+      "status",
+      "task"
+    ],
+    "workflow_type": "long_startup",
+    "task_status": "running",
+    "current_stage": "project_type_lock",
+    "target_stage": "",
+    "action_id": "",
+    "selected_number": 0,
+    "candidate_actions": [],
+    "migration_item_count": 0
+  },
+  "next_candidates": {
+    "status": "requires_user_confirm",
+    "keys": [
+      "next_candidates",
+      "pending_action",
+      "schemaVersion",
+      "status",
+      "target_stage",
+      "visible_response"
+    ],
+    "workflow_type": "",
+    "task_status": "",
+    "current_stage": "",
+    "target_stage": "project_type_lock",
+    "action_id": "",
+    "selected_number": 0,
+    "candidate_actions": [
+      "continue_next_stage",
+      "inspect_current_state",
+      "pause",
+      "free_text"
+    ],
+    "migration_item_count": 0
+  },
+  "resolve_action": {
+    "status": "stage_started",
+    "keys": [
+      "accepted_plan",
+      "action",
+      "action_id",
+      "execution_contract",
+      "next_candidates",
+      "pending_action",
+      "schemaVersion",
+      "selected_number",
+      "selection_locked",
+      "selection_status",
+      "semantic_continuation_bound",
+      "stage_execution",
+      "status",
+      "target_stage",
+      "visible_response"
+    ],
+    "workflow_type": "",
+    "task_status": "",
+    "current_stage": "",
+    "target_stage": "project_type_lock",
+    "action_id": "continue_next_stage",
+    "selected_number": 1,
+    "candidate_actions": [],
+    "migration_item_count": 0
+  },
+  "apply_result": {
+    "status": "advanced",
+    "keys": [
+      "current_stage",
+      "interaction_contract",
+      "next_candidates",
+      "pending_action",
+      "remaining_stages",
+      "schemaVersion",
+      "stage_execution",
+      "status",
+      "task",
+      "visible_response"
+    ],
+    "workflow_type": "long_startup",
+    "task_status": "running",
+    "current_stage": "market_positioning",
+    "target_stage": "",
+    "action_id": "",
+    "selected_number": 0,
+    "candidate_actions": [
+      "continue_next_stage",
+      "inspect_current_state",
+      "pause",
+      "free_text"
+    ],
+    "migration_item_count": 0
+  },
+  "switch_intent": {
+    "status": "switched",
+    "keys": [
+      "branch_reason",
+      "preserved_previous_task",
+      "previous_workflow_id",
+      "schemaVersion",
+      "status",
+      "task",
+      "task_family_id"
+    ],
+    "workflow_type": "short_startup",
+    "task_status": "running",
+    "current_stage": "project_type_lock",
+    "target_stage": "",
+    "action_id": "",
+    "selected_number": 0,
+    "candidate_actions": [],
+    "migration_item_count": 0
+  },
+  "activate": {
+    "status": "activated",
+    "keys": [
+      "previous_workflow_id",
+      "schemaVersion",
+      "stage_execution",
+      "status",
+      "task"
+    ],
+    "workflow_type": "long_startup",
+    "task_status": "running",
+    "current_stage": "market_positioning",
+    "target_stage": "",
+    "action_id": "",
+    "selected_number": 0,
+    "candidate_actions": [],
+    "migration_item_count": 0
+  },
+  "migrate_legacy": {
+    "status": "migration_preview",
+    "keys": [
+      "migrated_count",
+      "migration_inventory",
+      "safe_default",
+      "schemaVersion",
+      "status"
+    ],
+    "workflow_type": "",
+    "task_status": "",
+    "current_stage": "",
+    "target_stage": "",
+    "action_id": "",
+    "selected_number": 0,
+    "candidate_actions": [],
+    "migration_item_count": 2
+  }
+}

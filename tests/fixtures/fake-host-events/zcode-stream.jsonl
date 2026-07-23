@@ -1,0 +1,4 @@
+{"type":"session_started","session_id":"fake-session"}
+{"type":"message","role":"assistant","content":"已完成路由检查。"}
+{"type":"usage","usage":{"prompt_tokens":860,"completion_tokens":240,"cache_read_tokens":110,"cache_write_tokens":40},"duration_ms":990}
+{"type":"result","status":"success"}

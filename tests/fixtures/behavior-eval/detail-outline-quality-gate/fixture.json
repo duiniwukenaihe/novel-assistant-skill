@@ -1,0 +1,19 @@
+{
+  "fixture": "detail-outline-quality-gate",
+  "workflowType": "long_write",
+  "workflowId": "wf-detail-outline-quality-eval",
+  "stageId": "detail_outline_review",
+  "validOutline": {
+    "path": "大纲/第1卷/细纲_第001章.md",
+    "content": "# 第001章 旧账号水印\n- 核心事件：平台逼林昭接下错误任务，林昭公开拒绝并保存调度截图。\n- 目标情绪：压迫转为主动反击。\n- 开篇钩子：后台突然出现一笔不属于她的罚单。\n- 爽点：她当众投屏原始记录，让主管无法删证。\n#### 情节安排\n1. 主管以停单威胁逼她签字；林昭先截屏，再要求对方重复规则。\n2. 主管试图拔线，她把手机投到大厅屏幕，围观骑手开始录音。\n3. 因此罚单来源暴露为旧账号，林昭拿到继续追查的入口。\n#### 质量触发\n- 激活标签：人物线、悬念推进、爽点兑现\n- 激活原因：主角第一次主动反击，并建立旧账号悬念。\n#### 呈现与连续性\n- 可见证据：调度截图、投屏记录、围观者录音。\n- 前置承接：承接入职时发现的异常账号。\n- 本章变化：林昭从被动申诉转为掌握证据并主动追查。\n- 后续债务：旧账号的持有人尚未揭晓。\n"
+  },
+  "underfilledOutline": {
+    "path": "大纲/第1卷/细纲_第002章.md",
+    "content": "# 第002章\n- 核心事件：主角回家。\n"
+  },
+  "forbiddenOutputs": [
+    "正文/第1卷/第002章.md",
+    "正文候选/第1卷/第002章.md"
+  ],
+  "acceptedStopBoundary": "chapter_brief"
+}

@@ -1,0 +1,166 @@
+{
+  "next_candidates": [
+    {
+      "action_id": "continue_next_stage",
+      "completion_boundary": "stage_completed",
+      "description": "",
+      "execution_command": "node scripts/workflow-state-machine.js resolve-action --project-root . --input 1 --pending-action-id 'pa-range_lock' --visible-choice-hash '2c74fbd86a8c34b7926e857e8fb150814afecfb5271087352bd891561a6fc607' --state-version 1 --book-root . --json",
+      "execution_mode": "exact_selected_option",
+      "execution_workdir": ".",
+      "frontend_surface": "",
+      "interaction_mode": "execute_command",
+      "label": "继续锁定审阅范围（推荐）",
+      "number": 1,
+      "recommended": true,
+      "requires_user_confirm": false,
+      "risk_level": "low",
+      "target_stage": "range_lock"
+    },
+    {
+      "action_id": "inspect_current_state",
+      "execution_command": "node scripts/workflow-state-machine.js resolve-action --project-root . --input 2 --pending-action-id 'pa-range_lock' --visible-choice-hash '2c74fbd86a8c34b7926e857e8fb150814afecfb5271087352bd891561a6fc607' --state-version 1 --book-root . --json",
+      "execution_workdir": ".",
+      "interaction_mode": "execute_command",
+      "label": "查看当前进度与依据",
+      "number": 2,
+      "recommended": false,
+      "requires_user_confirm": false,
+      "risk_level": "low"
+    },
+    {
+      "action_id": "pause",
+      "execution_command": "node scripts/workflow-state-machine.js resolve-action --project-root . --input 3 --pending-action-id 'pa-range_lock' --visible-choice-hash '2c74fbd86a8c34b7926e857e8fb150814afecfb5271087352bd891561a6fc607' --state-version 1 --book-root . --json",
+      "execution_workdir": ".",
+      "interaction_mode": "execute_command",
+      "label": "停止并保存断点",
+      "number": 3,
+      "recommended": false,
+      "requires_user_confirm": false,
+      "risk_level": "low"
+    },
+    {
+      "action_id": "free_text",
+      "execution_command": "node scripts/workflow-state-machine.js resolve-action --project-root . --input 4 --pending-action-id 'pa-range_lock' --visible-choice-hash '2c74fbd86a8c34b7926e857e8fb150814afecfb5271087352bd891561a6fc607' --state-version 1 --book-root . --json",
+      "execution_workdir": ".",
+      "interaction_mode": "execute_command",
+      "label": "输入其他要求",
+      "number": 4,
+      "recommended": false,
+      "requires_user_confirm": false,
+      "risk_level": "low"
+    }
+  ],
+  "pending_action": {
+    "book_root": "<project-root>",
+    "created_at": "<timestamp>",
+    "expires_at": "<timestamp>",
+    "free_text_enabled": true,
+    "id": "<pending-action-id>",
+    "interaction_profile": "numeric_four_choice",
+    "options": [
+      {
+        "action_id": "continue_next_stage",
+        "completion_boundary": "stage_completed",
+        "description": "",
+        "execution_mode": "exact_selected_option",
+        "frontend_surface": "",
+        "label": "继续锁定审阅范围（推荐）",
+        "number": 1,
+        "recommended": true,
+        "requires_user_confirm": false,
+        "risk_level": "low",
+        "target_stage": "range_lock"
+      },
+      {
+        "action_id": "inspect_current_state",
+        "label": "查看当前进度与依据",
+        "number": 2,
+        "recommended": false,
+        "requires_user_confirm": false,
+        "risk_level": "low"
+      },
+      {
+        "action_id": "pause",
+        "label": "停止并保存断点",
+        "number": 3,
+        "recommended": false,
+        "requires_user_confirm": false,
+        "risk_level": "low"
+      },
+      {
+        "action_id": "free_text",
+        "label": "输入其他要求",
+        "number": 4,
+        "recommended": false,
+        "requires_user_confirm": false,
+        "risk_level": "low"
+      }
+    ],
+    "pending_action_id": "<pending_action_id>",
+    "question": "请选择下一步",
+    "state_version": 1,
+    "visible_choice_hash": "<visible_choice_hash>"
+  },
+  "schemaVersion": "1.0.0",
+  "status": "ok",
+  "target_stage": "range_lock",
+  "visible_response": {
+    "free_text_enabled": true,
+    "options": [
+      {
+        "action_id": "continue_next_stage",
+        "completion_boundary": "stage_completed",
+        "description": "",
+        "execution_command": "node scripts/workflow-state-machine.js resolve-action --project-root . --input 1 --pending-action-id 'pa-range_lock' --visible-choice-hash '2c74fbd86a8c34b7926e857e8fb150814afecfb5271087352bd891561a6fc607' --state-version 1 --book-root . --json",
+        "execution_mode": "exact_selected_option",
+        "execution_workdir": ".",
+        "frontend_surface": "",
+        "interaction_mode": "execute_command",
+        "label": "继续锁定审阅范围（推荐）",
+        "number": 1,
+        "recommended": true,
+        "requires_user_confirm": false,
+        "risk_level": "low",
+        "target_stage": "range_lock"
+      },
+      {
+        "action_id": "inspect_current_state",
+        "execution_command": "node scripts/workflow-state-machine.js resolve-action --project-root . --input 2 --pending-action-id 'pa-range_lock' --visible-choice-hash '2c74fbd86a8c34b7926e857e8fb150814afecfb5271087352bd891561a6fc607' --state-version 1 --book-root . --json",
+        "execution_workdir": ".",
+        "interaction_mode": "execute_command",
+        "label": "查看当前进度与依据",
+        "number": 2,
+        "recommended": false,
+        "requires_user_confirm": false,
+        "risk_level": "low"
+      },
+      {
+        "action_id": "pause",
+        "execution_command": "node scripts/workflow-state-machine.js resolve-action --project-root . --input 3 --pending-action-id 'pa-range_lock' --visible-choice-hash '2c74fbd86a8c34b7926e857e8fb150814afecfb5271087352bd891561a6fc607' --state-version 1 --book-root . --json",
+        "execution_workdir": ".",
+        "interaction_mode": "execute_command",
+        "label": "停止并保存断点",
+        "number": 3,
+        "recommended": false,
+        "requires_user_confirm": false,
+        "risk_level": "low"
+      },
+      {
+        "action_id": "free_text",
+        "execution_command": "node scripts/workflow-state-machine.js resolve-action --project-root . --input 4 --pending-action-id 'pa-range_lock' --visible-choice-hash '2c74fbd86a8c34b7926e857e8fb150814afecfb5271087352bd891561a6fc607' --state-version 1 --book-root . --json",
+        "execution_workdir": ".",
+        "interaction_mode": "execute_command",
+        "label": "输入其他要求",
+        "number": 4,
+        "recommended": false,
+        "requires_user_confirm": false,
+        "risk_level": "low"
+      }
+    ],
+    "render_mode": "text_numbers",
+    "selection_contract": "execute_command_or_route_intent",
+    "status": "workflow_choice_required",
+    "text": "请选择下一步\n\n1. 继续锁定审阅范围（推荐）\n2. 查看当前进度与依据\n3. 停止并保存断点\n4. 输入其他要求\n\n回复 1/2/3/4。",
+    "work_queue": null
+  }
+}

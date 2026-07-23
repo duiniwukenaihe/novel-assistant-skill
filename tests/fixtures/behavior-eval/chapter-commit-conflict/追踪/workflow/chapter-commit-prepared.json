@@ -1,0 +1,14 @@
+{
+  "status": "prepared",
+  "commit_id": "fixture-commit-002",
+  "targets": [
+    {
+      "path": "正文/第1卷/第002章_夜雨.md",
+      "expected_sha256": "prepared_snapshot_placeholder"
+    }
+  ],
+  "conflict": {
+    "path": "正文/第1卷/第002章_夜雨.md",
+    "reason": "canonical target changed after prepare"
+  }
+}
