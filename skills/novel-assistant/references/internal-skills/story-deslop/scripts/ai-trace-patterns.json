@@ -1,0 +1,29 @@
+{
+    "version": "1.0",
+    "patterns": [
+        {
+            "id": "novel_text_start",
+            "regex": "NOVEL_TEXT_START|NOVEL_TEXT_END",
+            "severity": "P0",
+            "description": "Agent 推理标记泄漏到正文"
+        },
+        {
+            "id": "square_bracket_instruction",
+            "regex": "\\[(注|TODO|FIXME|草稿|未完成|DRAFT)[^\\]]*\\]",
+            "severity": "P0",
+            "description": "方括号指令泄漏"
+        },
+        {
+            "id": "paren_note",
+            "regex": "（注：|（注:|（待补|（未完",
+            "severity": "P0",
+            "description": "圆括号注释泄漏"
+        },
+        {
+            "id": "agent_meta_marker",
+            "regex": "^>\\s*\\[agent\\]|^>\\s*\\[meta\\]",
+            "severity": "P0",
+            "description": "Agent / Meta 标记在引用块"
+        }
+    ]
+}

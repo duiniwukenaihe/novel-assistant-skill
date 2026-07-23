@@ -1,0 +1,12 @@
+{
+    "platform": "知乎盐言",
+    "version": "2026-06",
+    "categories": {
+        "政治": ["领导人姓名", "政治事件", "敏感职务"],
+        "色情": ["露骨描写", "性器官"],
+        "暴力": ["血腥细节", "肢解"],
+        "宗教": ["邪教", "宗教冲突"],
+        "民族": ["民族歧视", "民族冲突"]
+    },
+    "updateUrl": "https://raw.githubusercontent.com/worldwonderer/oh-story-claudecode/main/skills/story-long-write/references/web-novel-commercial/sensitive-words/zhihu.json"
+}

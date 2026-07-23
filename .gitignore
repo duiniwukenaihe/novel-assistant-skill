@@ -1,0 +1,15 @@
+.DS_Store
+**/.omc/
+.claude/
+.agents/
+.codebuddy/
+AGENTS.md
+CLAUDE.md
+_archive/
+skills-lock.json
+docs/plans/
+.worktrees/
+# Author-approved calibration excerpts and reports are local/private assets.
+reports/private/
+# Real-host evaluation streams can contain model output and usage telemetry.
+reports/behavior-eval/

@@ -1,0 +1,19 @@
+{
+  "bundleName": "novel-assistant",
+  "bundleId": "bundle-8b6ded484825",
+  "sourceTreeId": "tree-8b6ded484825",
+  "sourceInputDigest": "sha256:8b6ded484825a5bc4745cfaad353114701bc99a379b9c1bb94179317483d7b10",
+  "sourceLayout": {"schemaVersion":1,"includePrivate":false,"sourceSkillsDir":"src/internal-skills","privateSourceSkillsDir":null,"recomputable":true},
+  "sourceCommit": "92d2b43",
+  "sourceCommitRole": "build_start_git_baseline",
+  "sourceState": "dirty",
+  "sourceBranch": "",
+  "updateSourceUrl": "https://github.com/duiniwukenaihe/novel-assistant-skill.git",
+  "updateSourceBranch": "main",
+  "updateMode": "self-managed",
+  "agentsVersion": 18,
+  "setupSkillVersion": "1.4.5",
+  "internalSkillCount": 15,
+  "privateInternalSkillCount": 0,
+  "scriptCount": 114
+}
