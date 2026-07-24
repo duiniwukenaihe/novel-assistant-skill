@@ -8,7 +8,6 @@
 - [工作流](workflow.md)：任务生命周期、断点、记忆、审阅、扩容与质量门。
 - [长篇稳定性快速开始](longform-stability-quickstart.md)：从新书定位到卷纲、细纲、Brief 和正文的最短路径。
 - [生产准备度](production-readiness.md)：什么可以自动化、什么仍需作者确认，以及发布前验证。
-- [v0.8.0 Workflow / Memory 与短篇生产内核](releases/2026-07-22-workflow-memory-shortform.md)：本轮短篇优先路线、任务控制面、记忆快照和公开边界。
 
 ## 维护者文档
 

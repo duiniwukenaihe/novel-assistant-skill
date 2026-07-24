@@ -15,7 +15,7 @@ function classifyWorkflowApply(run) {
   const structured = Boolean(workflowStatus);
   const task = result.task && typeof result.task === 'object' ? result.task : {};
   const visibleResponse = result.visible_response && typeof result.visible_response === 'object'
-    ? result.visible_response
+    ? compactVisibleResponse(result.visible_response)
     : null;
   const stageExecution = result.stage_execution && typeof result.stage_execution === 'object'
     ? result.stage_execution
@@ -33,13 +33,34 @@ function classifyWorkflowApply(run) {
     result,
     workflowStatus: workflowStatus || 'workflow_apply_process_failed',
     presentation: {
-      stage_execution: stageExecution,
+      stage_execution: compactStageExecution(stageExecution),
       pending_action: pendingAction,
       next_candidates: Array.isArray(result.next_candidates) ? result.next_candidates : [],
       visible_response: visibleResponse,
       interaction_contract: String(result.interaction_contract || (visibleResponse ? 'render_visible_response_text_verbatim' : '')),
     },
   };
+}
+
+function compactStageExecution(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const fields = [
+    'status', 'stage_attempt_id', 'work_unit_id', 'work_unit_scope', 'attempt_no',
+    'stage_id', 'step_id', 'action_id', 'selected_number', 'owner_module',
+    'expected_result_packet', 'write_set', 'execution_workdir', 'context_read_command',
+    'execution_command', 'resume_hint', 'completion_required_before_reply',
+    'requires_user_confirm', 'risk_level', 'completion_boundary', 'batch_id', 'batch_scope',
+  ];
+  return Object.fromEntries(fields.filter((field) => Object.prototype.hasOwnProperty.call(value, field))
+    .map((field) => [field, value[field]]));
+}
+
+function compactVisibleResponse(value) {
+  const response = { ...value };
+  if (response.stage_execution) response.stage_execution = compactStageExecution(response.stage_execution);
+  delete response.stage_context_packet;
+  delete response.memory_context;
+  return response;
 }
 
 function stageRecoveryPresentation(task, options = {}) {

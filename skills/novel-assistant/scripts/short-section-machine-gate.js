@@ -8,7 +8,8 @@ const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { inferShortSectionIndex } = require('./lib/short-workflow-state');
-const { deriveSectionLengthPolicy } = require('./lib/short-section-length-policy');
+const { deriveSectionLengthPolicy, shouldAskSingleSectionLengthChoice } = require('./lib/short-section-length-policy');
+const { decoratePendingAction } = require('./lib/workflow-action-renderer');
 const { atomicWriteJson, mutateTask } = require('./lib/workflow-state-store');
 
 function main() {
@@ -56,8 +57,8 @@ function main() {
       status: lengthPolicy.blocking ? 'blocking' : lengthPolicy.status,
       blocking: lengthPolicy.blocking === true,
       exit_code: 0,
-      finding_count: lengthPolicy.blocking ? 1 : 0,
-      message: lengthPolicy.blocking ? lengthPolicy.note : '',
+      finding_count: ['advisory', 'warning'].includes(String(lengthPolicy.status || '')) ? 1 : lengthPolicy.blocking ? 1 : 0,
+      message: lengthPolicy.note || '',
       details: lengthPolicy,
     },
   ];
@@ -77,6 +78,9 @@ function main() {
     draft_digest: draftDigest,
     checks,
     length_policy: lengthPolicy,
+    quality_debts: lengthPolicy.verdict === 'outside_story_band_deferred'
+      ? [{ debt_type: 'section_length_variance', severity: 'advisory', scope: `第${sectionIndex}节`, details: lengthPolicy, recommended_fix: '整篇收束时结合剧情功能决定补写、压缩或保留。' }]
+      : [],
     blocking_count: blocking.length,
     created_at: new Date().toISOString(),
   });
@@ -108,7 +112,9 @@ function main() {
     output_health_result: passed ? 'pass' : 'blocking',
     current_section_index: sectionIndex,
     next_recommendation: passed ? '进入当前节故事质量门' : '只修复当前节 blocking 后重新运行机器门',
-    handoff_summary: passed ? `第${sectionIndex}节机器门通过。` : `第${sectionIndex}节机器门发现 ${blocking.length} 项 blocking。`,
+    handoff_summary: passed
+      ? `第${sectionIndex}节机器门通过${lengthPolicy.verdict === 'outside_story_band_deferred' ? '；篇幅偏差已记录，留待整篇收束处理' : ''}。`
+      : `第${sectionIndex}节机器门发现 ${blocking.length} 项 blocking。`,
     memory_updates: [],
     result_packet_path: packetRel,
   });
@@ -121,11 +127,15 @@ function main() {
     'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json',
   ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(applied);
-  const applyResult = outcome.result;
+  let applyResult = outcome.result;
+  const lengthChoice = outcome.applied && shouldAskSingleSectionLengthChoice(task, lengthPolicy)
+    ? pauseForSingleSectionLengthChoice(root, workflowId, applyResult, sectionIndex, lengthPolicy)
+    : null;
+  if (lengthChoice) applyResult = lengthChoice.task;
   const nextStage = String(applyResult.current_stage || ((applyResult.task || {}).current_stage) || (passed ? 'quality_gate' : 'section_repair_loop'));
   const nextExecution = applyResult.stage_execution || ((applyResult.task || {}).stage_execution) || {};
   return finish({
-    status: outcome.applied ? 'applied' : 'apply_blocked',
+    status: lengthChoice ? 'short_length_choice_required' : outcome.applied ? 'applied' : 'apply_blocked',
     workflow_status: outcome.workflowStatus,
     workflow_id: workflowId,
     section_index: sectionIndex,
@@ -137,15 +147,79 @@ function main() {
     context_packet: String((((nextExecution.stage_context_packet || {}).packet_md) || '')),
     next_command: String(nextExecution.execution_command || ''),
     resume_hint: String(nextExecution.resume_hint || ''),
-    ...outcome.presentation,
+    ...(lengthChoice ? { pending_action: lengthChoice.task.pending_action, next_candidates: lengthChoice.task.pending_action.options, visible_response: lengthChoice.visible_response } : outcome.presentation),
     ...(outcome.applied ? {} : { apply_result: applyResult }),
   }, outcome.exitCode, args.json);
+}
+
+function pauseForSingleSectionLengthChoice(root, workflowId, applyResult, sectionIndex, lengthPolicy) {
+  const latest = resolveTaskAuthority(root, workflowId);
+  if (latest.status !== 'ok') return null;
+  const expectedStateVersion = Number((latest.task || {}).state_version || 0);
+  const pending = decoratePendingAction({
+    id: `pa-short-length-${workflowId}-section-${String(sectionIndex).padStart(3, '0')}`,
+    question: `第 ${sectionIndex} 节篇幅偏离当前作品基准，请选择处理方式`,
+    options: [
+      {
+        number: 1,
+        action_id: 'accept_length_variance',
+        label: '保留当前篇幅并继续质量检查（推荐）',
+        description: '记录篇幅提醒，不机械补字；继续检查剧情、人物、因果与钩子。',
+        target_stage: 'quality_gate',
+        risk_level: 'low',
+        requires_user_confirm: false,
+      },
+      {
+        number: 2,
+        action_id: 'revise_length_variance',
+        label: '先补写或压缩当前小节',
+        description: '进入当前小节修订，只处理篇幅与对应剧情功能。',
+        target_stage: 'section_repair_loop',
+        risk_level: 'medium',
+        requires_user_confirm: false,
+      },
+      {
+        number: 3,
+        action_id: 'free_text',
+        label: '保留当前断点，输入其他要求或开启新任务',
+        risk_level: 'low',
+        requires_user_confirm: false,
+      },
+    ],
+    free_text_enabled: true,
+    compact_options: true,
+  });
+  const task = mutateTask({
+    projectRoot: root,
+    workflowId,
+    expectedStateVersion,
+    owner: 'short-section-length-choice',
+    mutation: (draft) => {
+      draft.stage_execution = { ...(draft.stage_execution || {}), status: 'paused', stopped_at: new Date().toISOString(), stop_reason: 'single_section_length_choice_required' };
+      draft.pending_action = pending;
+      draft.machine = draft.machine || {};
+      draft.machine.next_stop_reason = 'single_section_length_choice_required';
+      draft.machine.allowed_actions = ['accept_length_variance', 'revise_length_variance', 'free_text'];
+      draft.short_length_choice = { section_index: sectionIndex, status: 'pending', length_policy: lengthPolicy };
+      return draft;
+    },
+  });
+  const lines = pending.options.map((option) => `${option.number}. ${option.label}`);
+  return {
+    task,
+    visible_response: {
+      render_mode: 'text_numbers',
+      status: 'short_length_choice_required',
+      text: `第 ${sectionIndex} 节当前 ${lengthPolicy.observed_chars} 字，作品基准约 ${lengthPolicy.baseline_chars} 字。篇幅偏差不会被当成错误。\n\n${lines.join('\n')}\n\n回复数字选择，也可以直接输入修改意见。`,
+      options: pending.options,
+    },
+  };
 }
 
 function reopenMachineGateForPolicyRecheck(root, task, explicitDraft) {
   const stage = String(task.current_stage || '');
   const execution = task.stage_execution || {};
-  if (!['quality_gate', 'story_value_gate', 'section_accept_anchor'].includes(stage)
+  if (!['section_repair_loop', 'quality_gate', 'story_value_gate', 'section_accept_anchor'].includes(stage)
     || String(execution.status || '') !== 'running'
     || String(execution.stage_id || '') !== stage) {
     return {
@@ -167,21 +241,26 @@ function reopenMachineGateForPolicyRecheck(root, task, explicitDraft) {
   const legacyPacketRel = `${packetDir}/section_machine_gate.result.json`;
   const packetRel = fs.existsSync(safeProjectFile(root, unitPacketRel)) ? unitPacketRel : legacyPacketRel;
   const packet = readJson(safeProjectFile(root, packetRel));
-  if (!packet || String(packet.machine_gate_result || packet.verification_result || '') !== 'pass') {
+  const previousPassed = packet && String(packet.machine_gate_result || packet.verification_result || '') === 'pass';
+  const blockingFindings = packet && Array.isArray(packet.blocking_findings) ? packet.blocking_findings : [];
+  const lengthPolicyOnly = stage === 'section_repair_loop'
+    && blockingFindings.length > 0
+    && blockingFindings.every((item) => String((item || {}).code || '') === 'short-section-length-policy');
+  if (!packet || (!previousPassed && !lengthPolicyOnly)) {
     return { status: 'policy_recheck_proof_missing', workflow_id: String(task.workflow_id || ''), reason: 'previous_machine_gate_not_passed' };
   }
   const outputs = Array.isArray(packet.outputs) ? packet.outputs.map(String) : [];
   const artifactRel = outputs.find((item) => /machine-gate\.json$/.test(item)) || '';
   const artifact = readJson(safeProjectFile(root, artifactRel));
   const draft = resolveDraft(root, task, sectionIndex, explicitDraft);
-  const expectedDigest = String((artifact || {}).draft_digest || '');
+  const expectedDigest = String((artifact || {}).draft_digest || packet.draft_digest || '');
   if (!draft || !/^sha256:[a-f0-9]{64}$/.test(expectedDigest)) {
     return { status: 'policy_recheck_proof_missing', workflow_id: String(task.workflow_id || ''), reason: 'previous_machine_gate_digest_missing' };
   }
 
   const now = new Date().toISOString();
   const workflowId = String(task.workflow_id || '');
-  const resultPacket = `${String(task.task_dir || '')}/result-packets/section_machine_gate.result.json`;
+  const resultPacket = `${String(task.task_dir || '')}/result-packets/section_machine_gate.section-${String(sectionIndex).padStart(3, '0')}.result.json`;
   const next = mutateTask({
     projectRoot: root,
     workflowId,

@@ -85,14 +85,25 @@ function deriveSectionLengthPolicy(input = {}) {
   }
   return {
     ...base,
-    status: 'blocked',
-    blocking: true,
-    verdict: 'outside_story_band',
+    status: 'advisory',
+    blocking: false,
+    verdict: 'outside_story_band_deferred',
     exception_reason_required: EXCEPTION_ROLES.has(role),
     note: actual
-      ? '当前小节明显偏离作品内篇幅基准；先检查是否缺少或重复剧情功能，修订后必须重新过双门。'
-      : '下一节 Brief 的目标篇幅明显偏离作品基准；请调整目标，或为结构性例外写明理由。',
+      ? '当前小节偏离作品内篇幅基准；已记录为篇幅提醒，不阻断当前节，整篇收束时统一决定补写、压缩或保留。'
+      : '下一节 Brief 的目标篇幅偏离作品基准；仅记录提醒，不因字数单独阻断写作。',
   };
 }
 
-module.exports = { EXCEPTION_ROLES, acceptedSamples, deriveSectionLengthPolicy, median };
+function shouldAskSingleSectionLengthChoice(task, lengthPolicy) {
+  if (String((lengthPolicy || {}).verdict || '') !== 'outside_story_band_deferred') return false;
+  const originalScope = String((((task || {}).lifecycle || {}).scope) || '').trim();
+  if (!/^第\s*0*\d+\s*节$/u.test(originalScope)) return false;
+  const queue = (task || {}).feedback_revision_queue;
+  const queueSections = Array.isArray((queue || {}).affected_sections)
+    ? queue.affected_sections
+    : Array.isArray((queue || {}).items) ? queue.items.map((item) => item.section_index) : [];
+  return new Set(queueSections.map(Number).filter(Number.isInteger)).size <= 1;
+}
+
+module.exports = { EXCEPTION_ROLES, acceptedSamples, deriveSectionLengthPolicy, median, shouldAskSingleSectionLengthChoice };

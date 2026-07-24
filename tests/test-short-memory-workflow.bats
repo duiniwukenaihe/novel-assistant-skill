@@ -74,6 +74,36 @@ NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
+@test "brief generation does not invalidate its own memory receipt" {
+  run node - "$REPO/scripts/lib/short-memory-snapshot.js" "$BOOK" <<'NODE'
+const fs=require('fs'),path=require('path');const api=require(process.argv[2]);const root=process.argv[3];
+const task={workflow_id:'wf-short',workflow_type:'short_write',scope:'第2节'};
+const first=api.buildShortMemorySnapshot(root,{task,sectionIndex:2,stageId:'next_section_brief'});
+fs.writeFileSync(path.join(root,'写作Brief_第002节.md'),'# 写作 Brief：第002节\n\n## 本节任务\n这是本轮刚生成的新提要。\n');
+const second=api.buildShortMemorySnapshot(root,{task,sectionIndex:2,stageId:'next_section_brief'});
+if(first.receipt.memory_revision!==second.receipt.memory_revision) throw new Error(JSON.stringify({first:first.receipt,second:second.receipt}));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "short memory collapses duplicate section summaries hooks and reveals before budgeting" {
+  printf '%s\n' '{"fact_id":"fact.summary-duplicate","subject":"全篇","predicate":"本节发生","object":"这是一段重复且更长的第1节摘要，只用于验证旧投影不会重复注入上下文。","scope":{"book":"current","section":1},"status":"active","evidence":[{"path":"正文/第001节.md"}]}' >> "$BOOK/追踪/memory/facts.jsonl"
+  printf '%s\n' '{"fact_id":"fact.hook-duplicate","subject":"全篇","predicate":"留下待续钩子","object":"母亲沉默。","scope":{"book":"current","section":1},"status":"active","evidence":[{"path":"正文/第001节.md"}]}' >> "$BOOK/追踪/memory/facts.jsonl"
+  printf '%s\n' '{"fact_id":"fact.reveal-a","subject":"全篇","predicate":"本节揭示","object":"直播素材与实时画面不一致。","scope":{"book":"current","section":1},"status":"active","evidence":[{"path":"正文/第001节.md"}]}' >> "$BOOK/追踪/memory/facts.jsonl"
+  printf '%s\n' '{"fact_id":"fact.reveal-b","subject":"当前作品","predicate":"第1节揭示","object":"直播素材与实时画面不一致，且旧素材时间需要继续核验。","scope":{"book":"current","section":1},"status":"active","evidence":[{"path":"正文/第001节.md"}]}' >> "$BOOK/追踪/memory/facts.jsonl"
+  run node - "$REPO/scripts/lib/short-memory-snapshot.js" "$BOOK" <<'NODE'
+const api=require(process.argv[2]);const root=process.argv[3];
+const task={workflow_id:'wf-short',workflow_type:'short_write',scope:'第2节'};
+const out=api.buildShortMemorySnapshot(root,{task,sectionIndex:2,stageId:'next_section_brief'});
+const facts=out.payload.accepted_facts||[];
+const summaries=facts.filter(row=>/本节发生/.test(row.predicate)||row.subject==='summary');
+const hooks=facts.filter(row=>/钩子|待续|承诺/.test(row.predicate));
+const reveals=facts.filter(row=>/揭示/.test(row.predicate));
+if(summaries.length!==1||hooks.length!==1||reveals.length!==1) throw new Error(JSON.stringify(facts));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 @test "next section stage packet carries the compiled memory snapshot and receipt" {
   run node - "$REPO/scripts/lib/workflow-stage-context-packet.js" "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');const {buildStageContextPacket}=require(process.argv[2]);const root=process.argv[3];
@@ -106,6 +136,74 @@ if(!first.payload.continuity_obligations.some(row=>row.kind==='accepted_planning
 fs.appendFileSync(path.join(root,'小节大纲.md'),'\n- 用户后来重新规划了本节。\n');
 const stale=memoryApi.buildShortMemorySnapshot(root,{task,sectionIndex:2,stageId:'next_section_brief'});
 if(JSON.stringify(stale.payload.canon_constraints).includes('老大守住底线')) throw new Error(JSON.stringify(stale.payload));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "active accepted plan remains available to its revision child after canonical files change" {
+  run node - "$REPO/scripts/lib/short-memory-snapshot.js" "$BOOK" <<'NODE'
+const api=require(process.argv[2]);const root=process.argv[3];
+const task={
+  workflow_id:'wf-short',
+  workflow_type:'private_short_startup',
+  scope:'第2节',
+  accepted_plan:{
+    plan_id:'accepted-plan.fruit',
+    status:'projected_to_canonical_memory',
+    projection_status:'completed',
+    affected_sections:[1,2,8,9],
+    requirements:[{requirement_id:'req-ending',text:'结局必须兑现已确认的真实生产承诺。'}],
+    projected_assets:['设定.md','小节大纲.md'],
+  },
+  feedback_revision_queue:{
+    status:'running',
+    current_section_index:2,
+    affected_sections:[1,2,8,9],
+    items:[{section_index:2,status:'pending'}],
+  },
+};
+const out=api.buildShortMemorySnapshot(root,{task,sectionIndex:2,stageId:'next_section_brief'});
+const serialized=JSON.stringify(out.payload);
+if(!out.contract.query.needs.includes('planning_constraints')) throw new Error(JSON.stringify(out.contract.query));
+if(!serialized.includes('结局必须兑现已确认的真实生产承诺')) throw new Error(serialized);
+if(!(out.payload.continuity_obligations||[]).some(row=>row.kind==='accepted_planning_constraint')) throw new Error(serialized);
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "revision section context packet carries the confirmed plan obligations" {
+  mkdir -p "$BOOK/正文"
+  printf '%s\n' '第1节结尾：哥哥拿出工资账本。' > "$BOOK/正文/第001节.md"
+  printf '%s\n' '{"project_id":"short-a","project_title":"果汁事件","current_section_index":10,"accepted_sections":[{"section_index":1},{"section_index":2},{"section_index":3},{"section_index":4},{"section_index":5},{"section_index":6},{"section_index":7},{"section_index":8},{"section_index":9}]}' > "$BOOK/追踪/private-short-extension/project-state.json"
+  run node - "$REPO/scripts/lib/workflow-stage-context-packet.js" "$BOOK" <<'NODE'
+const fs=require('fs'),path=require('path');const api=require(process.argv[2]);const root=process.argv[3];
+const task={
+  workflow_id:'wf-short',
+  workflow_type:'private_short_startup',
+  scope:'第2节',
+  current_stage:'next_section_brief',
+  task_dir:'追踪/workflow/tasks/wf-short',
+  stage_execution:{stage_attempt_id:'sa-brief-2'},
+  accepted_plan:{
+    plan_id:'accepted-plan.fruit',
+    status:'projected_to_canonical_memory',
+    summary:'按确认方案重构全篇。',
+    requirements:[{requirement_id:'req-ending',text:'结局必须兑现真实生产承诺。'}],
+  },
+  feedback_revision_queue:{
+    status:'running',
+    feedback_id:'feedback-fruit',
+    current_section_index:2,
+    affected_sections:[1,2],
+    items:[{section_index:1,status:'accepted'},{section_index:2,status:'pending',brief_status:'invalidated',prose_status:'pending_recheck'}],
+    groups:[{group_id:'opening',section_indices:[1,2],goal:'重建开篇压力链',completion_rule:'逐节重新采用'}],
+  },
+};
+const out=api.buildStageContextPacket({projectRoot:root,task,stage:'next_section_brief'});
+if(out.status!=='assembled') throw new Error(JSON.stringify(out));
+if(out.section_index!==2) throw new Error(JSON.stringify(out));
+const markdown=fs.readFileSync(path.join(root,out.packet_md),'utf8');
+if(!markdown.includes('accepted_revision_obligations')||!markdown.includes('结局必须兑现真实生产承诺')||!markdown.includes('重建开篇压力链')||!markdown.includes('当前作品记忆快照.canon_constraints')) throw new Error(markdown);
 NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }

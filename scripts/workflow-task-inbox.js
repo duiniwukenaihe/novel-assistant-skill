@@ -15,6 +15,10 @@ const {
 } = require('./lib/task-family-store');
 const { buildLifecycleStatus } = require('./longform-lifecycle-status');
 const { projectTaskActionView } = require('./lib/workflow-action-renderer');
+const {
+  taskHasOverview,
+  taskOverviewPresentationRequired,
+} = require('./lib/workflow-task-overview-state');
 
 const REVIEW_EVIDENCE_PROTOCOL_VERSION = '2.0.0';
 const SHORT_WORKFLOW_TYPES = new Set([
@@ -189,6 +193,8 @@ const STAGE_LABELS = {
   section_machine_gate: '检查当前小节机器门',
   section_repair_loop: '修订当前小节',
   story_value_gate: '检查故事价值',
+  feedback_impact_sync: '分析反馈影响',
+  feedback_apply_patch: '回写已确认方案',
   quality_gate: '检查故事质量',
   section_candidate_compare: '对比候选稿',
   section_accept_anchor: '确认采用当前小节',
@@ -207,6 +213,15 @@ function humanStepLabel(value) {
 function resumesRunningStage(task) {
   const execution = ((task || {}).stage_execution || {});
   return String(execution.status || '').toLowerCase() === 'running'
+    && Boolean(String(execution.stage_id || execution.step_id || '').trim());
+}
+
+function resumesPausedStage(task) {
+  const execution = ((task || {}).stage_execution || {});
+  const taskStatus = String((task || {}).status || '').toLowerCase();
+  const executionStatus = String(execution.status || '').toLowerCase();
+  return taskStatus === 'paused'
+    && executionStatus === 'paused'
     && Boolean(String(execution.stage_id || execution.step_id || '').trim());
 }
 
@@ -383,6 +398,27 @@ function normalizeNextActions(task, fallbackLabel) {
       stage_completion_command: String(execution.execution_command || ''),
     }];
   }
+  if (resumesPausedStage(task)) {
+    const workflowId = String(task.workflow_id || '');
+    return [
+      {
+        number: 1,
+        label: `继续${humanStepLabel(task.current_stage || task.current_step || '当前阶段')}（推荐）`,
+        action_id: 'activate_workflow',
+        interaction_mode: 'execute_command',
+        execution_command: `node scripts/workflow-state-machine.js activate --project-root . --workflow-id ${workflowId} --compact --json`,
+      },
+      {
+        number: 2,
+        label: '查看当前进度与依据',
+        action_id: 'inspect_current_state',
+        interaction_mode: 'execute_command',
+        execution_command: 'node scripts/workflow-state-machine.js inspect --project-root . --json',
+      },
+      { number: 3, label: '开启新任务', action_id: 'new_goal', interaction_mode: 'semantic_only' },
+      { number: 4, label: '输入其他要求', action_id: 'free_text', interaction_mode: 'semantic_only' },
+    ];
+  }
   const pending = task && task.pending_action && typeof task.pending_action === 'object' ? task.pending_action : {};
   const options = Array.isArray(pending.options) ? pending.options : [];
   if (options.length > 0) {
@@ -415,18 +451,11 @@ function normalizeNextActions(task, fallbackLabel) {
 }
 
 function requiresTaskOverview(task) {
-  const queue = task && task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
-    ? task.feedback_revision_queue
-    : null;
-  const revisionQueue = Boolean(queue && String(queue.status || '') === 'running' && Array.isArray(queue.items) && queue.items.length > 0);
-  const scheduling = task && task.scheduling_contract && typeof task.scheduling_contract === 'object'
-    ? task.scheduling_contract
-    : null;
-  return revisionQueue || Boolean(scheduling && scheduling.task_form);
+  return taskOverviewPresentationRequired(task);
 }
 
 function taskOverviewStageLabel(task) {
-  if (!requiresTaskOverview(task)) return '';
+  if (!taskHasOverview(task)) return '';
   const queue = task && task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
     ? task.feedback_revision_queue
     : null;
@@ -490,7 +519,7 @@ function projectIdentityCandidateFields(root, task) {
 function titleFromTask(root, task, fallback) {
   const identity = shortProjectIdentity(root, task);
   const title = String((identity || {}).working_title || task.title || task.user_goal || ((task.lifecycle || {}).user_goal) || fallback || '继续当前任务').trim();
-  return requiresTaskOverview(task) && (identity || {}).working_title ? `整篇回炉《${title}》` : title;
+  return taskHasOverview(task) && (identity || {}).working_title ? `整篇回炉《${title}》` : title;
 }
 
 function stopReasonFromTask(task) {
@@ -881,7 +910,9 @@ function scanTaskFamilies(root, candidates, suppressedWorkflowIds) {
       action_resolution: actionResolutionMetadata(task),
       free_text_enabled: !task.pending_action || task.pending_action.free_text_enabled !== false,
       source: rel(root, file),
-      status: family.status || task.status || '',
+      // task.json is authoritative; family.status is a projection and may lag
+      // after an older client pauses or completes the head branch.
+      status: task.status || family.status || '',
       resume_hint: task.resume_hint || '/novel-assistant 继续',
       risk_level: task.risk_level || 'medium',
       action: 'resume_workflow_family',
@@ -1051,9 +1082,21 @@ function chapterGenerationAllowed(lifecycleStatus) {
 function isShortProjectContext(root, candidates) {
   if ((candidates || []).some(candidate => SHORT_WORKFLOW_TYPES.has(String(candidate.workflow_type || '')))) return true;
   const projectState = readJson(path.join(root, '追踪', 'private-short-extension', 'project-state.json'));
-  if (!projectState || projectState.__error) return false;
-  return SHORT_WORKFLOW_TYPES.has(String(projectState.workflow_type || ''))
-    || Boolean(projectState.project_id && projectState.selected_material);
+  if (projectState && !projectState.__error) {
+    const declaredShortProject = SHORT_WORKFLOW_TYPES.has(String(projectState.workflow_type || ''))
+      || Boolean(projectState.project_id && projectState.selected_material);
+    if (declaredShortProject) return true;
+  }
+  // 老项目兼容: 没有活跃任务也没有 project-state.json, 但有短篇创作资产
+  // (正文.md + 设定.md + 小节大纲.md 或 写作Brief_第N节.md)时, 识别为短篇项目,
+  // 避免误 fallback 到长篇生命周期检测并推荐"补全创作圣经"。
+  const hasShortProse = fs.existsSync(path.join(root, '正文.md'));
+  const hasShortSetting = fs.existsSync(path.join(root, '设定.md'));
+  const hasShortOutline = fs.existsSync(path.join(root, '小节大纲.md'));
+  const hasShortBrief = fs.existsSync(path.join(root, '追踪', 'private-short-extension', 'current-task.json'))
+    || fs.readdirSync(root).some((name) => /^写作Brief_第\d+节\.md$/.test(name));
+  if (hasShortProse && hasShortSetting && (hasShortOutline || hasShortBrief)) return true;
+  return false;
 }
 
 function deriveSmartNewTaskRecommendations(root, candidates, postCompletionRecommendations, lifecycleStatus) {
@@ -1062,7 +1105,7 @@ function deriveSmartNewTaskRecommendations(root, candidates, postCompletionRecom
   const lifecycleAction = lifecycleStatus && lifecycleStatus.recommended_actions
     ? lifecycleStatus.recommended_actions[0]
     : null;
-  if (lifecycleAction) {
+  if (lifecycleAction && !shortProjectContext) {
     addRecommendation(
       recommendations,
       lifecycleAction.label,
@@ -1085,8 +1128,9 @@ function deriveSmartNewTaskRecommendations(root, candidates, postCompletionRecom
   const foreshadowFile = path.join(root, '追踪', '伏笔.md');
   const reviewDir = path.join(root, '追踪', '审查报告');
   const deconstructionDir = path.join(root, '拆文库');
-  const hasProse = hasAnyMarkdownDeep(proseDir);
-  const hasOutline = hasAnyMarkdownDeep(outlineDir);
+  // 短篇用 正文.md 单文件, 长篇用 正文/ 目录; 两种都要识别
+  const hasProse = hasAnyMarkdownDeep(proseDir) || fs.existsSync(path.join(root, '正文.md'));
+  const hasOutline = hasAnyMarkdownDeep(outlineDir) || fs.existsSync(path.join(root, '小节大纲.md'));
   const hasForeshadow = fs.existsSync(foreshadowFile);
   const hasReviewReports = countMarkdownFiles(reviewDir) > 0;
   const hasDeconstruction = countChildDirs(deconstructionDir) > 0;

@@ -34,8 +34,12 @@ if (context.workflowTaskContext.authority_status) {
 }
 let memoryLoad = loadMemoryEntries(projectRoot);
 let loadedEntries = memoryLoad.entries;
-context.initialOmitted.push(...memoryLoad.omitted);
-const memoryDebts = classifyMemoryDebts(memoryLoad.debts, context);
+const revisionDebtFilter = quarantineControlledRevisionDebts(memoryLoad.debts, context.workflowTaskContext);
+const controlledDebtIds = new Set(revisionDebtFilter.omitted.map(item => item.id));
+context.initialOmitted.push(...memoryLoad.omitted.map(item => controlledDebtIds.has(item.id)
+  ? { ...item, reason: 'pending_controlled_reacceptance' }
+  : item));
+const memoryDebts = classifyMemoryDebts(revisionDebtFilter.debts, context);
 const blockingMemoryDebts = memoryDebts.filter(debt => debt.severity === 'blocking');
 if (blockingMemoryDebts.length > 0) {
   printJson(structuredResult({
@@ -499,7 +503,77 @@ function loadAcceptedFactEntries(root) {
       facts: [{ key: `${fact.subject}:${fact.predicate}`, value: fact.object }],
       };
     }).filter(Boolean);
-  return { entries, omitted, debts, index: indexState.index, indexSource: indexState.source };
+  const obsoleteDebtIds = new Set(debts
+    .filter(debt => obsoleteCanonicalRevisionDebt(root, debt))
+    .map(debt => debt.fact_id));
+  for (const item of omitted) {
+    if (obsoleteDebtIds.has(item.id)) item.reason = 'superseded_canonical_revision';
+  }
+  return {
+    entries,
+    omitted,
+    debts: debts.filter(debt => !obsoleteDebtIds.has(debt.fact_id)),
+    index: indexState.index,
+    indexSource: indexState.source,
+  };
+}
+
+function obsoleteCanonicalRevisionDebt(root, debt) {
+  if (!debt || debt.status !== 'hash_mismatch') return false;
+  const state = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
+  const accepted = Array.isArray(state.accepted_sections) ? state.accepted_sections : [];
+  const authority = new Map(accepted.map(item => [normalizePath((item || {}).canonical_path), item]));
+  const evidence = Array.isArray(((debt || {}).fact || {}).evidence) ? debt.fact.evidence : [];
+  const changed = (debt.findings || []).filter(item => item.status === 'hash_mismatch');
+  if (!changed.length) return false;
+  return changed.every(finding => {
+    const relative = normalizePath(finding.path);
+    const current = authority.get(relative);
+    const source = evidence.find(item => normalizePath((item || {}).path) === relative) || {};
+    if (!current || !relative || !String(source.source_commit_id || '') || !String(current.section_commit_id || '')) return false;
+    if (String(source.source_commit_id) === String(current.section_commit_id)) return false;
+    const file = path.join(root, relative);
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return false;
+    return normalizeDigest(current.sha256) === normalizeDigest(`sha256:${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`);
+  });
+}
+
+function quarantineControlledRevisionDebts(debts, workflowTaskContext) {
+  const queue = workflowTaskContext && workflowTaskContext.revision_queue;
+  if (!queue || String(queue.status || '') !== 'running' || String(queue.source_stage || '') !== 'full_story_assembly') {
+    return { debts: debts || [], omitted: [] };
+  }
+  const affected = new Set((Array.isArray(queue.affected_sections) ? queue.affected_sections : [])
+    .map(Number).filter(value => Number.isInteger(value) && value > 0));
+  const quarantined = [];
+  const remaining = [];
+  for (const debt of debts || []) {
+    const paths = (debt.findings || []).map(item => normalizePath((item || {}).path));
+    const controlled = paths.length > 0 && paths.every(relative => {
+      const match = /(?:^|\/)第0*(\d+)节\.md$/u.exec(relative);
+      return match && affected.has(Number(match[1]));
+    });
+    if (!controlled) {
+      remaining.push(debt);
+      continue;
+    }
+    quarantined.push({
+      id: debt.fact_id,
+      title: debt.title,
+      reason: 'pending_controlled_reacceptance',
+      evidence_path: debt.evidence_path,
+    });
+  }
+  return { debts: remaining, omitted: quarantined };
+}
+
+function normalizePath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\.\//, '').trim();
+}
+
+function normalizeDigest(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return text && !text.startsWith('sha256:') ? `sha256:${text}` : text;
 }
 
 function classifyMemoryDebts(debts, context) {
@@ -1116,6 +1190,7 @@ function loadWorkflowTaskContext(root, options = {}) {
     artifacts: [],
     lifecycle_context: currentTask.lifecycle_context || {},
     task_family_id: currentTask.task_family_id || '',
+    revision_queue: summarizeRevisionQueue(currentTask.feedback_revision_queue),
   };
 
   const rpdArtifact = readExplicitTaskArtifact(root, rpdRel, 'rpd', '任务需求与读者承诺', output.warnings);
@@ -1167,6 +1242,17 @@ function loadWorkflowTaskContext(root, options = {}) {
 
   output.loadedPaths = [...new Set(output.loadedPaths)];
   return output;
+}
+
+function summarizeRevisionQueue(queue) {
+  if (!queue || typeof queue !== 'object') return null;
+  return {
+    queue_id: String(queue.queue_id || ''),
+    source_stage: String(queue.source_stage || ''),
+    status: String(queue.status || ''),
+    affected_sections: Array.isArray(queue.affected_sections) ? queue.affected_sections.map(Number).filter(Number.isInteger) : [],
+    current_section_index: Number(queue.current_section_index || 0) || null,
+  };
 }
 
 function readExplicitTaskArtifact(root, relPath, kind, reason, warnings) {

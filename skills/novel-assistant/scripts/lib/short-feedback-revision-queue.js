@@ -150,6 +150,64 @@ function mergeStructureImpactIntoRevisionQueue(task, result) {
   return { status: previous ? 'feedback_revision_queue_expanded' : 'feedback_revision_queue_created', queue };
 }
 
+function initializeAssemblyIntegrityRevisionQueue(task = {}, findings = {}) {
+  if (!SHORT_WORKFLOWS.has(String(task.workflow_type || ''))) {
+    return { status: 'not_applicable', queue: task.feedback_revision_queue || null };
+  }
+  const missingSections = sectionList(findings.missing_sections);
+  const invalidSections = sectionList((Array.isArray(findings.invalid_sections) ? findings.invalid_sections : [])
+    .map(item => (item && typeof item === 'object' ? item.section_index : item)));
+  const affectedSections = sectionList([...missingSections, ...invalidSections]);
+  if (!affectedSections.length) return { status: 'not_applicable', queue: task.feedback_revision_queue || null };
+
+  const missing = new Set(missingSections);
+  const invalidReasons = new Map((Array.isArray(findings.invalid_sections) ? findings.invalid_sections : [])
+    .map(item => [Number((item || {}).section_index || 0), String((item || {}).reason || 'invalid_acceptance')]));
+  const now = new Date().toISOString();
+  const previous = task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
+    ? task.feedback_revision_queue
+    : null;
+  const items = affectedSections.map(sectionIndex => ({
+    section_index: sectionIndex,
+    status: 'pending',
+    brief_status: missing.has(sectionIndex) ? 'missing' : 'current',
+    prose_status: missing.has(sectionIndex) ? 'missing' : 'pending_recheck',
+    reason: missing.has(sectionIndex) ? 'missing_accepted_section' : invalidReasons.get(sectionIndex),
+    accepted_commit_id: '',
+    completed_at: '',
+  }));
+  const queue = {
+    schema_version: '1.0.0',
+    queue_id: `revision.assembly-integrity.${Date.now()}`,
+    source_stage: 'full_story_assembly',
+    status: 'running',
+    impact_level: 'canonical_integrity',
+    affected_sections: affectedSections,
+    current_section_index: affectedSections[0],
+    completed_sections: [],
+    groups: buildRevisionGroups(affectedSections),
+    items,
+    checkpoints: [{
+      event: 'assembly_integrity_queue_created',
+      section_index: affectedSections[0],
+      affected_sections: affectedSections,
+      missing_sections: missingSections,
+      invalid_sections: invalidSections,
+      previous_queue_id: String((previous || {}).queue_id || ''),
+      at: now,
+    }],
+    created_at: now,
+    updated_at: now,
+    completed_at: '',
+    revision_round: Number((previous || {}).revision_round || 0) + 1,
+    interruption: null,
+  };
+  syncRevisionGroupProgress(queue);
+  task.feedback_revision_queue = queue;
+  task.scope = `第${affectedSections[0]}节`;
+  return { status: 'assembly_integrity_revision_queue_created', queue };
+}
+
 function reconcileShortRevisionQueueWithTitleLock(projectRoot, task = {}) {
   if (!SHORT_WORKFLOWS.has(String(task.workflow_type || ''))) return { status: 'not_applicable', queue: null };
   const root = path.resolve(projectRoot || '');
@@ -185,6 +243,30 @@ function activeShortFeedbackRevision(task = {}) {
 function currentShortFeedbackRevisionSection(task = {}) {
   const queue = activeShortFeedbackRevision(task);
   return queue ? Number(queue.current_section_index) : 0;
+}
+
+function previewShortFeedbackRevisionAcceptance(task = {}, sectionIndex) {
+  const queue = activeShortFeedbackRevision(task);
+  if (!queue) return { status: 'not_applicable', remaining_sections: [], next_section: null, completed: false };
+  const section = Number(sectionIndex || 0);
+  if (section !== Number(queue.current_section_index || 0)) {
+    return {
+      status: 'blocked_feedback_revision_section_mismatch',
+      remaining_sections: [],
+      next_section: Number(queue.current_section_index || 0) || null,
+      completed: false,
+    };
+  }
+  const remaining = sectionList((Array.isArray(queue.items) ? queue.items : [])
+    .filter(item => Number((item || {}).section_index || 0) !== section
+      && String((item || {}).status || '') !== 'accepted')
+    .map(item => item.section_index));
+  return {
+    status: remaining.length ? 'feedback_revision_continues' : 'feedback_revision_completes',
+    remaining_sections: remaining,
+    next_section: remaining[0] || null,
+    completed: remaining.length === 0,
+  };
 }
 
 function acceptShortFeedbackRevisionSection(task = {}, sectionIndex, metadata = {}) {
@@ -251,7 +333,7 @@ function buildRevisionGroups(affectedSections, requestedGroups) {
       order: index + 1,
       section_indices: sections,
       goal: String((group || {}).goal || (group || {}).description || '').trim(),
-      completion_rule: String((group || {}).completion_rule || '组内小节逐节完成 Brief 重建、正文复检并采用').trim(),
+      completion_rule: String((group || {}).completion_rule || '组内小节按已确认方案逐节复检、修订并采用').trim(),
       status: 'pending',
       completed_sections: [],
       current_section_index: sections[0] || null,
@@ -266,7 +348,7 @@ function buildRevisionGroups(affectedSections, requestedGroups) {
     order: index + 1,
     section_indices: sections,
     goal: '',
-    completion_rule: '组内小节逐节完成 Brief 重建、正文复检并采用',
+    completion_rule: '组内小节按已确认方案逐节复检、修订并采用',
     status: 'pending',
     completed_sections: [],
     current_section_index: sections[0] || null,
@@ -328,8 +410,10 @@ function readJson(file) {
 
 module.exports = {
   initializeShortFeedbackRevisionQueue,
+  initializeAssemblyIntegrityRevisionQueue,
   activeShortFeedbackRevision,
   currentShortFeedbackRevisionSection,
+  previewShortFeedbackRevisionAcceptance,
   acceptShortFeedbackRevisionSection,
   reconcileShortRevisionQueueWithTitleLock,
   buildRevisionGroups,

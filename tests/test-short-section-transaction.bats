@@ -389,9 +389,11 @@ NODE
 const { classifyWorkflowApply } = require(process.argv[2]);
 const blocked = classifyWorkflowApply({ status: 0, stdout: '{"status":"blocked_stale_visible_choice"}' });
 if (blocked.applied || blocked.exitCode !== 0 || blocked.workflowStatus !== 'blocked_stale_visible_choice') throw new Error(JSON.stringify(blocked));
-const started = classifyWorkflowApply({ status: 0, stdout: JSON.stringify({ status:'stage_started', stage_execution:{ status:'running', stage_id:'next_stage' }, visible_response:{ selection_contract:'resume_running_stage' }, interaction_contract:'continue_confirmed_internal_stage' }) });
+const started = classifyWorkflowApply({ status: 0, stdout: JSON.stringify({ status:'stage_started', stage_execution:{ status:'running', stage_id:'next_stage', execution_command:'node next.js', context_read_command:'node context.js', stage_context_packet:{ huge:'x'.repeat(20000) }, memory_context:{ huge:'y'.repeat(20000) } }, visible_response:{ selection_contract:'resume_running_stage' }, interaction_contract:'continue_confirmed_internal_stage' }) });
 if (!started.applied || started.exitCode !== 0 || started.workflowStatus !== 'stage_started') throw new Error(JSON.stringify(started));
 if ((started.presentation.stage_execution||{}).stage_id !== 'next_stage') throw new Error(JSON.stringify(started.presentation));
+if ((started.presentation.stage_execution||{}).execution_command !== 'node next.js') throw new Error(JSON.stringify(started.presentation));
+if ('stage_context_packet' in started.presentation.stage_execution || 'memory_context' in started.presentation.stage_execution) throw new Error(JSON.stringify(started.presentation));
 if ((started.presentation.visible_response||{}).selection_contract !== 'resume_running_stage') throw new Error(JSON.stringify(started.presentation));
 const failed = classifyWorkflowApply({ status: 2, stdout: '', stderr: 'process failed' });
 if (failed.exitCode !== 2) throw new Error(JSON.stringify(failed));

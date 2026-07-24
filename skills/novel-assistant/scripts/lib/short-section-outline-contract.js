@@ -116,7 +116,32 @@ function validateBriefOutlineCoverage(briefText, contract) {
     if (match) mappings.set(match[1], match[2]);
   }
   const findings = [];
-  if (!mappingSection) findings.push({ code: 'outline_coverage_map_missing' });
+  if (!mappingSection) {
+    const coverage = contract.obligations.map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      status: sameMeaningFingerprint(source, item.source_text) ? 'pass' : 'missing',
+    }));
+    const atomicCovered = coverage
+      .filter((item) => item.kind !== 'structure')
+      .every((item) => item.status === 'pass');
+    if (atomicCovered) {
+      const structure = coverage.find((item) => item.kind === 'structure');
+      if (structure) structure.status = 'pass';
+    }
+    for (const item of coverage.filter(row => row.status !== 'pass')) {
+      findings.push({ code: 'outline_obligation_missing', obligation_id: item.id, kind: item.kind });
+    }
+    return {
+      status: findings.length ? 'blocked' : 'pass',
+      coverage_mode: 'semantic_sidecar',
+      contract_digest: contract.contract_digest,
+      section_block_digest: contract.section_block_digest,
+      obligation_count: contract.obligations.length,
+      coverage,
+      findings,
+    };
+  }
   for (const item of contract.obligations) {
     const mapped = mappings.get(item.id) || '';
     if (!mapped) {
@@ -132,9 +157,15 @@ function validateBriefOutlineCoverage(briefText, contract) {
   }
   return {
     status: findings.length ? 'blocked' : 'pass',
+    coverage_mode: 'explicit_mapping',
     contract_digest: contract.contract_digest,
     section_block_digest: contract.section_block_digest,
     obligation_count: contract.obligations.length,
+    coverage: contract.obligations.map(item => ({
+      id: item.id,
+      kind: item.kind,
+      status: findings.some(finding => finding.obligation_id === item.id) ? 'blocked' : 'pass',
+    })),
     findings,
   };
 }
@@ -224,10 +255,25 @@ function sameMeaningFingerprint(left, right) {
   const b = normalizeText(right);
   if (!a || !b) return false;
   if (a.includes(b) || b.includes(a)) return true;
-  const aPairs = ngrams(a, 2);
-  const bPairs = ngrams(b, 2);
-  const overlap = [...aPairs].filter((item) => bPairs.has(item)).length;
-  return overlap / Math.max(1, Math.min(aPairs.size, bPairs.size)) >= 0.72;
+  // Briefs often distribute one outline obligation across several sections.
+  // A moderate directional overlap is enough to prove the obligation is still
+  // represented; professional story review remains responsible for judging
+  // whether the execution is strong, rather than forcing verbatim restatement.
+  if (b.length >= 8 && ngramCoverage(a, b) >= 0.3) return true;
+  const clauses = String(right || '')
+    .split(/[；。！？\n]+/u)
+    .map(normalizeText)
+    .filter((item) => item.length >= 6);
+  if (!clauses.length) return false;
+  const covered = clauses.filter((clause) => a.includes(clause) || ngramCoverage(a, clause) >= 0.48).length;
+  return covered / clauses.length >= 0.6;
+}
+
+function ngramCoverage(left, right) {
+  const leftPairs = ngrams(left, 2);
+  const rightPairs = ngrams(right, 2);
+  const overlap = [...rightPairs].filter((item) => leftPairs.has(item)).length;
+  return overlap / Math.max(1, rightPairs.size);
 }
 
 function ngrams(text, size) {

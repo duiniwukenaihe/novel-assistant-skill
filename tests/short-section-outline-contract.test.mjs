@@ -56,6 +56,42 @@ test('Brief must preserve every confirmed outline obligation', () => {
   assert.ok(result.findings.some((item) => item.code === 'outline_obligation_changed' && item.obligation_id === 'P01'));
 });
 
+test('Brief may express outline obligations naturally while the machine mapping stays in a sidecar', () => {
+  const root = projectWithSection7();
+  const contract = buildShortSectionOutlineContract(root, 7);
+  const naturalBrief = [
+    '# 第7节写作提要',
+    ...contract.obligations.map((item) => `- ${item.source_text}`),
+    '这些动作按因果顺序推进，最终停在邮件抄送栏出现母亲名字的钩子上。',
+  ].join('\n');
+  const result = validateBriefOutlineCoverage(naturalBrief, contract);
+  assert.equal(result.status, 'pass');
+  assert.equal(result.coverage_mode, 'semantic_sidecar');
+  assert.equal(result.coverage.length, contract.obligations.length);
+});
+
+test('Brief may distribute one outline obligation across task beats and the ending hook', () => {
+  const root = projectWithSection7();
+  const contract = buildShortSectionOutlineContract(root, 7);
+  const naturalBrief = `# 第7节写作提要
+
+## 本节任务
+- 哥哥摊开的旧账本逼母亲解释父亲改标文件去了哪里。
+- 母亲拿出澄清声明和新委托书，我当面核对文件日期。
+- 日期迫使她承认父亲早就要求改标，我的表决权却一直被拿来证明全家支持哥哥。
+- 本节最终让母亲知情和表决权占用两条真相一起闭合。
+- 她拿员工去留和亲情逼我签字，我表面答应出席第二场直播，先把脱敏证据交给独立审查方。
+
+## 人物与代价
+- 这次选择会让我失去家庭保护和品牌职位，母女关系也从谈判变成我不再交出判断权。
+
+## 节尾钩子
+- 官方预告说我会还原事故真相，我却在另一台手机上设好了实名直播。`;
+  const result = validateBriefOutlineCoverage(naturalBrief, contract);
+  assert.equal(result.status, 'pass', JSON.stringify(result));
+  assert.equal(result.coverage_mode, 'semantic_sidecar');
+});
+
 test('story review quotes must exist in the candidate and cover all required obligations', () => {
   const root = projectWithSection7();
   const contract = buildShortSectionOutlineContract(root, 7);

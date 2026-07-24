@@ -69,6 +69,18 @@ if(first.family.task_family_id!==inventory.families[0].task_family_id) throw new
 NODE
 }
 
+@test "reprojecting a paused head never promotes it back to active" {
+    node - "$STORE" "$BOOK" <<'NODE'
+const [storeFile,root]=process.argv.slice(2);const store=require(storeFile);
+const task={workflow_id:'wf-short',workflow_type:'short_write',status:'paused',scope:'全篇',user_goal:'整篇回炉',lifecycle:{status:'paused'}};
+const first=store.ensureTaskFamily(root,task,{write:true});
+const second=store.ensureTaskFamily(root,task,{write:true});
+if(first.family.status!=='paused'||second.family.status!=='paused') throw new Error(JSON.stringify({first:first.family,second:second.family}));
+const head=second.family.branches.find(item=>item.workflow_id==='wf-short');
+if(!head||head.status!=='paused') throw new Error(JSON.stringify(second.family));
+NODE
+}
+
 @test "task family recognizes previous workflow lineage from older task records" {
     node - "$STORE" "$BOOK" <<'NODE'
 const [storeFile,root]=process.argv.slice(2);const store=require(storeFile);

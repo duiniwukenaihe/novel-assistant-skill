@@ -64,9 +64,14 @@ const SHORT_STAGE_CONTEXT_MEMORY = new Set([
   'section_accept_anchor',
   'feedback_impact_sync',
   'feedback_apply_patch',
+  'full_story_review',
 ]);
 const DETERMINISTIC_NO_MEMORY_STAGES = new Set([
   'section_machine_gate',
+  'full_story_assembly',
+  'short_deslop',
+  'deslop',
+  'final_check',
 ]);
 
 const NO_STORY_MEMORY_WORKFLOWS = new Set(['project_setup', 'setup_update']);
@@ -103,6 +108,7 @@ function memoryNeedsForStage(workflowType, stageDef) {
     'active_promises',
     'confirmed_style_rules',
     'confirmed_quality_rules',
+    'planning_constraints',
     'continuity_obligations',
     'canon_constraints',
     'user_preferences',
@@ -330,7 +336,7 @@ const BASE_TEMPLATES = {
     stage('draft_section', 'story-short-write', ['section_brief'], ['section_machine_gate'], true, 'high', '每次只写一个小节，完成后必须进入当前小节机器门，不得连续追加下一节。'),
     stage('section_machine_gate', 'story-short-write', ['current_section_draft'], ['section_repair_loop', 'story_value_gate'], false, 'medium', '运行当前小节机器门：字数/格式、AI 句式、工程词、破折号密度、退化/复读。blocking 未清零时只进入 section_repair_loop。'),
     stage('section_repair_loop', 'story-short-write', ['section_machine_gate'], ['section_machine_gate'], false, 'medium', '只修当前小节机器门 blocking，保留事实、人物、钩子和小节功能；修完回机器门复扫。'),
-    stage('story_value_gate', 'story-short-write', ['section_machine_gate'], ['feedback_impact_sync', 'section_brief', 'section_accept_anchor'], false, 'medium', '后台审查当前小节是否值得读：人物动机、现实因果、冲突升级、爽点/爆点、主角能动性、节尾钩子、大纲忠实度和本节功能完成。十一项判断与每个大纲 ID 都必须引用正文原句；空泛的「均通过」无效。通过后统一显示正文采用决策。'),
+    stage('story_value_gate', 'story-short-write', ['section_machine_gate'], ['feedback_impact_sync', 'section_brief', 'section_accept_anchor'], false, 'medium', '后台审查当前小节是否值得读：人物动机、现实因果、冲突升级、爽点/爆点、主角能动性、节尾钩子、大纲忠实度和本节功能完成。证据卡固定使用 checks、outline_coverage、summary、acceptance_metadata 四组字段；十一项判断与每个大纲 ID 都必须引用正文原句。若校验失败，按命令返回的 evidence_schema 修复，不猜字段、不改正文。通过后统一显示正文采用决策。'),
     stage('feedback_impact_sync', 'story-workflow', [], ['feedback_apply_patch'], false, 'medium', '只读分析用户反馈影响层级：表达层、当前 Brief、规划层或结构层；输出受影响文件、保留项、失效项、重算项、建议回写顺序，以及 revision_groups（每组目标、小节范围、完成条件），不直接修改正文或规划资产。影响两个及以上小节、跨节钩子、压力曲线或高潮/结尾职责时必须先回受影响范围的小节大纲，不得从 Brief 或正文补写开始；只展示 workflow 返回的作者选项，不发明命令。'),
     stage('feedback_apply_patch', 'story-short-write', ['feedback_impact_sync'], ['section_repair_loop', 'section_brief', 'short_setting', 'section_outline', 'section_plan_lock'], true, 'high', '按已确认的影响计划回写：表达层只修当前节；当前节故事调整先重建 Brief；人物动机、关键因果、反转、节奏或后续承接冲突先更新设定/小节大纲并使旧 Brief 失效；扩缩容、插节、合并、删节或重排先回计划锁定和结构影响审计。跨节回写必须继承 revision_groups，供作者查看阶段目标并逐节推进。'),
     stage('section_accept_anchor', 'story-short-write', ['story_value_gate'], ['next_section_brief', 'full_story_assembly'], true, 'medium', '采用当前小节为 canonical 正文，记录小节摘要、人物状态、承接钩子、质量门结果、当前节序号和剩余小节；未写锚点不得生成下一节。若总小节已完成，进入全篇组装。'),

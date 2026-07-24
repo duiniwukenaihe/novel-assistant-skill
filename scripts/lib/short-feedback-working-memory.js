@@ -16,7 +16,10 @@ function enqueueShortFeedback(projectRoot, task, input, options = {}) {
   let items = previous.items;
   const duplicate = items.find(item => item.content_hash === contentHash);
   if (!duplicate) {
-    const impact = inferFeedbackImpact(text, options.classification);
+    const impact = promoteFeedbackImpact(
+      inferFeedbackImpact(text, options.classification),
+      options.minimumImpactLevel,
+    );
     const item = {
       feedback_id: `feedback-${contentHash.slice(0, 16)}`,
       content_hash: contentHash,
@@ -26,6 +29,8 @@ function enqueueShortFeedback(projectRoot, task, input, options = {}) {
       affected_assets_hint: impact.affected_assets,
       section_index: positiveInteger(options.sectionIndex),
       scope_snapshot: String(options.scopeSnapshot || task.scope || ''),
+      scope_mode: String(options.scopeMode || ''),
+      base_requirement_version: String(options.baseRequirementVersion || ''),
       source_kind: String(options.sourceKind || 'user_message'),
       status: 'pending',
       received_at: now,
@@ -41,6 +46,16 @@ function enqueueShortFeedback(projectRoot, task, input, options = {}) {
   const pending = buildPendingFeedback(task, items, previous, options);
   task.pending_feedback = pending;
   return { status: duplicate ? 'duplicate_feedback_retained' : 'feedback_queued', pending_feedback: pending };
+}
+
+function promoteFeedbackImpact(impact, minimumImpactLevel) {
+  const order = ['expression_only', 'current_brief', 'planning', 'structure'];
+  const minimum = String(minimumImpactLevel || '');
+  if (!order.includes(minimum) || order.indexOf(impact.impact_level) >= order.indexOf(minimum)) return impact;
+  return {
+    impact_level: minimum,
+    affected_assets: minimum === 'current_brief' ? ['写作Brief', '正文'] : impact.affected_assets,
+  };
 }
 
 function discardShortFeedbackItem(projectRoot, task, feedbackId, options = {}) {

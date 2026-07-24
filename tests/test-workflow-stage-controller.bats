@@ -143,6 +143,20 @@ NODE
     if ! node -e 'const x=JSON.parse(process.argv[1]);if(x.next_stage!=="section_machine_gate"||x.recovery_count!==0)process.exit(1)' "$output"; then printf '%s\n' "$output" >&2; fi
     node -e 'const x=JSON.parse(process.argv[1]);if(x.next_stage!=="section_machine_gate"||x.recovery_count!==0)process.exit(1)' "$output"
 
+    # 阶段提交必须同步完整运行态，不能让 current_stage 已前进而
+    # stage_execution / unit_lifecycle 仍停在旧阶段。否则下一阶段会沿用旧 owner，
+    # 最终出现 result packet owner mismatch 和 completed + running 状态分叉。
+    local task_file
+    task_file=$(focused_task_file "$BOOK")
+    node - "$task_file" <<'NODE'
+const task = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+if (task.current_stage !== 'section_machine_gate') process.exit(1);
+if ((task.stage_execution || {}).status !== 'completed') process.exit(2);
+if ((task.stage_execution || {}).stage_id !== 'draft_next_section') process.exit(3);
+if ((task.unit_lifecycle || {}).current_stage !== 'section_machine_gate') process.exit(4);
+if ((task.unit_lifecycle || {}).status !== 'active') process.exit(5);
+NODE
+
     # 断言 2：单次推进只产生一次任务 journal transition（不得重复写）。
     local journal="$BOOK/追踪/workflow/tasks/wf-short-sixth/journal.jsonl"
     [ -f "$journal" ]
@@ -161,6 +175,109 @@ NODE
     run bash -c "find '$REPO/scripts' -maxdepth 1 -type f -name 'scan-*' -not -name 'scan-json-validate.js' -not -name 'scan-download-hints.js' -not -name 'scan-artifact-build.js' -print"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
+}
+
+@test "advanceStage closes terminal workflow state and task family atomically" {
+    materialize_fixture "$BOOK"
+
+    local task_file
+    task_file=$(focused_task_file "$BOOK")
+    REPO_DIR="$REPO" node - "$task_file" "$BOOK" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const taskFile = process.argv[2];
+const book = process.argv[3];
+const task = JSON.parse(fs.readFileSync(taskFile, 'utf8'));
+const { buildEffectiveTemplates } = require(path.join(process.env.REPO_DIR, 'scripts/lib/workflow-template-registry.js'));
+const { templates } = buildEffectiveTemplates(path.join(process.env.REPO_DIR, 'src/private-internal-skills'), false);
+const ordered = templates.short_write.stages.map((stage) => stage.stage_id);
+task.current_stage = 'final_check';
+task.current_step = 'final_check';
+task.machine.completed_stages = ordered.filter((stage) => stage !== 'final_check');
+task.machine.remaining_stages = ['final_check'];
+task.stage_execution = {
+  status: 'running',
+  stage_id: 'final_check',
+  step_id: 'final_check',
+  owner_module: 'private-short-extension',
+  expected_result_packet: '追踪/workflow/tasks/wf-short-sixth/result-packets/final_check.result.json'
+};
+task.unit_lifecycle = { status: 'active', current_stage: 'final_check', current_role: 'quality_gate', completed_roles: [] };
+fs.writeFileSync(taskFile, JSON.stringify(task, null, 2) + '\n');
+const packet = {
+  workflow_id: task.workflow_id,
+  workflow_type: task.workflow_type,
+  owner_module: 'private-short-extension',
+  stage_id: 'final_check',
+  step_id: 'final_check',
+  step_status: 'completed',
+  verification_result: 'pass',
+  changed_files: []
+};
+fs.writeFileSync(path.join(book, '追踪/workflow/tasks/wf-short-sixth/result-packets/final_check.result.json'), JSON.stringify(packet, null, 2) + '\n');
+NODE
+
+    run node "$CONTROLLER" advance \
+        --project-root "$BOOK" \
+        --workflow-id wf-short-sixth \
+        --result "$BOOK/追踪/workflow/tasks/wf-short-sixth/result-packets/final_check.result.json" \
+        --private-registry-root "$REPO/src/private-internal-skills" \
+        --json
+    [ "$status" -eq 0 ]
+    if ! node -e 'const x=JSON.parse(process.argv[1]);if(x.status!=="advanced"||x.next_action!=="workflow_completed")process.exit(1)' "$output"; then printf '%s\n' "$output" >&2; fi
+    node -e 'const x=JSON.parse(process.argv[1]);if(x.status!=="advanced"||x.next_action!=="workflow_completed")process.exit(1)' "$output"
+
+    node - "$task_file" <<'NODE'
+const task = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+if (task.status !== 'completed') process.exit(1);
+if ((task.lifecycle || {}).status !== 'completed') process.exit(2);
+if ((task.unit_lifecycle || {}).status !== 'completed') process.exit(3);
+if ((task.stage_execution || {}).status !== 'completed') process.exit(4);
+if ((task.stage_execution || {}).stage_id !== 'final_check') process.exit(5);
+if ((task.machine || {}).allowed_actions?.length) process.exit(6);
+NODE
+
+    local family_file
+    family_file=$(find "$BOOK/追踪/workflow/families" -name family.json -type f | head -1)
+    node - "$family_file" <<'NODE'
+const family = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+if (family.status !== 'completed') process.exit(1);
+const head = (family.branches || []).find((item) => item.workflow_id === family.head_workflow_id);
+if (!head || head.status !== 'completed') process.exit(2);
+NODE
+
+    # 旧版本若已留下 completed + running 分叉，reconcile-runtime 只在模板全部
+    # 阶段均有可信完成记录时清理投影，不要求宿主直接编辑 task.json。
+    node - "$task_file" "$family_file" <<'NODE'
+const fs = require('fs');
+const taskFile = process.argv[2];
+const familyFile = process.argv[3];
+const task = JSON.parse(fs.readFileSync(taskFile, 'utf8'));
+task.stage_execution.status = 'running';
+task.stage_execution.stage_id = 'scope_lock';
+task.unit_lifecycle.status = 'active';
+fs.writeFileSync(taskFile, JSON.stringify(task, null, 2) + '\n');
+const family = JSON.parse(fs.readFileSync(familyFile, 'utf8'));
+family.status = 'active';
+family.branches = family.branches.map((branch) => ({ ...branch, status: 'active' }));
+fs.writeFileSync(familyFile, JSON.stringify(family, null, 2) + '\n');
+NODE
+    run node "$SCRIPT" reconcile-runtime \
+        --project-root "$BOOK" \
+        --workflow-id wf-short-sixth \
+        --session-id test:terminal-reconcile \
+        --json
+    if [ "$status" -ne 0 ]; then printf '%s\n' "$output" >&2; fi
+    [ "$status" -eq 0 ]
+    node -e 'const x=JSON.parse(process.argv[1]);if(x.status!=="completed_runtime_reconciled")process.exit(1)' "$output"
+    node - "$task_file" "$family_file" <<'NODE'
+const fs = require('fs');
+const task = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const family = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+if ((task.stage_execution || {}).status !== 'completed') process.exit(1);
+if ((task.unit_lifecycle || {}).status !== 'completed') process.exit(2);
+if (family.status !== 'completed') process.exit(3);
+NODE
 }
 
 @test "advanceStage recovers once when state version is stale then succeeds" {

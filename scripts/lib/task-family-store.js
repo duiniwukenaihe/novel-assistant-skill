@@ -228,6 +228,10 @@ function ensureTaskFamily(projectRoot, task, options = {}) {
       || String(((task || {}).lifecycle || {}).focus_switched_from || '')
       || !['running', 'active'].includes(String(family.status || '').toLowerCase());
     if (shouldPromote) promoteHead(family, task.workflow_id);
+    // promoteHead only changes which branch is focused. The task snapshot remains
+    // authoritative for whether that branch is active, paused, or completed.
+    const projectedBranch = family.branches.find((item) => String(item.workflow_id) === String(task.workflow_id));
+    if (projectedBranch) projectedBranch.status = branchStatus(task);
     family.status = familyStatus(family);
     family.updated_at = now;
     const branch = family.branches.find((item) => String(item.workflow_id) === String(task.workflow_id));

@@ -66,6 +66,14 @@ jobs:
       - name: Build reproducible install artifact
         run: bash scripts/build-github-release-artifact.sh "$RELEASE_TAG" dist "$RELEASE_TAG"
 
+      - name: Remove superseded preview releases
+        if: env.RELEASE_TAG == 'v0.1.0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete v0.8.0 --cleanup-tag --yes || true
+          gh release delete v0.8.1 --cleanup-tag --yes || true
+
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

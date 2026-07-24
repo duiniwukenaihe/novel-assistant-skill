@@ -14,6 +14,7 @@ const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { commitAcceptedSection } = require('./lib/short-section-commit-store');
 const { appendIntegrationEvent } = require('./lib/integration-outbox');
 const { checkShortMemoryStage } = require('./lib/short-memory-stage-policy');
+const { previewShortFeedbackRevisionAcceptance } = require('./lib/short-feedback-revision-queue');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -68,7 +69,7 @@ function main() {
   }
   const cjkChars = currentSectionChars;
   const lengthPolicy = deriveSectionLengthPolicy({ projectState, sectionIndex, actual: cjkChars, sectionRole: metadata.section_role || 'normal', exceptionReason: metadata.exception_reason || '' });
-  if (lengthPolicy.blocking) return rerunMachineGate({ root, workflowId, receiptIssue: 'short_length_policy_requires_revision', lengthPolicy, args });
+  if (lengthPolicy.blocking) return rerunMachineGate({ root, workflowId, receiptIssue: 'short_length_value_missing', lengthPolicy, args });
 
   const titleLock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
   const outlineText = readText(path.join(root, '小节大纲.md'));
@@ -142,8 +143,19 @@ function main() {
   if (!progress.completed && !progress.next_section) {
     return finish({ status: 'short_section_plan_gap', section_index: sectionIndex, planned_sections: plan.count, missing_sections: progress.missing_sections, instruction: '已采用小节存在前置缺口；先补齐或明确跳过缺失小节，禁止生成计划外下一节。' }, 0, args.json);
   }
-  const allCompleted = progress.completed;
-  const remainingSections = progress.missing_sections;
+  const revisionProgress = previewShortFeedbackRevisionAcceptance(task, sectionIndex);
+  if (String(revisionProgress.status || '').startsWith('blocked_')) {
+    return finish({
+      status: revisionProgress.status,
+      section_index: sectionIndex,
+      expected_section: revisionProgress.next_section,
+      instruction: '当前采用小节与整篇回炉队列游标不一致；保持正文不变，先恢复队列当前小节。',
+    }, 0, args.json);
+  }
+  const revisionActive = revisionProgress.status !== 'not_applicable';
+  const allCompleted = revisionActive ? revisionProgress.completed : progress.completed;
+  const remainingSections = revisionActive ? revisionProgress.remaining_sections : progress.missing_sections;
+  const nextSection = revisionActive ? revisionProgress.next_section : progress.next_section;
   const anchor = {
     schema_version: '1.0.0', workflow_id: workflowId, project_id: String(projectState.project_id || ''),
     section_index: sectionIndex, section_title: confirmedSectionTitle.title, section_title_confirmed: confirmedSectionTitle.confirmed, status: 'accepted',
@@ -197,9 +209,9 @@ function main() {
       quality_status: 'machine_and_story_gates_passed',
     },
     current_section_index: sectionIndex, planned_sections: plan.count, remaining_sections: remainingSections, all_sections_completed: allCompleted,
-    checkpoint_state: { current_stage: 'section_accept_anchor', completed_range: `第${sectionIndex}节已采用`, remaining_range: allCompleted ? '全篇组装' : `第${progress.next_section}节 Brief`, resume_from: allCompleted ? 'full_story_assembly' : 'next_section_brief' },
-    next_stage_id: allCompleted ? 'full_story_assembly' : 'next_section_brief', next_recommendation: allCompleted ? '进入全篇组装。' : `自动生成第${progress.next_section}节 Brief，写正文前停靠。`,
-    handoff_summary: `第${sectionIndex}节已采用；机器门、故事门和篇幅门通过。`,
+    checkpoint_state: { current_stage: 'section_accept_anchor', completed_range: `第${sectionIndex}节已采用`, remaining_range: allCompleted ? '全篇组装' : `第${nextSection}节 Brief`, resume_from: allCompleted ? 'full_story_assembly' : 'next_section_brief' },
+    next_stage_id: allCompleted ? 'full_story_assembly' : 'next_section_brief', next_recommendation: allCompleted ? '进入全篇组装。' : `自动生成第${nextSection}节 Brief，写正文前停靠。`,
+    handoff_summary: `第${sectionIndex}节已采用；机器门和故事门通过${lengthPolicy.verdict === 'outside_story_band_deferred' ? '，篇幅偏差已记录并留待整篇收束' : ''}。`,
     memory_updates: [],
     memory_read_receipt_status: memoryGate.memory_status,
     memory_read_receipt: memoryGate.receipt,
@@ -295,7 +307,24 @@ function resolveConfirmedSectionTitle(root, sectionIndex, metadata) {
 function readStageResult(root, task, stageId, sectionIndex) {
   const packetDir = path.join(root, `${task.task_dir}/result-packets`);
   const unitFile = path.join(packetDir, `${stageId}.section-${String(sectionIndex).padStart(3, '0')}.result.json`);
-  return readJson(unitFile) || readJson(path.join(packetDir, `${stageId}.result.json`));
+  const unit = readJson(unitFile);
+  const generic = readJson(path.join(packetDir, `${stageId}.result.json`));
+  const candidates = [unit, generic].filter((packet) => packetMatchesSection(packet, sectionIndex));
+  if (!candidates.length) return unit || generic;
+  if (candidates.length === 1) return candidates[0];
+  const unitDigest = String((unit || {}).draft_digest || machineArtifactDigest(root, unit) || '');
+  const genericDigest = String((generic || {}).draft_digest || machineArtifactDigest(root, generic) || '');
+  if (unitDigest && unitDigest === genericDigest) {
+    const passing = candidates.find((packet) => gatePassed(packet, stageId === 'section_machine_gate' ? 'machine' : 'quality'));
+    if (passing) return passing;
+  }
+  return unit;
+}
+function packetMatchesSection(packet, sectionIndex) {
+  if (!packet) return false;
+  const explicit = Number(packet.current_section_index || ((packet.length_policy || {}).section_index) || 0);
+  if (explicit) return explicit === Number(sectionIndex);
+  return ((packet.outputs || []).map(String).some((item) => new RegExp(`(?:第0*${Number(sectionIndex)}节|section-0*${Number(sectionIndex)}(?:[.-]))`, 'u').test(item)));
 }
 function gatePassed(result, type) { if (!result || Array.isArray(result.blocking_findings) && result.blocking_findings.length) return false; const values = [result.verification_result, result.output_health_result, type === 'machine' ? result.machine_gate_result : result.story_value_result || result.quality_gate_result]; return values.some((value) => /^(pass|passed|accepted|approved|ok)$/i.test(String(value || ''))); }
 function gateStatus(result) { return result ? String(result.verification_result || result.machine_gate_result || result.story_value_result || result.quality_gate_result || 'unknown') : 'missing'; }

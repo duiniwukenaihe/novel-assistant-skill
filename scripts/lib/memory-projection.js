@@ -94,23 +94,28 @@ function appendAcceptedFactsUnlocked(root, payload, facts) {
   const now = new Date().toISOString();
   const events = [];
   const factIds = [];
+  const normalizedFacts = facts.map(input => normalizeFact(root, input, payload, commitId, now));
+  const incomingKeys = new Set(normalizedFacts.map(factKey));
+  const incomingEvidencePaths = new Set(normalizedFacts.flatMap(factEvidencePaths));
 
-  for (const input of facts) {
-    const fact = normalizeFact(root, input, payload, commitId, now);
+  for (const predecessor of active.slice()) {
+    const replacedSource = factEvidencePaths(predecessor).some(source => incomingEvidencePaths.has(source));
+    if (!replacedSource || incomingKeys.has(factKey(predecessor))) continue;
+    events.push(supersededFact(predecessor, commitId, now, commitId));
+    const index = active.indexOf(predecessor);
+    if (index >= 0) active.splice(index, 1);
+  }
+
+  for (const fact of normalizedFacts) {
     const sameKey = active.filter(item => factKey(item) === factKey(fact));
-    const unchanged = sameKey.find(item => stableFactValue(item) === stableFactValue(fact));
+    const unchanged = sameKey.find(item => stableFactValue(item) === stableFactValue(fact)
+      && stableFactEvidence(item) === stableFactEvidence(fact));
     if (unchanged) {
       factIds.push(unchanged.fact_id);
       continue;
     }
     for (const predecessor of sameKey) {
-      events.push({
-        ...predecessor,
-        status: 'superseded',
-        valid_to: commitId,
-        superseded_at: now,
-        superseded_by: fact.fact_id,
-      });
+      events.push(supersededFact(predecessor, commitId, now, fact.fact_id));
       const index = active.indexOf(predecessor);
       if (index >= 0) active.splice(index, 1);
     }
@@ -192,6 +197,31 @@ function factKey(fact) {
 
 function stableFactValue(fact) {
   return stableJson({ object: fact.object, aliases: normalizeStrings(fact.aliases).sort(), dependencies: normalizeStrings(fact.dependencies).sort() });
+}
+
+function stableFactEvidence(fact) {
+  return stableJson((Array.isArray((fact || {}).evidence) ? fact.evidence : []).map(item => ({
+    path: normalizeRelativePath((item || {}).path || ''),
+    hash: String((item || {}).hash || ''),
+    locator: String((item || {}).locator || ''),
+    source_commit_id: String((item || {}).source_commit_id || ''),
+  })).sort((a, b) => a.path.localeCompare(b.path) || a.locator.localeCompare(b.locator)));
+}
+
+function factEvidencePaths(fact) {
+  return Array.from(new Set((Array.isArray((fact || {}).evidence) ? fact.evidence : [])
+    .map(item => normalizeRelativePath((item || {}).path || ''))
+    .filter(Boolean)));
+}
+
+function supersededFact(predecessor, commitId, now, successorId) {
+  return {
+    ...predecessor,
+    status: 'superseded',
+    valid_to: commitId,
+    superseded_at: now,
+    superseded_by: successorId,
+  };
 }
 
 function stableJson(value) {

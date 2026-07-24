@@ -42,7 +42,7 @@ const task={current_stage:'draft_first_section',feedback_revision_queue:{status:
 const titles=[1,2,3,8,9].map(section_index=>({section_index,title:`标题${section_index}`}));
 const progress=buildShortRevisionQueueProgress(task,titles);
 if(!progress || progress.total!==5 || progress.completed!==0 || progress.remaining!==5) throw new Error(JSON.stringify(progress));
-for(const expected of ['已完成 0/5','第 1 节《标题1》：写作提要已通过，待写正文','第 2 节《标题2》：待重建写作提要并复检正文','当前节采用后，工作流自动进入下一项']) {
+for(const expected of ['已完成 0/5','第 1 节《标题1》：写作提要已通过，待写正文','第 2 节《标题2》：待回炉','当前节采用后，工作流自动进入下一项']) {
   if(!progress.text.includes(expected)) throw new Error(progress.text);
 }
 console.log('ok');
@@ -70,7 +70,7 @@ if(overview.preserved_sections.join(',')!=='6,7') throw new Error(JSON.stringify
 if(!overview.text.includes('全篇收束：重新合稿 → 全篇审阅 → 去 AI 味 → 终检')) throw new Error(overview.text);
 console.log('ok');
 NODE
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"ok"* ]]
 }
 
@@ -102,6 +102,36 @@ NODE
   [[ "$output" == *"ok"* ]]
 }
 
+@test "activation repairs a short revision task that incorrectly jumped to whole-story assembly" {
+  run node - "$SCRIPT" "$TMP_DIR/revision-route-book" <<'NODE'
+const cp=require('child_process'),fs=require('fs'),path=require('path');
+const script=process.argv[2],root=process.argv[3];
+let run=cp.spawnSync(process.execPath,[script,'create','--workflow-type','short_write','--project-root',root,'--user-goal','整篇回炉','--json'],{encoding:'utf8'});
+if(run.status!==0) throw new Error(run.stdout||run.stderr);
+const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
+const taskFile=path.join(root,pointer.task_dir,'task.json');
+const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+task.current_stage='full_story_assembly';task.current_step='full_story_assembly';task.scope='全篇';task.status='paused_after_step';
+task.stage_execution={status:'contract_blocked',stage_id:'full_story_assembly'};
+task.feedback_revision_queue={status:'running',current_section_index:2,affected_sections:[1,2,8,9],items:[
+  {section_index:1,status:'accepted',brief_status:'rebuilt_and_used',prose_status:'rechecked_and_accepted'},
+  {section_index:2,status:'pending',brief_status:'invalidated',prose_status:'pending_recheck'},
+  {section_index:8,status:'pending',brief_status:'invalidated',prose_status:'pending_recheck'},
+  {section_index:9,status:'pending',brief_status:'invalidated',prose_status:'pending_recheck'},
+]};
+fs.mkdirSync(path.join(root,'追踪/private-short-extension'),{recursive:true});
+fs.writeFileSync(path.join(root,'追踪/private-short-extension/project-state.json'),JSON.stringify({accepted_sections:[1,2,3,4,5,6,7,8,9].map(section_index=>({section_index}))},null,2)+'\n');
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+run=cp.spawnSync(process.execPath,[script,'activate','--workflow-id',task.workflow_id,'--project-root',root,'--json'],{encoding:'utf8'});
+if(run.status!==0) throw new Error(run.stdout||run.stderr);
+const out=JSON.parse(run.stdout);
+if(out.task.current_stage!=='next_section_brief'||out.task.scope!=='第2节'||out.task.stage_execution!==null) throw new Error(run.stdout);
+const saved=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+if(saved.current_stage!=='next_section_brief'||saved.short_project_resume.reason!=='active_feedback_revision_queue_has_priority') throw new Error(JSON.stringify(saved));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 @test "next-candidates and resolve-action share the grouped queue menu" {
   run node - "$SCRIPT" "$TMP_DIR/queue-book" <<'NODE'
 const cp=require('child_process'),fs=require('fs'),path=require('path');
@@ -114,20 +144,67 @@ const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
 task.scope='第1节';task.current_stage='draft_section';task.current_step='draft_section';
 task.feedback_revision_queue={status:'running',current_section_index:1,items:[1,2,5].map(section_index=>({section_index,status:'pending',brief_status:'invalidated',prose_status:'pending_recheck'}))};
 task.pending_action={id:'pa-draft',question:'第1节写作提要已通过',options:[{number:1,action_id:'continue_next_stage',label:'开始写第1节正文',target_stage:'draft_section'},{number:2,action_id:'pause',label:'暂停'}],free_text_enabled:true};
+fs.writeFileSync(path.join(root,'写作Brief_第001节.md'),'# 写作 Brief：第001节《测试标题》\n\n## 承接\n\n- 接住上节钩子。\n\n## 目标与阻力\n\n- 主角要拿到账本，但家人阻拦。\n\n## 因果动作\n\n- 主角拒绝签字，随后失去权限。\n\n## 人物与视角锁\n\n- 第一人称，不越过主角认知。\n\n## 禁写项\n\n- 不提前揭示终局。\n\n## 节尾钩子\n\n- 账本日期对不上。\n');
 fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
 const next=cp.spawnSync(process.execPath,[script,'next-candidates','--project-root',root,'--json'],{encoding:'utf8'});
 if(next.status!==0) throw new Error(next.stdout||next.stderr);
 const menu=JSON.parse(next.stdout);
 if(!menu.visible_response.work_queue || menu.visible_response.options[0].action_id!=='recheck_existing_section' || menu.visible_response.options[0].target_stage!=='section_machine_gate' || menu.visible_response.options[1].action_id!=='request_revision_input') throw new Error(next.stdout);
+if(!String(menu.visible_response.options[0].execution_command||'').includes('--bind-current')) throw new Error(next.stdout);
+if(String(menu.visible_response.options[0].execution_command||'').includes('--visible-choice-hash')) throw new Error(next.stdout);
 const pending=menu.pending_action;
-const resolve=cp.spawnSync(process.execPath,[script,'resolve-action','--project-root',root,'--input','2','--pending-action-id',pending.pending_action_id,'--visible-choice-hash',pending.visible_choice_hash,'--state-version',String(pending.state_version),'--book-root','.', '--json'],{encoding:'utf8'});
+const resolve=cp.spawnSync(process.execPath,[script,'resolve-action','--project-root',root,'--input','2','--bind-current','--json'],{encoding:'utf8'});
 if(resolve.status!==0) throw new Error(resolve.stdout||resolve.stderr);
 const result=JSON.parse(resolve.stdout);
 if(result.status!=='revision_input_requested') throw new Error(resolve.stdout);
+if(result.revision_scope!=='current_section_only'||result.section_index!==1) throw new Error(resolve.stdout);
+if(!String((result.visible_response||{}).text||'').includes('第 1 节当前回炉要求')) throw new Error(resolve.stdout);
+if(!String((result.visible_response||{}).text||'').includes('主角要拿到账本')) throw new Error(resolve.stdout);
+const feedback=cp.spawnSync(process.execPath,[script,'resolve-action','--project-root',root,'--input','母亲的语气再克制一些','--json'],{encoding:'utf8'});
+if(feedback.status!==0) throw new Error(feedback.stdout||feedback.stderr);
+const saved=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const item=(((saved.pending_feedback||{}).items)||[])[0]||{};
+if(item.section_index!==1||item.scope_mode!=='current_section_only'||item.impact_level_hint!=='current_brief') throw new Error(JSON.stringify(saved.pending_feedback));
 console.log('ok');
 NODE
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"ok"* ]]
+}
+
+@test "short revision brief menu presents the user task instead of the internal brief step" {
+  run node - "$SCRIPT" "$TMP_DIR/revision-brief-menu" <<'NODE'
+const cp=require('child_process'),fs=require('fs'),path=require('path');
+const script=process.argv[2],root=process.argv[3];
+let run=cp.spawnSync(process.execPath,[script,'create','--workflow-type','short_write','--project-root',root,'--user-goal','整篇回炉','--json'],{encoding:'utf8'});
+if(run.status!==0) throw new Error(run.stdout||run.stderr);
+const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
+const file=path.join(root,pointer.task_dir,'task.json');
+const task=JSON.parse(fs.readFileSync(file,'utf8'));
+task.current_stage='next_section_brief';task.current_step='next_section_brief';task.scope='第2节';
+task.feedback_revision_queue={status:'running',current_section_index:2,items:[{section_index:1,status:'accepted'},{section_index:2,status:'pending',brief_status:'invalidated',prose_status:'pending_recheck'}]};
+task.pending_action={id:'pa-next-section-brief',question:'请选择下一步',options:[{number:1,action_id:'continue_next_stage',label:'继续生成下一节写作 Brief',target_stage:'next_section_brief'},{number:2,action_id:'pause',label:'暂停'}],free_text_enabled:true};
+fs.mkdirSync(path.join(root,'追踪/private-short-extension'),{recursive:true});
+fs.writeFileSync(path.join(root,'追踪/private-short-extension/project-state.json'),JSON.stringify({accepted_sections:[{section_index:1}]})+'\n');
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+run=cp.spawnSync(process.execPath,[script,'next-candidates','--project-root',root,'--json'],{encoding:'utf8'});
+if(run.status!==0) throw new Error(run.stdout||run.stderr);
+const out=JSON.parse(run.stdout);
+if(out.visible_response.options[0].label!=='准备并回炉第 2 节（推荐）') throw new Error(run.stdout);
+if(out.visible_response.options[1].label!=='调整第 2 节的回炉要求') throw new Error(run.stdout);
+if(out.pending_action.question!=='第 2 节待准备并回炉') throw new Error(run.stdout);
+const pending=out.pending_action;
+run=cp.spawnSync(process.execPath,[script,'resolve-action','--project-root',root,'--input','1','--pending-action-id',pending.pending_action_id,'--visible-choice-hash',pending.visible_choice_hash,'--state-version',String(pending.state_version),'--book-root','.', '--json'],{encoding:'utf8'});
+if(run.status!==0) throw new Error(run.stdout||run.stderr);
+const started=JSON.parse(run.stdout);
+if(!String(started.stage_execution.expected_result_packet||'').endsWith('next_section_brief.section-002.result.json')) throw new Error(run.stdout);
+run=cp.spawnSync(process.execPath,[script,'reconcile-runtime','--project-root',root,'--workflow-id',task.workflow_id,'--session-id','test:revision','--takeover','--confirm','--json'],{encoding:'utf8'});
+if(run.status!==0) throw new Error(run.stdout||run.stderr);
+const reconciled=JSON.parse(run.stdout);
+if(reconciled.current_stage!=='next_section_brief') throw new Error(run.stdout);
+const current=JSON.parse(fs.readFileSync(file,'utf8'));
+if(current.current_stage!=='next_section_brief'||current.scope!=='第2节'||!String(current.stage_execution.expected_result_packet||'').endsWith('next_section_brief.section-002.result.json')) throw new Error(JSON.stringify(current));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
 @test "activating a whole-story revision opens task overview without starting its section" {
@@ -2679,6 +2756,28 @@ if(out.refreshed_menu) throw new Error('resolved menu must not be reopened');
 NODE
 }
 
+@test "next-candidates silently resumes a running stage without an active menu" {
+    mkdir -p "$TMP_DIR/book"
+    printf '# 设定\n' > "$TMP_DIR/book/设定.md"
+    printf '# 小节大纲\n' > "$TMP_DIR/book/小节大纲.md"
+    printf '# 正文\n' > "$TMP_DIR/book/正文.md"
+    node "$SCRIPT" create --workflow-type short_write --project-root "$TMP_DIR/book" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
+    local task_file
+    task_file="$(focused_task_file "$TMP_DIR/book")"
+    node - "$task_file" <<'NODE'
+const fs=require('fs');const file=process.argv[2];const task=JSON.parse(fs.readFileSync(file,'utf8'));
+task.pending_action=null;
+task.status='running';
+task.stage_execution={status:'running',stage_id:task.current_stage,execution_command:'node scripts/test-stage.js --json'};
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+    run node "$SCRIPT" next-candidates --project-root "$TMP_DIR/book" --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'stage_execution_resume_ready'* ]]
+    [[ "$output" == *'silent_resume'* ]]
+    [[ "$output" != *'回复 1/2/3/4'* ]]
+}
+
 @test "running stage menu keeps inspect pause and free text distinct from resume" {
     mkdir -p "$TMP_DIR/book"
     printf '# 设定\n' > "$TMP_DIR/book/设定.md"
@@ -2900,7 +2999,7 @@ const task = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 if (out.current_stage !== 'section_accept_anchor') throw new Error(`single candidate must skip comparison, got ${out.current_stage}`);
 const labels = (task.pending_action.options || []).map((item) => item.label);
 if (labels.length !== 4) throw new Error(JSON.stringify(labels));
-for (const expected of ['采用；自动提交本节并生成下一节 Brief（推荐）', '提交修改意见；回炉当前节', '生成另一份候选稿再对比', '暂停并保存断点']) {
+for (const expected of ['采用；自动提交本节并生成下一节 Brief（推荐）', '修改第 1 节；完成后继续后续任务', '查看本轮修订队列与依据', '暂停并保存断点']) {
   if (!labels.includes(expected)) throw new Error(`missing ${expected}: ${JSON.stringify(labels)}`);
 }
 const recommended = (task.pending_action.options || []).filter((item) => item.recommended === true);
@@ -4348,6 +4447,25 @@ if(raw.length>12000) throw new Error(`compact activation too large: ${raw.length
 for(const forbidden of ['runtime_guard','task_family','result_packets','history','journal']) {
   if(Object.prototype.hasOwnProperty.call(out.task,forbidden)) throw new Error(raw);
 }
+
+NODE
+}
+
+@test "short review starts with one deterministic context and advance command" {
+    mkdir -p "$TMP_DIR/book"
+    node "$SCRIPT" create --workflow-type short_review --project-root "$TMP_DIR/book" --user-goal "验收短篇" --json > "$TMP_DIR/create.json"
+    workflow_id="$(node -e 'console.log(require(process.argv[1]).task.workflow_id)' "$TMP_DIR/create.json")"
+
+    node "$SCRIPT" resolve-action --project-root "$TMP_DIR/book" --input 1 --bind-current --json > "$TMP_DIR/start.json"
+
+    node - "$TMP_DIR/start.json" <<'NODE'
+const out=JSON.parse(require('fs').readFileSync(process.argv[2],'utf8'));
+const execution=out.stage_execution || (out.task||{}).stage_execution || {};
+if(execution.stage_id!=='scope_lock') throw new Error(JSON.stringify(out));
+if(!String(execution.context_read_command||'').includes('workflow-stage-context.js read-current')) throw new Error(JSON.stringify(execution));
+if(!String(execution.execution_command||'').includes('workflow-stage-controller.js advance')) throw new Error(JSON.stringify(execution));
+if(!String(execution.execution_command||'').includes('--result')) throw new Error(JSON.stringify(execution));
+if(!String(execution.resume_hint||'').includes('不猜脚本参数')) throw new Error(JSON.stringify(execution));
 NODE
 }
 

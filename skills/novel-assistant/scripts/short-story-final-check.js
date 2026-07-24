@@ -39,6 +39,7 @@ function main() {
   const editorialProof = editorial.short_full_story_review || {};
   const preservation = deslop.preservation_result || {};
   const actualHash = hashText(text);
+  const lengthAdvisories = collectLengthAdvisories(root);
   const findings = [];
   if (plan.status !== 'locked') findings.push({ code: 'planned_sections_not_locked', message: '全篇小节数尚未锁定。' });
   if (headings.length !== expected.length || headings.some((value, index) => value !== expected[index])) findings.push({ code: 'section_sequence_mismatch', expected, actual: headings });
@@ -54,7 +55,13 @@ function main() {
     workflow_id: workflowId, workflow_type: String(task.workflow_type || 'short_write'), stage_id: 'final_check', step_id: 'final_check',
     owner_module: String(execution.owner_module || task.workflow_owner || ''), step_status: 'completed', scope: '全篇', outputs: ['正文.md'], changed_files: [], created_files: [],
     evidence: [{ planned_sections: plan.count, assembled_sections: headings.length, canonical_sha256: actualHash, editorial_review_sha256: String(editorialProof.story_sha256 || ''), deslop_preservation_status: String(preservation.status || ''), before_deslop_cjk_chars: Number(preservation.before_cjk_chars || 0), after_deslop_cjk_chars: Number(preservation.after_cjk_chars || 0) }], verification_result: 'pass', blocking_findings: [], output_health_result: 'pass',
-    checkpoint_state: { current_stage: 'final_check', completed_range: '短篇全流程完成', remaining_range: '', resume_from: '' }, next_stage_id: '', next_recommendation: '短篇已完成，可导出或开启新的修改任务。', handoff_summary: `最终检查通过：${plan.count} 节完整，正式稿与去 AI 回执一致。`, memory_updates: [], result_packet_path: packetRel,
+    quality_debts: lengthAdvisories,
+    checkpoint_state: { current_stage: 'final_check', completed_range: '短篇全流程完成', remaining_range: '', resume_from: '' }, next_stage_id: '',
+    next_recommendation: lengthAdvisories.length
+      ? `短篇已完成；另有 ${lengthAdvisories.length} 节篇幅提醒，可选择统一处理或保留后再导出。`
+      : '短篇已完成，可导出或开启新的修改任务。',
+    handoff_summary: `最终检查通过：${plan.count} 节完整，正式稿与去 AI 回执一致。${lengthAdvisories.length ? ` 已汇总 ${lengthAdvisories.length} 节篇幅提醒，不影响完成状态。` : ''}`,
+    memory_updates: [], result_packet_path: packetRel,
   });
   const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(run);
@@ -88,6 +95,25 @@ function main() {
 }
 
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file !== root && file.startsWith(`${root}${path.sep}`) ? file : ''; }
+function collectLengthAdvisories(root) {
+  const dir = path.join(root, '追踪', 'private-short-extension');
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (_) { return []; }
+  return names
+    .filter((name) => /^section-\d{3}-anchor\.json$/.test(name))
+    .map((name) => readJson(path.join(dir, name)))
+    .filter(Boolean)
+    .map((anchor) => ({ section_index: Number(anchor.section_index || 0), length_policy: (((anchor || {}).quality_result || {}).length_policy || {}) }))
+    .filter((item) => item.length_policy.verdict === 'outside_story_band_deferred')
+    .map((item) => ({
+      debt_type: 'section_length_variance',
+      severity: 'advisory',
+      scope: `第${item.section_index}节`,
+      observed_chars: Number(item.length_policy.observed_chars || 0),
+      baseline_chars: Number(item.length_policy.baseline_chars || 0),
+      recommended_fix: '结合本节剧情功能选择补写、压缩或保留；不要按字数差额机械灌水。',
+    }));
+}
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
 function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch (_) { return ''; } }

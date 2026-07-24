@@ -146,7 +146,7 @@ function memoryNeedsFor(workflowType) {
   if (/(?:analyze|review|deslop)/u.test(String(workflowType || ''))) {
     return ['accepted_facts', 'review_dependencies', 'confirmed_quality_rules', 'user_preferences'];
   }
-  return ['accepted_facts', 'active_cast', 'active_promises', 'confirmed_style_rules', 'confirmed_quality_rules', 'continuity_obligations', 'canon_constraints', 'user_preferences'];
+  return ['accepted_facts', 'active_cast', 'active_promises', 'confirmed_style_rules', 'confirmed_quality_rules', 'planning_constraints', 'continuity_obligations', 'canon_constraints', 'user_preferences'];
 }
 
 function normalizeDigest(value) {

@@ -9,7 +9,9 @@ const POLICIES = Object.freeze({
   // converged on the canonical short_write workflow identity.
   private_short_startup: required(3600, true),
   review_repair: required(4200, true),
-  short_review: required(3600, true),
+  // 只读审阅以 canonical 正文/设定/大纲为事实源。旧记忆失效时应隔离并提示，
+  // 不能阻止审阅，也不能诱导宿主反复迁移记忆；修复写回阶段再使用 required。
+  short_review: optional(2400, true),
   long_analyze: required(3200, true),
   short_analyze: required(2800, true),
   deslop: required(3000, true),

@@ -10,6 +10,8 @@ const DEFAULT_REMOVE_PATHS = [
   'skills/novel-assistant/references/private-internal-skills',
   '.superpowers',
   'docs/superpowers',
+  'docs/public-release',
+  'docs/releases',
   'reports/upstream',
   'benchmarks',
   'demo',
@@ -104,7 +106,8 @@ function sanitizeText(text) {
     .replace(/private-short-extension/g, 'private-short-extension')
     .replace(/private-download-extension/g, 'private-download-extension')
     .replace(/private short-form extension/g, 'private short-form extension')
-    .replace(/private-short-extension/g, 'private-short-extension');
+    .replace(/private-short-extension/g, 'private-short-extension')
+    .replace(/^- \[v0\.(?:8|9)[^\n]*\n/gm, '');
 }
 
 function sanitizeTextFile(repoRoot, rel, write) {
@@ -123,12 +126,25 @@ function sanitizeTextFile(repoRoot, rel, write) {
   return true;
 }
 
+function applyPublicChangelog(repoRoot, write) {
+  const template = path.join(repoRoot, 'docs/public-release/CHANGELOG.md');
+  const target = path.join(repoRoot, 'CHANGELOG.md');
+  if (!exists(template)) return false;
+  const next = fs.readFileSync(template, 'utf8');
+  const current = exists(target) ? fs.readFileSync(target, 'utf8') : '';
+  if (next === current) return false;
+  if (write) fs.writeFileSync(target, next);
+  return true;
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const repoRoot = args.repoRoot;
   const removed = [];
   const rewritten = [];
   const kept = [];
+
+  if (applyPublicChangelog(repoRoot, args.write)) rewritten.push('CHANGELOG.md');
 
   for (const rel of DEFAULT_REMOVE_PATHS) {
     if (removePath(path.join(repoRoot, rel), args.write)) {

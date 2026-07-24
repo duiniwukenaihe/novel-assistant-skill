@@ -73,6 +73,8 @@ const {
 const { buildStageContextPacket } = require('./lib/workflow-stage-context-packet');
 const { buildShortSectionOutlineContract } = require('./lib/short-section-outline-contract');
 const { buildLongStageContextPacket } = require('./lib/long-stage-context-packet');
+const { markTaskOverviewPresented } = require('./lib/workflow-task-overview-state');
+const { buildShortRevisionRequirementView } = require('./lib/short-revision-requirement-view');
 const {
   buildInitialReviewPlan,
   buildReviewAdvanceSummary,
@@ -154,6 +156,10 @@ const SHORT_EXECUTABLE_STAGE_CONTRACTS = new Set([
   'short_deslop', 'deslop', 'final_check',
 ]);
 const LONG_EXECUTABLE_STAGE_CONTRACTS = new Set(['chapter_brief', 'brief_review', 'prose', 'prose_acceptance', 'chapter_commit']);
+const SHORT_REVIEW_EXECUTABLE_STAGE_CONTRACTS = new Set([
+  'scope_lock', 'plan_contract', 'review_plan', 'review_execute',
+  'continuity_synthesis', 'review_report', 'repair_handoff', 'closure',
+]);
 const USAGE = `Usage: node scripts/workflow-state-machine.js <${PUBLIC_COMMANDS.join('|')}> [options]
 
 Commands:
@@ -161,7 +167,7 @@ Commands:
   create --workflow-type <type> --project-root <book-dir> [--scope <scope>] [--user-goal <goal>] [--host-context-chars <chars>] [--runtime-context-chars <chars>] [--private-registry-root <dir>] --json
   inspect --project-root <book-dir> [--private-registry-root <dir>] --json
   task-overview --project-root <book-dir> [--private-registry-root <dir>] --json
-  resolve-action --project-root <book-dir> --input <number-or-text> [--pending-action-id <id> --visible-choice-hash <hash> --state-version <version> --book-root <book-dir>] [--private-registry-root <dir>] --json
+  resolve-action --project-root <book-dir> --input <number-or-text> [--bind-current | --pending-action-id <id> --visible-choice-hash <hash> --state-version <version> --book-root <book-dir>] [--private-registry-root <dir>] --json
   apply-result --project-root <book-dir> --workflow-id <id> --result <file> [--private-registry-root <dir>] --json
   next-candidates --project-root <book-dir> [--private-registry-root <dir>] --json
   switch-intent --workflow-type <type> --project-root <book-dir> [--scope <scope>] [--user-goal <goal>] [--reason <reason>] [--private-registry-root <dir>] --json
@@ -198,7 +204,7 @@ function parseArgs(argv) {
   const rawCommand = argv[2] || '';
   const implicitCommand = !rawCommand || rawCommand.startsWith('--');
   const command = implicitCommand ? 'next-candidates' : rawCommand;
-  const args = { command, json: false, compact: false, write: false, projectRoot: '', workflowId: '', migrationSource: '', confirmMigration: false, takeover: false, sessionId: '', workflowType: '', scope: '', userGoal: '', reason: '', input: '', result: '', feedbackId: '', planId: '', hostContextChars: '', runtimeContextChars: '', privateRegistryRoot: '', noPrivateRegistry: false, pendingActionId: '', visibleChoiceHash: '', stateVersion: '', bookRoot: '' };
+  const args = { command, json: false, compact: false, write: false, bindCurrent: false, projectRoot: '', workflowId: '', migrationSource: '', confirmMigration: false, takeover: false, sessionId: '', workflowType: '', scope: '', userGoal: '', reason: '', input: '', result: '', feedbackId: '', planId: '', hostContextChars: '', runtimeContextChars: '', privateRegistryRoot: '', noPrivateRegistry: false, pendingActionId: '', visibleChoiceHash: '', stateVersion: '', bookRoot: '' };
   for (let i = implicitCommand ? 2 : 3; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--json') args.json = true;
@@ -218,6 +224,7 @@ function parseArgs(argv) {
     else if (arg === '--pending-action-id') args.pendingActionId = argv[++i] || '';
     else if (arg === '--visible-choice-hash') args.visibleChoiceHash = argv[++i] || '';
     else if (arg === '--state-version') args.stateVersion = argv[++i] || '';
+    else if (arg === '--bind-current') args.bindCurrent = true;
     else if (arg === '--book-root') args.bookRoot = argv[++i] || '';
     else if (arg === '--result') args.result = argv[++i] || '';
     else if (arg === '--feedback-id') args.feedbackId = argv[++i] || '';
@@ -1096,6 +1103,16 @@ function activateTask(args) {
     state_version: Number(target.state_version || 0) + 1,
     updated_at: now,
   };
+  const activatedTemplate = templates()[activated.workflow_type];
+  const shortProjectResume = reconcileShortProjectProgress(root, activated, activatedTemplate);
+  if (shortProjectResume.blocked) {
+    return blocked(shortProjectResume.status, shortProjectResume.findings || shortProjectResume.reason || '短篇规划状态不一致。');
+  }
+  if (shortProjectResume.applied) {
+    const resumedStage = findStage(activatedTemplate, activated.current_stage);
+    activated.stage_execution = null;
+    activated.pending_action = buildPendingAction(activatedTemplate, resumedStage);
+  }
   const overviewBeforeActivation = workflowTaskOverview(activated, root);
   if (!overviewBeforeActivation && activated.stage_execution && activated.stage_execution.status === 'paused' && activated.stage_execution.stop_reason === 'focus_switched') {
     activated.stage_execution = { ...activated.stage_execution, status: 'running', resumed_at: now };
@@ -1705,6 +1722,8 @@ function taskOverview(args) {
       execution_command: 'node scripts/workflow-state-machine.js next-candidates --project-root . --json',
     };
   }
+  markTaskOverviewPresented(task);
+  writeTaskState(root, task, { writeMarkdown: false });
   const overviewData = omitVisibleResponse(overview);
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -1735,6 +1754,65 @@ function reconcileRuntime(args) {
   }
   const tpl = templates()[task.workflow_type];
   const projectRootRebound = rebindTaskToCurrentProjectRoot(task);
+  const terminalStatus = ['completed', 'completed_verified', 'done', 'closed'].includes(String(task.status || '').toLowerCase());
+  if (tpl && terminalStatus) {
+    const orderedStages = tpl.stages.map((item) => String(item.stage_id || '')).filter(Boolean);
+    const completedStages = new Set(Array.isArray((task.machine || {}).completed_stages)
+      ? task.machine.completed_stages.map(String)
+      : []);
+    const terminalComplete = orderedStages.length > 0 && orderedStages.every((stageId) => completedStages.has(stageId));
+    if (!terminalComplete) {
+      return blocked('blocked_completed_workflow_incomplete', '任务被标记为已完成，但仍有阶段没有可信完成回执；不能自动收束。');
+    }
+    const nowText = new Date().toISOString();
+    task.lifecycle = { ...(task.lifecycle || {}), status: 'completed', updated_at: nowText, completed_at: String(((task.lifecycle || {}).completed_at) || nowText) };
+    task.unit_lifecycle = {
+      ...(task.unit_lifecycle || {}),
+      status: 'completed',
+      updated_at: nowText,
+      current_stage: String(task.current_stage || orderedStages[orderedStages.length - 1]),
+      current_role: 'handoff_and_next',
+    };
+    task.stage_execution = {
+      ...(task.stage_execution || {}),
+      status: 'completed',
+      stage_id: String(task.current_stage || orderedStages[orderedStages.length - 1]),
+      step_id: String(task.current_step || task.current_stage || orderedStages[orderedStages.length - 1]),
+      completed_at: String(((task.stage_execution || {}).completed_at) || nowText),
+      expected_result_packet: '',
+    };
+    task.machine = {
+      ...(task.machine || {}),
+      remaining_stages: [],
+      allowed_actions: [],
+      last_transition: 'workflow_completed',
+      last_execution_event: 'stage_completed',
+      next_stop_reason: 'completed',
+    };
+    task.pending_action = null;
+    task.runtime_guard = task.runtime_guard || {};
+    task.runtime_guard.checkpoint_policy = {
+      ...((task.runtime_guard || {}).checkpoint_policy || {}),
+      resume_from: '',
+      expected_result_packet: '',
+      checkpoint_path: durableTaskSnapshotPath(task),
+      project_root: '.',
+    };
+    task.state_version = Number(task.state_version || 0) + 1;
+    task.updated_at = nowText;
+    persistTaskSnapshot(root, task);
+    if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
+    writeCurrentTaskMarkdownIfFocused(root, task);
+    appendTaskJournal(root, 'completed_runtime_reconciled', { workflow_id: task.workflow_id, current_stage: task.current_stage });
+    appendHistory(root, 'completed_runtime_reconciled', { workflow_id: task.workflow_id, workflow_type: task.workflow_type, current_stage: task.current_stage });
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'completed_runtime_reconciled',
+      workflow_id: task.workflow_id,
+      current_stage: task.current_stage,
+      project_root_rebound: projectRootRebound,
+    };
+  }
   const shortProjectResume = reconcileShortProjectProgress(root, task, tpl);
   if (shortProjectResume.blocked) {
     return blocked(shortProjectResume.status, shortProjectResume.findings || shortProjectResume.reason || '短篇规划状态不一致。');
@@ -1915,8 +1993,7 @@ function refreshShortTitleLock(args) {
   if (String(execution.status || '') !== 'running' || String(execution.stage_id || '') !== stageId) {
     return blocked('blocked_short_title_lock_stage_not_running', '当前写作提要阶段尚未启动或已经结束。');
   }
-  const projectState = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
-  const sectionIndex = inferShortSectionIndex({ projectState, stageId, scope: String(task.scope || '') }) || 1;
+  const sectionIndex = shortSectionIndex(root, task, stageId) || 1;
   const lock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
   if (String(lock.workflow_id || '') !== String(task.workflow_id || '')
       || String(lock.project_id || '') !== String(projectState.project_id || '')
@@ -2302,9 +2379,12 @@ function refreshActiveShortStageGuidance(root, task) {
   if (String(execution.status || '') !== 'running' || String(execution.stage_id || '') !== String(task.current_stage || '')) {
     return { applied: false, reason: 'stage_not_running' };
   }
-  const projectState = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
-  const sectionIndex = inferShortSectionIndex({ projectState, stageId: task.current_stage, scope: String(task.scope || '') }) || 1;
+  const sectionIndex = shortSectionIndex(root, task, task.current_stage) || 1;
   task.scope = `第${sectionIndex}节`;
+  execution.expected_result_packet = expectedResultPacketPath(task, task.current_stage, root);
+  if (task.runtime_guard && task.runtime_guard.checkpoint_policy) {
+    task.runtime_guard.checkpoint_policy.expected_result_packet = execution.expected_result_packet;
+  }
   delete execution.stage_context_packet;
   delete execution.execution_command;
   delete execution.quality_command;
@@ -2326,6 +2406,43 @@ function reconcileShortProjectProgress(root, task, tpl) {
   const stateFile = resolveSafeProjectFile(root, '追踪/private-short-extension/project-state.json');
   const state = stateFile && fs.existsSync(stateFile) ? readJson(stateFile) : null;
   if (!state || state.__error || !Array.isArray(state.accepted_sections)) return { ...result, reason: 'project_state_missing' };
+  const revisionQueue = activeShortFeedbackRevision(task);
+  if (revisionQueue) {
+    const sectionIndex = Number(revisionQueue.current_section_index || 0);
+    const item = (Array.isArray(revisionQueue.items) ? revisionQueue.items : [])
+      .find(row => Number((row || {}).section_index || 0) === sectionIndex);
+    const perSectionStages = new Set([
+      'next_section_brief', 'section_brief', 'draft_first_section', 'draft_section',
+      'draft_next_section', 'section_machine_gate', 'section_repair_loop',
+      'quality_gate', 'story_value_gate', 'section_accept_anchor',
+    ]);
+    const routeCurrent = perSectionStages.has(String(task.current_stage || ''))
+      && String(task.scope || '') === `第${sectionIndex}节`;
+    if (sectionIndex > 0 && item && routeCurrent) {
+      return {
+        ...result,
+        reason: 'active_feedback_revision_queue_is_current',
+        current_section_index: sectionIndex,
+      };
+    }
+    if (sectionIndex > 0 && item && !routeCurrent) {
+      const previousStage = String(task.current_stage || '');
+      const targetStage = orderedStage(tpl, 'next_section_brief') ? 'next_section_brief' : 'section_brief';
+      task.current_stage = targetStage;
+      task.current_step = targetStage;
+      task.scope = `第${sectionIndex}节`;
+      task.short_project_resume = {
+        status: 'reconciled',
+        reason: 'active_feedback_revision_queue_has_priority',
+        previous_stage: previousStage,
+        target_stage: targetStage,
+        next_section_index: sectionIndex,
+        latest_trusted_artifact: String(((task.machine || {}).last_result_packet) || ''),
+        reconciled_at: new Date().toISOString(),
+      };
+      return { applied: true, ...task.short_project_resume };
+    }
+  }
 
   const accepted = state.accepted_sections
     .map((item) => ({
@@ -2564,6 +2681,13 @@ function resolveAction(args) {
   }
   task.pending_action = pending;
   let selectedNumber = Number(args.input);
+  if (args.bindCurrent && Number.isInteger(selectedNumber)) {
+    const binding = visibleChoiceBinding(task, pending, root);
+    args.pendingActionId = binding.pending_action_id;
+    args.visibleChoiceHash = binding.visible_choice_hash;
+    args.stateVersion = String(binding.state_version);
+    args.bookRoot = binding.book_root;
+  }
   let semanticContinuationBound = false;
   if (!Number.isInteger(selectedNumber) && shouldContinueConfirmedShortFeedback(task, args.input, pending)) {
     const recommended = (Array.isArray(pending.options) ? pending.options : [])
@@ -2593,13 +2717,32 @@ function resolveAction(args) {
           stop_reason: 'user_feedback_requires_impact_analysis',
         };
       }
+      const revisionInput = task.revision_input_context && typeof task.revision_input_context === 'object'
+        ? task.revision_input_context
+        : {};
+      const scopedRevisionInput = String(revisionInput.status || '') === 'awaiting_chat';
+      const feedbackSectionIndex = scopedRevisionInput
+        ? Number(revisionInput.section_index || 0)
+        : shortSectionIndex(root, task, String(task.current_stage || ''));
       const queuedFeedback = enqueueShortFeedback(root, task, String(args.input || ''), {
         receivedAt: now,
         classification: classified.classification,
         previousStage: String(task.current_stage || ''),
-        sectionIndex: shortSectionIndex(root, task, String(task.current_stage || '')),
-        scopeSnapshot: String(task.scope || ''),
+        sectionIndex: feedbackSectionIndex,
+        scopeSnapshot: scopedRevisionInput ? `第${feedbackSectionIndex}节` : String(task.scope || ''),
+        scopeMode: scopedRevisionInput ? 'current_section_only' : '',
+        baseRequirementVersion: scopedRevisionInput ? String(revisionInput.requirement_version || '') : '',
+        minimumImpactLevel: scopedRevisionInput ? 'current_brief' : '',
+        sourceKind: scopedRevisionInput ? 'user_revision_requirement' : 'user_message',
       });
+      if (scopedRevisionInput) {
+        task.revision_input_context = {
+          ...revisionInput,
+          status: 'feedback_received',
+          feedback_id: String(((queuedFeedback.pending_feedback || {}).feedback_id) || ''),
+          received_at: now,
+        };
+      }
       if (queuedFeedback.status === 'feedback_queued') invalidateShortFeedbackAnalysis(task, now);
       reopenShortTaskForFeedback(task, now);
       if (classified.classification === 'current_artifact_feedback'
@@ -2741,17 +2884,37 @@ function resolveAction(args) {
     const progress = shortRevisionQueueProgress(task, root);
     const currentSection = Number((progress || {}).current_section_index || shortSectionIndex(root, task, String(task.current_stage || '')) || 0);
     const sectionLabel = currentSection ? `第 ${currentSection} 节` : '当前节';
+    const requirementView = buildShortRevisionRequirementView(root, task, currentSection);
+    const now = new Date().toISOString();
+    task.revision_input_context = {
+      status: 'awaiting_chat',
+      scope_mode: 'current_section_only',
+      section_index: currentSection || null,
+      requirement_version: String(requirementView.requirement_version || ''),
+      sources: Array.isArray(requirementView.sources) ? requirementView.sources : [],
+      requested_at: now,
+    };
+    const queueItem = (Array.isArray(((task.feedback_revision_queue || {}).items)) ? task.feedback_revision_queue.items : [])
+      .find(item => Number((item || {}).section_index || 0) === currentSection);
+    if (queueItem) {
+      queueItem.requirement_version = String(requirementView.requirement_version || '');
+      queueItem.requirement_sources = Array.isArray(requirementView.sources) ? requirementView.sources : [];
+    }
+    writeTaskState(root, task, { writeMarkdown: false });
     return {
       schemaVersion: SCHEMA_VERSION,
       status: 'revision_input_requested',
       workflow_id: String(task.workflow_id || ''),
+      revision_scope: 'current_section_only',
+      section_index: currentSection || null,
+      requirement_view: requirementView,
       current_scope: String(task.scope || ''),
       instruction: `请直接输入对${sectionLabel}的修改意见。${sectionLabel}保持为当前任务；修订并重新采用后自动继续下一个未完成小节。系统仅在后台同步受影响的设定、大纲和后续 Brief。`,
       pending_action: menu,
       visible_response: {
         render_mode: 'free_text_revision',
         status: 'revision_input_requested',
-        text: `请直接输入对${sectionLabel}的修改意见。\n\n${sectionLabel}修订并重新采用后，自动继续下一个未完成任务。若意见影响设定、大纲或后续承接，系统会在后台同步后再回到${sectionLabel}，不会让你重新选择流程。`,
+        text: `${requirementView.text}\n\n${sectionLabel}修订并重新采用后，自动继续下一个未完成任务。`,
       },
     };
   }
@@ -2773,6 +2936,13 @@ function resolveAction(args) {
   const selectedAt = new Date().toISOString();
   const selected = normalizeSelectedAction(option, selectedNumber, selectedAt, pending);
   selected.confirmation_input = String(args.input || '');
+  if (['accept_length_variance', 'revise_length_variance'].includes(selected.action_id)) {
+    task.short_length_choice = {
+      ...(task.short_length_choice || {}),
+      status: selected.action_id === 'accept_length_variance' ? 'accepted_for_final_review' : 'revision_requested',
+      selected_at: selectedAt,
+    };
+  }
   task.last_selection = selected;
   task.pending_action = {
     ...pending,
@@ -3186,7 +3356,7 @@ function refreshedVisibleMenu(task, root) {
   const progress = shortRevisionQueueProgress(task, root);
   const sourcePending = task.pending_action && typeof task.pending_action === 'object'
     ? { ...task.pending_action, options: Array.isArray(task.pending_action.options) ? task.pending_action.options.map(option => ({ ...option })) : [] }
-    : {};
+    : { options: [] };
   if (progress) {
     const draftStages = new Set(['draft_first_section', 'draft_section', 'draft_next_section']);
     const queueItem = (Array.isArray((task.feedback_revision_queue || {}).items) ? task.feedback_revision_queue.items : [])
@@ -3199,14 +3369,23 @@ function refreshedVisibleMenu(task, root) {
       const sectionIndex = Number(progress.current_section_index || 0);
       sourcePending.question = `第 ${sectionIndex || ''} 节已有正文，当前进入复检与局部回炉`.replace('第  节', '当前小节');
     }
-    const primary = revisionPrimary
+    let primary = revisionPrimary
       || sourcePending.options.find(option => !['inspect_current_state', 'pause', 'free_text', 'show_task_inbox'].includes(String(option.action_id || option.action || '')))
       || sourcePending.options[0];
+    if (primary && ['first_section_brief', 'section_brief', 'next_section_brief'].includes(String(task.current_stage || ''))) {
+      primary = {
+        ...primary,
+        label: `准备并回炉第 ${progress.current_section_index} 节（推荐）`,
+        description: '系统先在内部校验或重建本节写作提要，再直接进入现有正文复检；只有缺少作者决策时才停下来询问。',
+        target_stage: String(task.current_stage || 'next_section_brief'),
+      };
+      sourcePending.question = `第 ${progress.current_section_index} 节待准备并回炉`;
+    }
     sourcePending.options = [
       primary,
       {
         action_id: 'request_revision_input',
-        label: `修改第 ${progress.current_section_index} 节；完成后继续后续任务`,
+        label: `调整第 ${progress.current_section_index} 节的回炉要求`,
         risk_level: 'low',
         requires_user_confirm: false,
       },
@@ -3246,10 +3425,7 @@ function pendingActionVisibleResponse(task, root, intro = '') {
       'node scripts/workflow-state-machine.js resolve-action',
       '--project-root .',
       `--input ${index + 1}`,
-      `--pending-action-id ${shellQuote(pending.pending_action_id || pending.id || '')}`,
-      `--visible-choice-hash ${shellQuote(pending.visible_choice_hash || '')}`,
-      `--state-version ${Number(pending.state_version || task.state_version || 0)}`,
-      '--book-root .',
+      '--bind-current',
       '--json',
     ].join(' '),
   }));
@@ -3292,10 +3468,7 @@ function shortRevisionTaskOverview(task, root) {
     'node scripts/workflow-state-machine.js resolve-action',
     '--project-root .',
     `--input ${Number(pause.number || 4)}`,
-    `--pending-action-id ${shellQuote(pending.pending_action_id || pending.id || '')}`,
-    `--visible-choice-hash ${shellQuote(pending.visible_choice_hash || '')}`,
-    `--state-version ${Number(pending.state_version || task.state_version || 0)}`,
-    '--book-root .',
+    '--bind-current',
     '--json',
   ].join(' ') : '';
   const options = [
@@ -3477,7 +3650,7 @@ function runningStageDisplayName(stageId) {
 }
 
 function runningStageControlMenu(task, root, prefix = '') {
-  const command = (number) => `node scripts/workflow-state-machine.js resolve-action --project-root . --input ${number} --json`;
+  const command = (number) => `node scripts/workflow-state-machine.js resolve-action --project-root . --input ${number} --bind-current --json`;
   const progress = shortRevisionQueueProgress(task, root);
   const labels = [
     '继续当前阶段（推荐）',
@@ -3652,6 +3825,7 @@ function maybeStartStageExecution(root, task, selected, selectedAt, reviewPlan) 
     execution_boundary: normalizeExecutionBoundary({ host_execution_mode: 'cooperative_interactive' }),
   };
   attachShortStageExecutionGuidance(root, task, targetStage);
+  attachShortReviewStageExecutionGuidance(task, targetStage);
   attachLongStageExecutionGuidance(root, task, targetStage);
   attachStageMemoryGuidance(root, task, targetStage);
   const executionContract = validateStartedStageExecutionContract(task, targetStage);
@@ -3747,7 +3921,9 @@ function validateStartedStageExecutionContract(task, stageId) {
   const workflowType = String((task || {}).workflow_type || '');
   const required = isShortWritingWorkflow(task)
     ? SHORT_EXECUTABLE_STAGE_CONTRACTS.has(String(stageId || ''))
-    : workflowType === 'long_write'
+    : workflowType === 'short_review'
+      ? SHORT_REVIEW_EXECUTABLE_STAGE_CONTRACTS.has(String(stageId || ''))
+      : workflowType === 'long_write'
       ? LONG_EXECUTABLE_STAGE_CONTRACTS.has(String(stageId || ''))
       : false;
   if (!required) return { status: 'not_required' };
@@ -3763,6 +3939,19 @@ function validateStartedStageExecutionContract(task, stageId) {
     status: 'missing',
     reason: String(execution.context_packet_warning || '当前阶段没有绑定可执行命令或受控上下文包。'),
   };
+}
+
+function attachShortReviewStageExecutionGuidance(task, targetStage) {
+  if (String((task || {}).workflow_type || '') !== 'short_review'
+    || !SHORT_REVIEW_EXECUTABLE_STAGE_CONTRACTS.has(String(targetStage || ''))) return;
+  const execution = task.stage_execution || {};
+  const workflowId = JSON.stringify(String(task.workflow_id || ''));
+  const resultPacket = JSON.stringify(String(execution.expected_result_packet || ''));
+  execution.execution_workdir = '.';
+  execution.context_read_command = `node scripts/workflow-stage-context.js read-current --project-root . --workflow-id ${workflowId}`;
+  execution.execution_command = `node scripts/workflow-stage-controller.js advance --project-root . --workflow-id ${workflowId} --result ${resultPacket} --json`;
+  execution.resume_hint = `先运行 context_read_command，只读完成“${targetStage}”。按 expected_result_packet 写一份回执，固定包含 workflow_id、workflow_type=short_review、stage_id、step_id、owner_module、step_status=completed、outputs、changed_files=[]、evidence、verification_result、blocking_findings、output_health_result、checkpoint_state、result_packet_path；owner_module 必须沿用当前阶段。然后只运行 execution_command，不猜脚本参数、不读取工作流源码、不使用复合命令。`;
+  task.stage_execution = execution;
 }
 
 function blockStageExecutionContract(root, task, targetStage, finding) {
@@ -4005,8 +4194,7 @@ function attachShortStageExecutionGuidance(root, task, targetStage) {
 
   if (['first_section_brief', 'section_brief', 'next_section_brief'].includes(targetStage)) {
     reconcileShortRevisionQueueWithTitleLock(root, task);
-    const projectState = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
-    const sectionIndex = inferShortSectionIndex({ projectState, stageId: targetStage, scope: String(task.scope || '') }) || 1;
+    const sectionIndex = shortSectionIndex(root, task, targetStage) || 1;
     synchronizeShortUnitScope(task, sectionIndex, targetStage);
     const lock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
     const titleEntry = (Array.isArray(lock.sections) ? lock.sections : []).find((item) => Number((item || {}).section_index) === sectionIndex);
@@ -4172,7 +4360,7 @@ function attachShortStageExecutionGuidance(root, task, targetStage) {
       });
       execution.quality_evidence_target = evidenceRel;
       execution.write_set = [evidenceRel];
-      execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；把十一项故事质量判断写入 ${evidenceRel}：每项填写 pass/revise、判断理由和正文原句 evidence_quote；再逐项填写大纲覆盖与承接元数据，运行 execution_command。不要修改正文、搜索实现、协议或历史回执。`;
+      execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；把质量证据写入 ${evidenceRel}，字段固定为 checks[{id,status,evidence,evidence_quote}]、outline_coverage[{id,status,evidence_quote}]、summary、acceptance_metadata{revealed_information,character_state,open_hook}。十一项 checks 与每个必写大纲 ID 都必须引用正文原句；再逐字运行 execution_command。若返回 short_memory_context_refreshed，立即逐字运行其 execution_command，不询问用户。若返回 evidence_schema，按该模板补卡。任何命令都不得追加 2>&1、head、管道或重定向；不要修改正文、搜索实现、协议或历史回执。`;
     } else if (['first_section_brief', 'section_brief', 'next_section_brief'].includes(targetStage)) {
       execution.execution_command = `node scripts/short-section-brief-finalize.js --project-root ${quotedRoot} --workflow-id ${quotedWorkflowId} --apply --json`;
       execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；生成第${packet.section_index}节写作提要：只保留承接、目标与阻力、因果动作、人物/视角锁、禁写项、节尾钩子六部分，同一事实只写一次，篇幅和事件数按目标正文动态收敛。随后运行 execution_command；不得读取完整 skill 或历史回执。`;
@@ -4283,8 +4471,9 @@ function expectedResultPacketPath(task, stageId, projectRoot = '') {
   }
   if (shortUnitStages.has(String(stageId || '')) && isShortWritingWorkflow(task) && !wholeStoryScope) {
     const root = projectRoot ? path.resolve(projectRoot) : '';
-    const projectState = root ? (readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {}) : {};
-    const sectionIndex = inferShortSectionIndex({ projectState, stageId, scope: String(task.scope || '') });
+    const sectionIndex = root
+      ? shortSectionIndex(root, task, stageId)
+      : currentShortFeedbackRevisionSection(task) || inferShortSectionIndex({ projectState: {}, stageId, scope: String(task.scope || '') });
     if (Number.isInteger(sectionIndex) && sectionIndex > 0) {
       return `${baseDir}/${stageId}.section-${String(sectionIndex).padStart(3, '0')}.result.json`;
     }
@@ -4324,6 +4513,20 @@ function classifyFreeTextInput(task, input, pending) {
     return blocked('blocked_free_text_disabled', '当前候选不接受自由输入，请选择已有数字候选或重新开启任务。');
   }
   let classification = inferFreeTextClassification(text);
+  const revisionInput = task.revision_input_context && typeof task.revision_input_context === 'object'
+    ? task.revision_input_context
+    : {};
+  if (isShortWritingWorkflow(task)
+    && String(revisionInput.status || '') === 'awaiting_chat'
+    && classification.classification === 'free_text_instruction') {
+    classification = {
+      classification: 'current_artifact_feedback',
+      recommended_action: 'route_feedback_before_execution',
+      suggested_workflow_type: '',
+      target_scope: `第${Number(revisionInput.section_index || 0)}节`,
+      reason: '用户已进入当前小节要求调整；普通自然语言只绑定当前小节，并重新计算影响链。',
+    };
+  }
   if (isShortWritingWorkflow(task)
     && ['feedback_impact_sync', 'feedback_apply_patch'].includes(String(task.current_stage || ''))
     && classification.classification === 'free_text_instruction') {
@@ -4528,6 +4731,10 @@ function nextCandidates(args) {
   if (reviewPlanValidation.legacy) return blockedLegacyReviewPlan(task);
   const registryCheck = resolvedTemplateForTask(task);
   if (registryCheck.status !== 'ok') return blockedTaskTemplate(registryCheck);
+  const activePending = task.pending_action && typeof task.pending_action === 'object'
+    && String(task.pending_action.status || 'pending') !== 'resolved';
+  const resume = !activePending ? runningStageResume(task, root) : null;
+  if (resume) return resume;
   const tpl = registryCheck.template;
   const current = findStage(tpl, task.current_stage);
   const status = shouldStopBeforeStage(task, current) ? 'requires_user_confirm' : 'ok';
@@ -6791,6 +6998,9 @@ function compactActivatedResult(result) {
   const context = execution && execution.stage_context_packet && typeof execution.stage_context_packet === 'object'
     ? execution.stage_context_packet
     : null;
+  const overview = result.task_overview && typeof result.task_overview === 'object'
+    ? result.task_overview
+    : null;
   return {
     schemaVersion: result.schemaVersion || SCHEMA_VERSION,
     status: result.status,
@@ -6823,8 +7033,16 @@ function compactActivatedResult(result) {
         resume_hint: String(execution.resume_hint || ''),
       } : null,
     },
-    task_overview: result.task_overview || null,
-    visible_response: result.visible_response || null,
+    task_overview: overview ? {
+      status: String(overview.status || ''),
+      task_title: String(overview.task_title || ''),
+      task_form: String(overview.task_form || ''),
+      phase_count: Array.isArray(overview.phases) ? overview.phases.length : 0,
+      current_subtask: overview.current_subtask || null,
+    } : null,
+    // The full overview remains available through `task-overview`. Repeating it
+    // here made compact activation inject tens of kilobytes into every host.
+    visible_response: null,
   };
 }
 

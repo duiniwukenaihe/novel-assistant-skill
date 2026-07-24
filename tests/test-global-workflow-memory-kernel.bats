@@ -76,6 +76,16 @@ for(const stage of ['material_card','short_setting','section_outline','first_sec
 NODE
 }
 
+@test "read-only short review quarantines stale memory instead of blocking canonical review" {
+    node - "$POLICY" <<'NODE'
+const { resolveWorkflowMemoryPolicy } = require(process.argv[2]);
+const policy = resolveWorkflowMemoryPolicy('short_review');
+if (policy.mode !== 'optional' || policy.accepts_memory_updates !== true) {
+  throw new Error(JSON.stringify(policy));
+}
+NODE
+}
+
 @test "every professional module declares the shared workflow and memory boundary" {
     for name in story-long-write story-short-write story-long-analyze story-short-analyze story-long-scan story-short-scan story-review story-deslop story-import story-cover story-setup; do
         file="$REPO/src/internal-skills/$name/SKILL.md"

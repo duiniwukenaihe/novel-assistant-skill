@@ -1,7 +1,5 @@
 # novel-assistant
 
-> First public release: `v0.1.0`
-
 One entry point for planning, drafting, reviewing, deconstructing, and polishing Chinese web fiction.
 
 `novel-assistant` evolved from the excellent upstream project [worldwonderer/oh-story-claudecode](https://github.com/worldwonderer/oh-story-claudecode). It preserves upstream's professional fiction capabilities while addressing production failures such as interrupted tasks, drifting memory, wasted tokens, structural expansion, and model degradation.

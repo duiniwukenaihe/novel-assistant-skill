@@ -1,7 +1,5 @@
 # novel-assistant
 
-> 首个公开版本：`v0.1.0`
-
 一个入口，持续完成中文网文的规划、写作、审阅、拆文与去 AI 味。
 
 `novel-assistant` 演化自优秀的上游项目 [worldwonderer/oh-story-claudecode](https://github.com/worldwonderer/oh-story-claudecode)。我们保留它的网文专业能力，并针对真实生产中的任务中断、记忆漂移、Token 浪费、结构扩容和模型退化继续完善。

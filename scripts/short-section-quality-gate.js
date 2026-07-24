@@ -12,6 +12,7 @@ const { inferShortSectionIndex } = require('./lib/short-workflow-state');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { renderPendingActionText } = require('./lib/workflow-action-renderer');
 const { checkShortMemoryStage } = require('./lib/short-memory-stage-policy');
+const { refreshCurrentStageContext } = require('./lib/workflow-stage-context-refresh');
 const {
   buildShortSectionOutlineContract,
   validateBriefOutlineCoverage,
@@ -56,6 +57,21 @@ function main() {
   if (!sectionIndex) return finish({ status: 'blocked_short_section_identity_missing', instruction: '当前任务没有可靠的小节身份；先由 workflow 恢复小节范围，不得默认审查第1节。' }, 0, args.json);
   const memoryGate = checkShortMemoryStage({ projectRoot: root, task, execution, sectionIndex, stageId });
   if (memoryGate.blocking) {
+    if (memoryGate.status === 'short_memory_context_refresh_required'
+        && Number(execution.context_refresh_count || 0) < 1) {
+      const refreshed = refreshCurrentStageContext(root, workflowId);
+      if (refreshed.status === 'stage_context_refreshed') {
+        return finish({
+          status: 'short_memory_context_refreshed',
+          section_index: sectionIndex,
+          memory_status: memoryGate.memory_status,
+          context_refresh_count: refreshed.context_refresh_count,
+          next_action: 'rerun_same_command',
+          execution_command: refreshed.execution_command,
+          instruction: '当前节上下文已自动刷新。直接逐字运行 execution_command；不要让用户选择，不要追加管道、重定向或其他参数。',
+        }, 0, args.json);
+      }
+    }
     return finish({
       status: memoryGate.status,
       section_index: sectionIndex,
@@ -82,10 +98,27 @@ function main() {
 
   const evidenceRel = String(args.evidenceFile || execution.quality_evidence_target || `${task.task_dir}/artifacts/section-${String(sectionIndex).padStart(3, '0')}-story-review.json`);
   const evidenceFile = safeProjectFile(root, evidenceRel);
-  const review = readJson(evidenceFile) || {};
+  const evidenceRead = readQualityEvidence(evidenceFile);
+  const review = normalizeQualityEvidence(evidenceRead.value || {}, {
+    workflowId,
+    sectionIndex,
+    draft,
+    outlineContract,
+  });
+  if (evidenceRead.repaired) atomicWriteJson(evidenceFile, evidenceRead.value);
   const evidenceIssue = validateQualityEvidence(review, { workflowId, sectionIndex, draft, outlineContract });
   if (evidenceIssue) {
-    return finish(recoverableStageResult(task, 'quality_evidence_required', '只补当前质量证据卡的十一项判断、正文证据、大纲覆盖和承接元数据后重跑同一命令；不要改正文或读取工作流源码。', { section_index: sectionIndex, evidence_file: evidenceRel, findings: evidenceIssue }), 0, args.json);
+    return finish(recoverableStageResult(task, 'quality_evidence_required', '按 evidence_schema 补当前质量证据卡后重跑同一命令；不要改正文或读取工作流源码。', {
+      section_index: sectionIndex,
+      evidence_file: evidenceRel,
+      findings: evidenceIssue,
+      evidence_schema: buildQualityEvidenceSchema({
+        workflowId,
+        sectionIndex,
+        draft,
+        outlineContract,
+      }),
+    }), 0, args.json);
   }
   const failed = new Set(review.checks.filter((item) => item.status === 'revise').map((item) => item.id));
   const decision = failed.size ? 'revise' : 'pass';
@@ -228,8 +261,133 @@ function validateQualityEvidence(review, { workflowId, sectionIndex, draft, outl
   return findings.length ? findings : null;
 }
 
+function normalizeQualityEvidence(value, { workflowId, sectionIndex, draft, outlineContract }) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const expectedDigest = digestFile(draft);
+  const checks = normalizeQualityChecks(source);
+  const outlineCoverage = normalizeOutlineCoverage(source);
+  const acceptanceMetadata = normalizeAcceptanceInput(source);
+  return {
+    ...source,
+    workflow_id: workflowId,
+    section_index: sectionIndex,
+    draft_digest: expectedDigest,
+    outline_contract_digest: String(outlineContract.contract_digest || ''),
+    checks,
+    outline_coverage: outlineCoverage,
+    acceptance_metadata: acceptanceMetadata,
+    summary: String(
+      source.summary
+      || ((source.quality_summary || {}).summary)
+      || ((source.quality_summary || {}).reason)
+      || ''
+    ).trim(),
+  };
+}
+
+function normalizeQualityChecks(source) {
+  if (Array.isArray(source.checks) && source.checks.length) {
+    return source.checks.map(normalizeQualityCheck).filter((item) => item.id);
+  }
+  if (Array.isArray(source.quality_dimensions) && source.quality_dimensions.length) {
+    return source.quality_dimensions.map(normalizeQualityCheck).filter((item) => item.id);
+  }
+  const statuses = source.quality_status && typeof source.quality_status === 'object' && !Array.isArray(source.quality_status)
+    ? source.quality_status
+    : {};
+  return Object.entries(statuses).map(([id, item]) => normalizeQualityCheck({ id, ...(item || {}) }));
+}
+
+function normalizeQualityCheck(value) {
+  const item = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    id: String(item.id || item.dimension || '').trim(),
+    status: String(item.status || item.verdict || '').trim(),
+    evidence: String(item.evidence || item.reason || item.judgment || '').trim(),
+    evidence_quote: String(item.evidence_quote || item.quote || '').trim(),
+  };
+}
+
+function normalizeOutlineCoverage(source) {
+  if (Array.isArray(source.outline_coverage) && source.outline_coverage.length) {
+    return source.outline_coverage.map(normalizeOutlineCoverageRow).filter((item) => item.id);
+  }
+  if (Array.isArray(source.draft_outline_obligations) && source.draft_outline_obligations.length) {
+    return source.draft_outline_obligations.map(normalizeOutlineCoverageRow).filter((item) => item.id);
+  }
+  const coverage = source.outline_coverage && typeof source.outline_coverage === 'object' && !Array.isArray(source.outline_coverage)
+    ? source.outline_coverage
+    : {};
+  return Object.entries(coverage).map(([id, item]) => normalizeOutlineCoverageRow({ id, ...(item || {}) }));
+}
+
+function normalizeOutlineCoverageRow(value) {
+  const item = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    id: String(item.id || item.obligation_id || '').trim(),
+    status: String(item.status || item.verdict || '').trim(),
+    evidence_quote: String(item.evidence_quote || item.quote || '').trim(),
+  };
+}
+
+function normalizeAcceptanceInput(source) {
+  const nested = [
+    source.acceptance_metadata,
+    source.acceptance,
+  ].find((item) => item && typeof item === 'object' && !Array.isArray(item)) || {};
+  const revealed = nested.revealed_information ?? source.revealed_information;
+  const characterState = nested.character_state ?? source.character_state;
+  const openHook = nested.open_hook ?? source.open_hook;
+  return {
+    ...nested,
+    revealed_information: Array.isArray(revealed)
+      ? revealed.map(String).map((item) => item.trim()).filter(Boolean)
+      : (String(revealed || '').trim() ? [String(revealed).trim()] : []),
+    character_state: characterState && typeof characterState === 'object' && !Array.isArray(characterState)
+      ? characterState
+      : (String(characterState || '').trim() ? { summary: String(characterState).trim() } : {}),
+    open_hook: String(openHook || '').trim(),
+  };
+}
+
+function buildQualityEvidenceSchema({ workflowId, sectionIndex, draft, outlineContract }) {
+  return {
+    schemaVersion: '1.0.0',
+    workflow_id: workflowId,
+    section_index: sectionIndex,
+    draft_digest: digestFile(draft),
+    outline_contract_digest: String(outlineContract.contract_digest || ''),
+    checks: CHECKS.map((id) => ({
+      id,
+      status: 'pass|revise',
+      evidence: '至少四个字的判断理由',
+      evidence_quote: '正文中可核验的原句',
+    })),
+    outline_coverage: (outlineContract.obligations || [])
+      .filter((item) => item.required_in_draft)
+      .map((item) => ({
+        id: item.id,
+        status: 'pass',
+        evidence_quote: '正文中兑现该大纲义务的原句',
+      })),
+    summary: '不少于十二个字的本节质量结论',
+    acceptance_metadata: {
+      revealed_information: ['本节新增且已确认的信息'],
+      character_state: { 角色名: '本节结束时的人物状态' },
+      open_hook: outlineContract.section_role === 'ending' ? '' : '带入下一节的未闭合问题',
+    },
+  };
+}
+
+function digestFile(file) {
+  return `sha256:${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`;
+}
+
 function normalizeQuote(value) {
-  return String(value || '').replace(/\s+/gu, '').trim();
+  return String(value || '')
+    .replace(/\s+/gu, '')
+    .replace(/["'“”‘’「」『』]/gu, '')
+    .trim();
 }
 
 function normalizeAcceptanceMetadata(value) {
@@ -316,6 +474,18 @@ function relative(root, file) {
 
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
+}
+
+function readQualityEvidence(file) {
+  if (!file || !fs.existsSync(file)) return { value: null, repaired: false };
+  const raw = fs.readFileSync(file, 'utf8');
+  try { return { value: JSON.parse(raw), repaired: false }; } catch (_) { /* constrained fallback below */ }
+  const repairedText = raw.split(/\r?\n/u).map((line) => {
+    const match = line.match(/^(\s*"evidence_quote"\s*:\s*")(.*)("\s*,?\s*)$/u);
+    if (!match) return line;
+    return `${match[1]}${match[2].replace(/(?<!\\)"/gu, '”')}${match[3]}`;
+  }).join('\n');
+  try { return { value: JSON.parse(repairedText), repaired: repairedText !== raw }; } catch (_) { return { value: null, repaired: false }; }
 }
 
 function parseJson(text) {

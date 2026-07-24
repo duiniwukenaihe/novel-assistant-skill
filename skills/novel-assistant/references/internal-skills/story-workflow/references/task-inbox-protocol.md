@@ -180,11 +180,10 @@ node scripts/workflow-runner.js once --project-root <book-root> --adapter <claud
 
 需要连续推进安全阶段时可使用 `run`；runner 遇到 `requires_user_confirm`、结果包不合法、输出退化、重复工具失败或阶段上限必须停止。`--adapter auto` 只能探测能力，不得静默选择收费宿主。专业模块仍按 `stage_execution.owner_module` 执行业务，runner 只负责编排、流式健康、一次恢复、结果包应用和成本记录。
 
-当用户输入 `1/2/3/4`，必须通过状态机解析。宿主从最近展示的结构化菜单元数据带回 `pending_action_id`、`visible_choice_hash` 和 `state_version`；可见回复仍只显示简洁中文编号，不显示哈希或内部 ID：
+当用户输入 `1/2/3/4`，必须通过状态机解析。CLI 协作会话执行结构化菜单提供的短命令，由状态机在执行瞬间绑定当前菜单；模型不得手抄或生成 hash。Web 等持有菜单元数据的宿主仍可显式带回 `pending_action_id`、`visible_choice_hash` 和 `state_version` 做严格并发校验。可见回复只显示简洁中文编号，不显示哈希或内部 ID：
 
 ```bash
-node scripts/workflow-state-machine.js resolve-action --project-root <book-root> --input <number> \
-  --pending-action-id <id> --visible-choice-hash <hash> --state-version <version> --json
+node scripts/workflow-state-machine.js resolve-action --project-root <book-root> --input <number> --bind-current --json
 ```
 
 不要从聊天可见文本重新解释数字，也不得只用裸 `1` 推断旧菜单。任何 `pending_action_id`、hash、书目路径、状态版本、过期时间或已解决状态不匹配，都必须以 `blocked_*` 失败关闭，并返回 `refreshed_menu`；不得执行新菜单中恰好同号的选项。执行返回的 `action_id`，并保留 `remaining_stages`。L3 专业模块可以通过 result packet 完成一个 step 或 stage，但只有 `story-workflow` 加 `workflow-state-machine.js` 可以标记整个 workflow 完成。durable task 的 `pending_action.options[].action_id` 是编号选择的权威来源；`machine.remaining_stages` 是剩余流程的权威来源。

@@ -90,6 +90,42 @@ if (evidence.source_commit_id !== 'commit-accepted-002' || evidence.workflow_id 
 NODE
 }
 
+@test "a new accepted revision supersedes facts omitted from the same canonical source" {
+    write_fact_authority wf-revision
+    mkdir -p "$PROJECT/正文" "$PROJECT/追踪/story-system/commits"
+    printf '第一版正文。\n' > "$PROJECT/正文/第001节.md"
+    node - "$REPO/scripts/lib/memory-projection.js" "$PROJECT" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const { projectAcceptedFacts } = require(process.argv[2]);
+const root = process.argv[3];
+const commitDir = path.join(root, '追踪/story-system/commits');
+const evidence = [{ path: '正文/第001节.md' }];
+const provenance = { task_family_id: 'family-wf-revision', workflow_id: 'wf-revision', branch_id: 'wf-revision', stage_attempt_id: 'sa-wf-revision', acceptance_status: 'accepted' };
+fs.writeFileSync(path.join(commitDir, 'commit-section-v1.json'), JSON.stringify({
+  status: 'accepted', commit_id: 'commit-section-v1', workflow_id: 'wf-revision', acceptance_status: 'accepted', provenance,
+  facts: [
+    { subject: '主角', predicate: '状态', object: '仍在犹豫', scope: { section: 1 }, evidence },
+    { subject: '旧钩子', predicate: '状态', object: '等待回收', scope: { section: 1 }, evidence },
+  ],
+}));
+projectAcceptedFacts(root, { status: 'accepted', commit_id: 'commit-section-v1' });
+fs.writeFileSync(path.join(root, '正文/第001节.md'), '第二版正文。\n');
+fs.writeFileSync(path.join(commitDir, 'commit-section-v2.json'), JSON.stringify({
+  status: 'accepted', commit_id: 'commit-section-v2', workflow_id: 'wf-revision', acceptance_status: 'accepted', provenance,
+  facts: [{ subject: '主角', predicate: '状态', object: '仍在犹豫', scope: { section: 1 }, evidence }],
+}));
+projectAcceptedFacts(root, { status: 'accepted', commit_id: 'commit-section-v2' });
+const rows = fs.readFileSync(path.join(root, '追踪/memory/facts.jsonl'), 'utf8').trim().split(/\n/).map(JSON.parse);
+const latest = new Map(); for (const row of rows) latest.set(row.fact_id, row);
+const active = [...latest.values()].filter(row => row.status === 'active' && !row.valid_to);
+if (active.length !== 1 || active[0].subject !== '主角') throw new Error(JSON.stringify(active));
+if (active[0].evidence[0].source_commit_id !== 'commit-section-v2') throw new Error(JSON.stringify(active[0]));
+const removed = rows.filter(row => row.subject === '旧钩子');
+if (removed.at(-1).status !== 'superseded' || removed.at(-1).valid_to !== 'commit-section-v2') throw new Error(JSON.stringify(removed));
+NODE
+}
+
 @test "fact store accepts only explicit facts and never infers canon from prose" {
     printf '正文声称绿珠其实是妖王，但该信息没有进入 accepted facts。\n' > "$PROJECT/追踪/上下文.md"
     node - "$REPO/scripts/lib/memory-projection.js" "$PROJECT" <<'NODE'
@@ -369,6 +405,61 @@ const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (out.status !== 'blocked_memory_evidence_stale') throw new Error(JSON.stringify(out));
 const debt = (out.memory_debts || []).find(entry => entry.fact_id === 'fact.mixed');
 if (!debt || debt.status !== 'hash_mismatch' || debt.severity !== 'blocking') throw new Error(JSON.stringify(out.memory_debts));
+NODE
+}
+
+@test "context assembler ignores stale facts replaced by a newer accepted section revision" {
+    mkdir -p "$PROJECT/正文" "$PROJECT/追踪/private-short-extension"
+    printf '当前采用正文。\n' > "$PROJECT/正文/第001节.md"
+    current_hash="$(shasum -a 256 "$PROJECT/正文/第001节.md" | awk '{print $1}')"
+    cat > "$PROJECT/追踪/private-short-extension/project-state.json" <<JSON
+{"accepted_sections":[{"section_index":1,"canonical_path":"正文/第001节.md","section_commit_id":"commit-new","sha256":"$current_hash"}]}
+JSON
+    cat > "$PROJECT/追踪/memory/facts.jsonl" <<'JSONL'
+{"fact_id":"fact.old","subject":"绿珠","predicate":"身份","object":"旧结论","aliases":["绿珠"],"dependencies":[],"scope":{"book":"current","section":1},"valid_from":"commit-old","valid_to":null,"evidence":[{"path":"正文/第001节.md","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","source_commit_id":"commit-old"}],"provenance":{"commit_id":"commit-old","workflow_id":"wf-old","acceptance_status":"accepted"},"confidence":1,"status":"active"}
+JSONL
+    node "$ASSEMBLER" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章 绿珠" --budget 1200 --json > "$TMP_DIR/replaced-evidence.json"
+    node - "$TMP_DIR/replaced-evidence.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'ok') throw new Error(JSON.stringify(out));
+if ((out.memory_debts || []).some(item => item.fact_id === 'fact.old')) throw new Error(JSON.stringify(out.memory_debts));
+if (!(out.omittedEntries || []).some(item => item.id === 'fact.old' && item.reason === 'superseded_canonical_revision')) throw new Error(JSON.stringify(out.omittedEntries));
+NODE
+}
+
+@test "context assembler quarantines stale facts while their sections are in a controlled reacceptance queue" {
+    mkdir -p "$PROJECT/正文" "$PROJECT/追踪/workflow/tasks/wf-recheck" "$PROJECT/追踪/workflow"
+    printf '待重新验收的正文。\n' > "$PROJECT/正文/第006节.md"
+    cat > "$PROJECT/追踪/workflow/tasks/wf-recheck/task.json" <<'JSON'
+{"workflow_id":"wf-recheck","workflow_type":"private_short_startup","task_dir":"追踪/workflow/tasks/wf-recheck","state_version":1,"scope":"第6节","feedback_revision_queue":{"queue_id":"revision.assembly","source_stage":"full_story_assembly","status":"running","affected_sections":[6,7],"current_section_index":6}}
+JSON
+    cat > "$PROJECT/追踪/workflow/current-task.json" <<'JSON'
+{"workflow_id":"wf-recheck","task_dir":"追踪/workflow/tasks/wf-recheck","state_version":1}
+JSON
+    cat > "$PROJECT/追踪/memory/facts.jsonl" <<'JSONL'
+{"fact_id":"fact.recheck","subject":"哥哥","predicate":"第6节状态","object":"旧状态","aliases":["哥哥"],"dependencies":[],"scope":{"book":"current","section":6},"valid_from":"commit-old","valid_to":null,"evidence":[{"path":"正文/第006节.md","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","source_commit_id":"commit-old"}],"provenance":{"commit_id":"commit-old","workflow_id":"wf-recheck","acceptance_status":"accepted"},"confidence":1,"status":"active"}
+JSONL
+    node "$ASSEMBLER" --project-root "$PROJECT" --workflow-id wf-recheck --task write_section --target "第6节 哥哥" --budget 1200 --json > "$TMP_DIR/recheck-evidence.json"
+    node - "$TMP_DIR/recheck-evidence.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'ok') throw new Error(JSON.stringify(out));
+if ((out.memory_debts || []).some(item => item.fact_id === 'fact.recheck')) throw new Error(JSON.stringify(out.memory_debts));
+if (!(out.omittedEntries || []).some(item => item.id === 'fact.recheck' && item.reason === 'pending_controlled_reacceptance')) throw new Error(JSON.stringify(out.omittedEntries));
+NODE
+}
+
+@test "memory conflict detection keeps section-scoped facts independent" {
+    node - "$REPO/scripts/lib/memory-conflict.js" <<'NODE'
+const { detectMemoryConflicts } = require(process.argv[2]);
+const entries = [
+  { id: 's1', scope: { book: 'current', section: 1 }, facts: [{ key: '全篇:本节发生', value: '第一节事件' }] },
+  { id: 's2', scope: { book: 'current', section: 2 }, facts: [{ key: '全篇:本节发生', value: '第二节事件' }] },
+];
+if (detectMemoryConflicts(entries).length !== 0) throw new Error(JSON.stringify(detectMemoryConflicts(entries)));
+const conflict = detectMemoryConflicts([...entries, { id: 's1b', scope: { book: 'current', section: 1 }, facts: [{ key: '全篇:本节发生', value: '冲突版本' }] }]);
+if (conflict.length !== 1 || conflict[0].scope.section !== 1) throw new Error(JSON.stringify(conflict));
 NODE
 }
 

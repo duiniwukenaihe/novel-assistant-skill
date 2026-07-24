@@ -29,18 +29,23 @@
 const fs = require('fs');
 const path = require('path');
 const { buildStageContextPacket } = require('./lib/workflow-stage-context-packet');
+const { refreshCurrentStageContext } = require('./lib/workflow-stage-context-refresh');
 
 const USAGE = `Usage: node scripts/workflow-stage-context.js <command> [options]
 
 Commands:
   build   Build the minimal section-context packet for drafting one short section.
   read-current   Print the authoritative current stage packet without copying its path.
+  refresh-current   Rebuild and atomically bind the current running stage packet.
 
 build:
   build --project-root <book> [--workflow-id <id>] [--stage <stage_id>] --json
 
 read-current:
   read-current --project-root <book> --workflow-id <id> [--json]
+
+refresh-current:
+  refresh-current --project-root <book> --workflow-id <id> --json
 
 Exit status:
   0  produced a JSON result (status=assembled or not_applicable)
@@ -172,7 +177,7 @@ function readCurrent(args) {
 
 function main() {
   const args = parseArgs(process.argv);
-  if (!['build', 'read-current'].includes(args.command)) {
+  if (!['build', 'read-current', 'refresh-current'].includes(args.command)) {
     process.stderr.write(`${USAGE}\n`);
     process.exit(1);
   }
@@ -182,7 +187,11 @@ function main() {
   }
   let result;
   try {
-    result = args.command === 'read-current' ? readCurrent(args) : build(args);
+    result = args.command === 'read-current'
+      ? readCurrent(args)
+      : args.command === 'refresh-current'
+        ? refreshCurrentStageContext(path.resolve(args.projectRoot), args.workflowId || String((readFocusedTask(path.resolve(args.projectRoot)) || {}).workflow_id || ''))
+        : build(args);
   } catch (error) {
     result = { status: 'error', message: error.message };
   }

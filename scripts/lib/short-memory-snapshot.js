@@ -31,7 +31,7 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
   const workflowId = String(task.workflow_id || 'project-memory');
   const stageId = String(options.stageId || task.current_stage || '');
   const sourceDigests = repository.sourceRevisions();
-  const queryText = buildQuery(repository, sectionIndex);
+  const queryText = buildQuery(repository, sectionIndex, { stageId });
   const memoryQuery = normalizeMemoryQuery({
     project_id: String(projectState.project_id || ''),
     project_instance_id: String((repository.projectIdentity() || {}).project_instance_id || ''),
@@ -40,7 +40,7 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
     stage_id: stageId || 'short_memory_snapshot',
     owner_module: String(task.workflow_owner || 'story-short-write'),
     scope: { section_index: sectionIndex },
-    needs: ['accepted_facts', 'active_cast', 'active_promises', 'confirmed_style_rules', 'confirmed_quality_rules', 'continuity_obligations', 'canon_constraints'],
+    needs: ['accepted_facts', 'active_cast', 'active_promises', 'confirmed_style_rules', 'confirmed_quality_rules', 'planning_constraints', 'continuity_obligations', 'canon_constraints'],
     query_text: queryText,
   });
   const memoryTokenBudget = deriveMemoryTokenBudget({ task, query: queryText, stageId });
@@ -55,7 +55,7 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
   const preferences = selectWritingPreferences(repository.preferences(), queryText);
   const qualityRules = selectQualityRules(repository.pollutionRules(), queryText);
   const promises = selectPromises(repository.promises(), sectionIndex);
-  const planningConstraints = selectPlanningConstraints(repository, sectionIndex);
+  const planningConstraints = selectPlanningConstraints(repository, sectionIndex, task);
   const activeCast = compactActiveCast(repository.activeCast(), facts, queryText);
   const continuityObligations = buildContinuityObligations(facts, promises, planningConstraints, sectionIndex);
   const selectedEntryIds = unique([
@@ -154,17 +154,21 @@ function validateShortMemoryReceipt(projectRoot, receipt, options = {}) {
   return { status: 'stale', stale_sources: staleSources, current_receipt: current.receipt };
 }
 
-function buildQuery(repository, sectionIndex) {
+function buildQuery(repository, sectionIndex, options = {}) {
   const pad = String(sectionIndex).padStart(3, '0');
+  const stageId = String(options.stageId || '');
+  const includeCurrentBrief = !/^(?:first_section_brief|section_brief|next_section_brief)$/u.test(stageId);
   return [
-    repository.readText(`写作Brief_第${pad}节.md`),
+    includeCurrentBrief ? repository.readText(`写作Brief_第${pad}节.md`) : '',
     extractOutlineSection(repository.readText('小节大纲.md'), sectionIndex),
     sectionIndex > 1 ? repository.readText(`追踪/private-short-extension/section-${String(sectionIndex - 1).padStart(3, '0')}-anchor.json`) : '',
   ].filter(Boolean).join('\n');
 }
 
 function selectFacts(rows, query, sectionIndex, tokenBudget) {
-  const eligible = rows.filter(row => isActive(row) && factSection(row) < sectionIndex);
+  const eligible = deduplicateContinuityFacts(
+    rows.filter(row => isActive(row) && factSection(row) < sectionIndex)
+  );
   const mandatory = eligible.filter(row => {
     const section = factSection(row);
     return section === 0 || section === sectionIndex - 1;
@@ -180,6 +184,39 @@ function selectFacts(rows, query, sectionIndex, tokenBudget) {
     ...selected,
     rows: selected.entries.sort((left, right) => factSection(left) - factSection(right) || String(left.fact_id || '').localeCompare(String(right.fact_id || ''))),
   };
+}
+
+function deduplicateContinuityFacts(rows) {
+  const selected = new Map();
+  for (const row of rows) {
+    const key = continuityFactKey(row);
+    const current = selected.get(key);
+    if (!current || continuityFactScore(row) > continuityFactScore(current)) selected.set(key, row);
+  }
+  return [...selected.values()];
+}
+
+function continuityFactKey(row) {
+  const section = factSection(row);
+  const subject = String((row || {}).subject || '').trim();
+  const predicate = String((row || {}).predicate || '').trim();
+  if (/本节发生/u.test(predicate) || subject === 'summary') return `${section}:section_summary`;
+  if (/钩子|待续|承诺/u.test(predicate)) return `${section}:open_hook`;
+  if (/揭示/u.test(predicate)) return `${section}:revealed_information`;
+  // Different accepted facts may legitimately share a character and predicate
+  // (for example, two independent state changes in the same section). Only the
+  // known generated summary/hook/reveal projections are semantic duplicates.
+  return `${section}:${subject}:${predicate}:${String((row || {}).fact_id || '')}`;
+}
+
+function continuityFactScore(row) {
+  const predicate = String((row || {}).predicate || '');
+  const object = String((row || {}).object || '').trim();
+  let score = 0;
+  if (/钩子|待续|承诺/u.test(predicate) && /下一(?:节|步)|必须|承接/u.test(object)) score += 1000;
+  if (object.length >= 24 && object.length <= 180) score += 500;
+  score -= Math.abs(object.length - 90);
+  return score;
 }
 
 function buildContinuityObligations(facts, promises, planningConstraints, sectionIndex) {
@@ -200,7 +237,6 @@ function buildContinuityObligations(facts, promises, planningConstraints, sectio
       source_id: String(fact.fact_id || ''),
       kind,
       requirement,
-      statement: [fact.subject, fact.predicate, fact.object].map(String).filter(Boolean).join('：'),
     });
   }
   for (const promise of promises) {
@@ -209,7 +245,6 @@ function buildContinuityObligations(facts, promises, planningConstraints, sectio
       source_id: String(promise.id || ''),
       kind: 'due_promise',
       requirement: 'must_progress_now',
-      statement: String(promise.summary || ''),
     });
   }
   for (const constraint of planningConstraints) {
@@ -217,14 +252,13 @@ function buildContinuityObligations(facts, promises, planningConstraints, sectio
       source_id: String(constraint.id || ''),
       kind: 'accepted_planning_constraint',
       requirement: 'must_obey_or_explicitly_replan',
-      statement: String(constraint.content || ''),
     });
   }
   return obligations;
 }
 
-function selectPlanningConstraints(repository, sectionIndex) {
-  return repository.planningConstraints().filter(isActive).filter(row => {
+function selectPlanningConstraints(repository, sectionIndex, task = {}) {
+  const persisted = repository.planningConstraints().filter(isActive).filter(row => {
     const refs = Array.isArray(row.source_refs) ? row.source_refs : [];
     if (!refs.length || refs.some(ref => String(repository.sourceRevision(String((ref || {}).path || ''))) !== String((ref || {}).hash || ''))) return false;
     const scope = row.scope && typeof row.scope === 'object' ? row.scope : {};
@@ -238,6 +272,39 @@ function selectPlanningConstraints(repository, sectionIndex) {
     affected_sections: Array.isArray(row.affected_sections) ? row.affected_sections.map(positiveInt).filter(Boolean) : [],
     evidence: (Array.isArray(row.source_refs) ? row.source_refs : []).map(ref => ({ path: String((ref || {}).path || '') })).filter(ref => ref.path),
   })).filter(row => row.id && row.content);
+  const selected = new Map(persisted.map(row => [row.id, row]));
+  for (const row of taskAcceptedPlanningConstraints(task, sectionIndex)) selected.set(row.id, row);
+  return [...selected.values()];
+}
+
+function taskAcceptedPlanningConstraints(task, sectionIndex) {
+  const plan = task.accepted_plan && typeof task.accepted_plan === 'object' ? task.accepted_plan : null;
+  const acceptedStatuses = new Set(['projected_to_canonical_memory', 'completed']);
+  if (!plan
+      || (!acceptedStatuses.has(String(plan.status || ''))
+        && !acceptedStatuses.has(String(plan.projection_status || '')))) return [];
+  const queue = task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
+    ? task.feedback_revision_queue
+    : null;
+  const affected = [...new Set([
+    ...(Array.isArray(plan.affected_sections) ? plan.affected_sections : []),
+    ...(queue && String(queue.status || '') === 'running' && Array.isArray(queue.affected_sections) ? queue.affected_sections : []),
+  ].map(positiveInt).filter(Boolean))];
+  if (affected.length && !affected.includes(sectionIndex)) return [];
+  return (Array.isArray(plan.requirements) ? plan.requirements : [])
+    .map((row, index) => {
+      const id = String((row || {}).requirement_id || `${plan.plan_id || 'accepted-plan'}.requirement-${index + 1}`);
+      const content = String((row || {}).text || (row || {}).content || '').trim();
+      return {
+        id: `constraint.${id}`,
+        content,
+        scope: { book: 'current', sections: affected },
+        affected_sections: affected,
+        evidence: (Array.isArray(plan.projected_assets) ? plan.projected_assets : []).map(path => ({ path: String(path) })),
+        source_kind: 'task_scoped_accepted_plan',
+      };
+    })
+    .filter(row => row.id && row.content);
 }
 
 function selectRules(rows, query) {

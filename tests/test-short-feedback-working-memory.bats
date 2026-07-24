@@ -145,6 +145,25 @@ NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
+@test "revision acceptance preview ignores old whole-story completion and follows the active queue" {
+  run node - "$REPO/scripts/lib/short-feedback-revision-queue.js" <<'NODE'
+const api=require(process.argv[2]);
+const task={workflow_type:'private_short_startup',scope:'第1节',feedback_revision_queue:{status:'running',current_section_index:1,items:[
+  {section_index:1,status:'pending'},
+  {section_index:2,status:'pending'},
+  {section_index:8,status:'pending'},
+]}};
+const first=api.previewShortFeedbackRevisionAcceptance(task,1);
+if(first.status!=='feedback_revision_continues'||first.completed||first.next_section!==2||first.remaining_sections.join(',')!=='2,8') throw new Error(JSON.stringify(first));
+task.feedback_revision_queue.current_section_index=8;
+task.feedback_revision_queue.items[0].status='accepted';
+task.feedback_revision_queue.items[1].status='accepted';
+const last=api.previewShortFeedbackRevisionAcceptance(task,8);
+if(last.status!=='feedback_revision_completes'||!last.completed||last.next_section!==null) throw new Error(JSON.stringify(last));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 @test "structure impact expands an existing revision queue without losing progress" {
   run node - "$REPO/scripts/lib/short-feedback-revision-queue.js" <<'NODE'
 const api=require(process.argv[2]);

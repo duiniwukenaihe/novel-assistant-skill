@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const CONTRACT_VERSION = '1.0.0';
 const NEEDS = new Set([
   'accepted_facts', 'active_cast', 'active_promises', 'confirmed_style_rules',
-  'confirmed_quality_rules', 'continuity_obligations', 'canon_constraints',
+  'confirmed_quality_rules', 'planning_constraints', 'continuity_obligations', 'canon_constraints',
   'review_dependencies', 'user_preferences',
 ]);
 

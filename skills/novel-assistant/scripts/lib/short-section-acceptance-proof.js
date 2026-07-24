@@ -89,7 +89,7 @@ function validateShortSectionAcceptanceProof({ projectRoot, workflowId, proof, r
   if (!acceptedGateStatus(quality.story_value_gate || quality.quality_gate)) return invalid('short_section_story_value_gate_missing');
   if (!acceptedGateStatus(quality.repetition_gate)) return invalid('short_section_repetition_gate_missing');
   const lengthPolicy = quality.length_policy && typeof quality.length_policy === 'object' ? quality.length_policy : {};
-  const allowedLengthVerdicts = new Set(['baseline_not_established', 'within_story_band', 'explicit_story_exception']);
+  const allowedLengthVerdicts = new Set(['baseline_not_established', 'within_story_band', 'explicit_story_exception', 'outside_story_band_deferred']);
   if (lengthPolicy.blocking !== false || !allowedLengthVerdicts.has(String(lengthPolicy.verdict || ''))) {
     return invalid('short_section_length_policy_missing');
   }

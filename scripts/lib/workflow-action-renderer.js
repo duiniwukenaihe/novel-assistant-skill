@@ -199,7 +199,7 @@ function buildShortRevisionQueueProgress(task = {}, sectionTitles = []) {
       section_index: sectionIndex,
       title: titleMap.get(sectionIndex) || '',
       status: isCompleted ? 'completed' : isCurrent ? 'current' : 'pending',
-      status_label: isCompleted ? '已完成' : isCurrent ? currentStep : '待重建写作提要并复检正文',
+      status_label: isCompleted ? '已完成' : isCurrent ? currentStep : '待回炉',
       brief_status: String(item.brief_status || ''),
       prose_status: String(item.prose_status || ''),
       accepted_commit_id: String(item.accepted_commit_id || ''),
@@ -221,15 +221,18 @@ function buildShortRevisionQueueProgress(task = {}, sectionTitles = []) {
     const firstTitle = titleMap.get(sections[0]) || '';
     const lastTitle = titleMap.get(sections[sections.length - 1]) || '';
     const derivedGoal = sections.length === 1
-      ? `完成《${firstTitle || `第 ${sections[0]} 节`}》的写作提要、正文复检与采用`
+      ? `完成《${firstTitle || `第 ${sections[0]} 节`}》的复检、修订与采用`
       : `从《${firstTitle || `第 ${sections[0]} 节`}》推进到《${lastTitle || `第 ${sections[sections.length - 1]} 节`}》`;
+    const storedCompletionRule = String(group.completion_rule || '').trim();
     return {
       group_id: String(group.group_id || `phase-${index + 1}`),
       order: index + 1,
       section_indices: sections,
       range_label: sectionRangeLabel(sections),
       goal: String(group.goal || '').trim() || derivedGoal,
-      completion_rule: String(group.completion_rule || '逐节重建写作提要、修订正文并通过双门验收'),
+      completion_rule: /Brief|写作提要/u.test(storedCompletionRule)
+        ? '组内小节按已确认方案逐节复检、修订并采用'
+        : storedCompletionRule || '组内小节按已确认方案逐节复检、修订并采用',
       completed: completedCount,
       total: sections.length,
       status,
@@ -319,15 +322,9 @@ function buildShortRevisionTaskOverview(task = {}, sectionTitles = [], plannedSe
         `${group.status === 'completed' ? '✓' : group.status === 'current' ? '▶' : '○'} ${index + 2}. ${group.range_label}逐节回炉（${group.completed}/${group.total}）`,
         `   ${group.goal}；完成条件：${group.completion_rule}`,
       ];
-      const nextGroup = progress.groups[index + 1];
-      const preservedBeforeNext = preserved.filter(section => (
-        Number(section) > Math.max(...group.section_indices.map(Number))
-        && (!nextGroup || Number(section) < Math.min(...nextGroup.section_indices.map(Number)))
-      ));
-      return preservedBeforeNext.length
-        ? [...groupLines, `＝ ${sectionRangeLabel(preservedBeforeNext)}：沿用现稿，最终全篇复检时检查承接`]
-        : groupLines;
+      return groupLines;
     }),
+    preserved.length ? `＝ 未受影响小节：${sectionRangeLabel(preserved)}沿用现稿，最终全篇复检时检查承接` : '',
     `○ ${progress.groups.length + 2}. 全篇收束：重新合稿 → 全篇审阅 → 去 AI 味 → 终检`,
     '',
     current
@@ -471,13 +468,20 @@ function revisionQueueGroups(queue, items) {
 
 function sectionRangeLabel(sections) {
   if (!sections.length) return '未指定小节';
-  if (sections.length === 1) return `第 ${sections[0]} 节`;
-  return `第 ${sections[0]}-${sections[sections.length - 1]} 节`;
+  const groups = sections.map(Number).filter(Number.isInteger).sort((a, b) => a - b).reduce((result, sectionIndex) => {
+    const current = result[result.length - 1];
+    if (!current || sectionIndex !== current[current.length - 1] + 1) result.push([sectionIndex]);
+    else current.push(sectionIndex);
+    return result;
+  }, []);
+  return groups.map(group => group.length === 1
+    ? `第 ${group[0]} 节`
+    : `第 ${group[0]}-${group[group.length - 1]} 节`).join('、');
 }
 
 function currentShortRevisionStep(task) {
   const stage = String(task.current_stage || ((task.stage_execution || {}).stage_id) || '');
-  if (['first_section_brief', 'section_brief', 'next_section_brief'].includes(stage)) return '正在生成写作提要';
+  if (['first_section_brief', 'section_brief', 'next_section_brief'].includes(stage)) return '待准备并回炉';
   if (['draft_first_section', 'draft_section', 'draft_next_section'].includes(stage)) return '写作提要已通过，待写正文';
   if (stage === 'section_machine_gate') return '正文已生成，待机器检查';
   if (['quality_gate', 'story_value_gate'].includes(stage)) return '机器检查已通过，待故事质量检查';
@@ -534,7 +538,8 @@ function visibleStageLabel(stageDef) {
 
 function decoratePendingAction(action) {
   const now = new Date();
-  const options = normalizeVisibleOptions(action.options, action.free_text_enabled !== false);
+  const compactOptions = action.compact_options === true;
+  const options = normalizeVisibleOptions(action.options, action.free_text_enabled !== false, compactOptions);
   const stable = JSON.stringify({
     id: action.id || '',
     question: action.question || '',
@@ -548,7 +553,7 @@ function decoratePendingAction(action) {
   });
   return {
     ...action,
-    interaction_profile: 'numeric_four_choice',
+    interaction_profile: compactOptions ? 'numeric_compact_choice' : 'numeric_four_choice',
     options,
     created_at: action.created_at || now.toISOString(),
     expires_at: action.expires_at || new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
@@ -556,7 +561,7 @@ function decoratePendingAction(action) {
   };
 }
 
-function normalizeVisibleOptions(input, freeTextEnabled) {
+function normalizeVisibleOptions(input, freeTextEnabled, compactOptions = false) {
   const raw = (Array.isArray(input) ? input : []).filter(Boolean);
   const recommendationIndex = Math.max(0, raw.findIndex((item) => item.recommended === true || /（推荐）/u.test(String(item.label || ''))));
   const primary = raw[recommendationIndex] || {
@@ -565,6 +570,14 @@ function normalizeVisibleOptions(input, freeTextEnabled) {
     risk_level: 'low',
     requires_user_confirm: false,
   };
+  if (compactOptions) {
+    const compact = [primary, ...raw.filter((item, index) => index !== recommendationIndex)];
+    return compact.map((item, index) => {
+      const recommended = index === 0;
+      const label = String(item.label || `选项 ${index + 1}`).replace(/（推荐）/gu, '').trim();
+      return { ...item, number: index + 1, recommended, label: recommended ? `${label}（推荐）` : label };
+    });
+  }
   const reserved = new Set(['inspect_current_state', 'pause', 'free_text', 'show_task_inbox']);
   const business = raw.filter((item, index) => index !== recommendationIndex && !reserved.has(String(item.action_id || item.action || '')));
   const existingInspect = raw.find((item) => String(item.action_id || item.action || '') === 'inspect_current_state');

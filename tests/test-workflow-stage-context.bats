@@ -43,3 +43,9 @@ teardown() {
     [ "$status" -eq 2 ]
     [[ "$output" == *'blocked_task_not_found'* ]]
 }
+
+@test "refresh-current is a supported deterministic command" {
+    run node "$SCRIPT" refresh-current --project-root "$BOOK" --workflow-id "wf-unknown" --json
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_task_authority_missing'* ]]
+}

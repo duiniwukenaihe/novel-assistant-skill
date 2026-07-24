@@ -29,7 +29,7 @@ JSON
   node -e 'const x=JSON.parse(process.argv[1]); if(x.baseline_chars!==2490 || x.baseline_status!=="provisional" || x.verdict!=="within_story_band") process.exit(1)' "$output"
 }
 
-@test "ordinary section far below the accepted baseline blocks the next brief" {
+@test "ordinary section outside the baseline is recorded without blocking the section" {
   write_state
   node - "$BOOK/追踪/private-short-extension/project-state.json" <<'NODE'
 const fs = require('fs');
@@ -40,13 +40,14 @@ fs.writeFileSync(file, JSON.stringify(state));
 NODE
   run node "$SCRIPT" --project-root "$BOOK" --section-index 2 --actual 1724 --json
   [ "$status" -eq 0 ]
-  node -e 'const x=JSON.parse(process.argv[1]); if(x.verdict!=="outside_story_band" || !x.blocking || x.baseline_chars!==2490 || x.sample_size!==1) process.exit(1)' "$output"
+  node -e 'const x=JSON.parse(process.argv[1]); if(x.verdict!=="outside_story_band_deferred" || x.blocking || x.status!=="advisory" || x.baseline_chars!==2490 || x.sample_size!==1) process.exit(1)' "$output"
 }
 
-@test "explicit transition exception is allowed only with a story reason" {
+@test "explicit transition reason is preserved but is not required to continue" {
   write_state
   run node "$SCRIPT" --project-root "$BOOK" --section-index 2 --planned-target 1800 --section-role transition --json
   [ "$status" -eq 0 ]
+  node -e 'const x=JSON.parse(process.argv[1]); if(x.blocking || x.verdict!=="outside_story_band_deferred") process.exit(1)' "$output"
   run node "$SCRIPT" --project-root "$BOOK" --section-index 2 --planned-target 1800 --section-role transition --exception-reason "本节只承担撤离后的即时转场与新钩子" --json
   [ "$status" -eq 0 ]
   node -e 'const x=JSON.parse(process.argv[1]); if(x.verdict!=="explicit_story_exception" || x.blocking) process.exit(1)' "$output"
@@ -64,6 +65,35 @@ JSON
   run node "$SCRIPT" --project-root "$BOOK" --section-index 5 --planned-target 2450 --json
   [ "$status" -eq 0 ]
   node -e 'const x=JSON.parse(process.argv[1]); if(x.baseline_status!=="stabilized" || x.baseline_chars!==2490 || x.sample_size!==3) process.exit(1)' "$output"
+}
+
+@test "length handling distinguishes a single-section task from a multi-section workflow" {
+  run node - "$REPO/scripts/lib/short-section-length-policy.js" <<'NODE'
+const { shouldAskSingleSectionLengthChoice } = require(process.argv[2]);
+const policy = { verdict: 'outside_story_band_deferred' };
+const single = { lifecycle: { scope: '第 2 节' } };
+const whole = { lifecycle: { scope: '全篇' } };
+const queue = { lifecycle: { scope: '第2节' }, feedback_revision_queue: { status: 'running', affected_sections: [2, 3] } };
+if (!shouldAskSingleSectionLengthChoice(single, policy)) process.exit(1);
+if (shouldAskSingleSectionLengthChoice(whole, policy)) process.exit(2);
+if (shouldAskSingleSectionLengthChoice(queue, policy)) process.exit(3);
+NODE
+  [ "$status" -eq 0 ]
+}
+
+@test "compact workflow choices do not invent a four-option menu" {
+  run node - "$REPO/scripts/lib/workflow-action-renderer.js" <<'NODE'
+const { decoratePendingAction } = require(process.argv[2]);
+const pending = decoratePendingAction({compact_options:true,free_text_enabled:true,options:[
+  {action_id:'accept_length_variance',label:'保留并继续（推荐）'},
+  {action_id:'revise_length_variance',label:'补写或压缩'},
+  {action_id:'free_text',label:'输入其他要求或开启新任务'},
+]});
+if (pending.options.length !== 3) process.exit(1);
+if (pending.interaction_profile !== 'numeric_compact_choice') process.exit(2);
+if (!pending.options[0].recommended) process.exit(3);
+NODE
+  [ "$status" -eq 0 ]
 }
 
 @test "public and private short workflows require the local length baseline before the next brief" {
@@ -88,6 +118,10 @@ const { validateShortSectionAcceptanceProof } = require(process.argv[2]);
 const root = process.argv[3];
 const hash = process.argv[4];
 const proof = { workflow_id: 'wf-short-proof', section_index: 1, anchor_path: '追踪/private-short-extension/section-001-anchor.json', canonical_path: '正文.md', canonical_sha256: hash };
+assert.equal(validateShortSectionAcceptanceProof({ projectRoot: root, workflowId: 'wf-short-proof', proof }).status, 'accepted');
+const accepted = JSON.parse(require('fs').readFileSync(`${root}/追踪/private-short-extension/section-001-anchor.json`, 'utf8'));
+accepted.quality_result.length_policy = {blocking:false,verdict:'outside_story_band_deferred'};
+require('fs').writeFileSync(`${root}/追踪/private-short-extension/section-001-anchor.json`, JSON.stringify(accepted));
 assert.equal(validateShortSectionAcceptanceProof({ projectRoot: root, workflowId: 'wf-short-proof', proof }).status, 'accepted');
 const anchor = require('fs').readFileSync(`${root}/追踪/private-short-extension/section-001-anchor.json`, 'utf8');
 require('fs').writeFileSync(`${root}/追踪/private-short-extension/section-001-anchor.json`, anchor.replace('"story_value_gate":"pass"', '"story_value_gate":"pending"'));

@@ -701,6 +701,27 @@ if (out.selected.interaction_mode !== 'execute_command' || !out.selected.executi
 NODE
 }
 
+@test "short assets override stale non-short project metadata in recommendations" {
+    mkdir -p "$TMP_DIR/book/追踪/private-short-extension"
+    printf '# 正文\n' > "$TMP_DIR/book/正文.md"
+    printf '# 设定\n' > "$TMP_DIR/book/设定.md"
+    printf '# 小节大纲\n' > "$TMP_DIR/book/小节大纲.md"
+    cat > "$TMP_DIR/book/追踪/private-short-extension/project-state.json" <<'JSON'
+{"workflow_type":"legacy_unknown","status":"completed"}
+JSON
+
+    node "$SCRIPT" --project-root "$TMP_DIR/book" --action show_smart_recommendations --json > "$TMP_DIR/out.json"
+
+    node - "$TMP_DIR/out.json" <<'NODE'
+const out = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+if ((out.smart_new_task_recommendations || []).some((item) => /创作圣经|卷纲|长篇/.test(String(item.label || '')))) {
+  throw new Error(JSON.stringify(out.smart_new_task_recommendations));
+}
+const review = (out.smart_new_task_recommendations || []).find((item) => item.action === 'start_short_review');
+if (!review) throw new Error(JSON.stringify(out.smart_new_task_recommendations));
+NODE
+}
+
 @test "active project new goal menu preserves numbered choices and route bindings" {
     mkdir -p "$TMP_DIR/book"
     printf '# 短篇设定\n' > "$TMP_DIR/book/设定.md"
@@ -943,6 +964,60 @@ const visible = JSON.stringify({
 for (const internalWord of ['evidence_scan', 'result packet', 'result_packet', 'running']) {
   if (visible.includes(internalWord)) throw new Error(`${internalWord}: ${visible}`);
 }
+NODE
+}
+
+@test "paused workflow discards stale menu and exposes one deterministic resume action" {
+    write_focused_task short-paused-001 <<'JSON'
+{
+  "workflow_id": "short-paused-001",
+  "workflow_type": "private_short_startup",
+  "status": "paused",
+  "state_version": 12,
+  "book_root": ".",
+  "user_goal": "整篇回炉",
+  "current_stage": "feedback_impact_sync",
+  "current_step": "feedback_impact_sync",
+  "pending_action": {
+    "options": [
+      {"number":1,"label":"查看当前进度与依据（推荐）","action_id":"inspect_current_state"},
+      {"number":2,"label":"查看当前进度与依据","action_id":"inspect_current_state"}
+    ]
+  },
+  "stage_execution": {
+    "status": "paused",
+    "stage_id": "feedback_impact_sync",
+    "step_id": "feedback_impact_sync",
+    "stop_reason": "user_paused_from_running_stage_menu"
+  },
+  "runtime_guard": {
+    "heartbeat": {"updated_at":"2026-07-24T00:00:00.000Z"},
+    "stall_policy": {"heartbeat_timeout_minutes":999999},
+    "checkpoint_policy": {"resume_from":"feedback_impact_sync"},
+    "token_estimate": {"input_files":1,"input_chars_estimate":1,"output_chars_budget":1,"agent_count":0,"batch_size":1,"risk_level":"low"},
+    "adaptive_budget_policy": {},
+    "output_health_gate": {},
+    "max_retry_budget": 1,
+    "token_cost_governance": {"cost_ledger_path":"追踪/workflow/token-cost-ledger.jsonl","model_routing_policy":"host_default","tool_output_filter":"compact","retry_budget_result":"not_used"}
+  },
+  "lifecycle": {"status":"paused"}
+}
+JSON
+
+    node "$SCRIPT" --project-root "$TMP_DIR/book" --json > "$TMP_DIR/out.json"
+
+    node - "$TMP_DIR/out.json" <<'NODE'
+const fs=require('fs');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const candidate=(out.candidates||[]).find(item=>item.id==='short-paused-001');
+if(!candidate) throw new Error(JSON.stringify(out));
+const actions=candidate.next_actions || [];
+if(actions.length!==4) throw new Error(JSON.stringify(actions));
+if(actions[0].label!=='继续分析反馈影响（推荐）') throw new Error(JSON.stringify(actions[0]));
+if(actions[0].interaction_mode!=='execute_command') throw new Error(JSON.stringify(actions[0]));
+if(actions[0].execution_command!=='node scripts/workflow-state-machine.js activate --project-root . --workflow-id short-paused-001 --compact --json') throw new Error(JSON.stringify(actions[0]));
+if(actions.filter(item=>item.action_id==='inspect_current_state').length!==1) throw new Error(JSON.stringify(actions));
+if(JSON.stringify(candidate).includes('feedback impact sync')) throw new Error(JSON.stringify(candidate));
 NODE
 }
 
@@ -1340,5 +1415,27 @@ const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf
 if(out.candidateCount!==1 || out.task_cards.length!==1) throw new Error(JSON.stringify(out));
 const card=out.task_cards[0];
 if(!String(card.id).startsWith('tf-') || card.paused_branch_count!==1 || card.next_actions[0].label!=='重新生成受控修复方案') throw new Error(JSON.stringify(card));
+NODE
+}
+
+@test "task inbox displays authoritative paused task status over stale active family projection" {
+    mkdir -p "$TMP_DIR/book/追踪/workflow/tasks/wf-short"
+    cat > "$TMP_DIR/book/追踪/workflow/tasks/wf-short/task.json" <<'JSON'
+{"workflow_id":"wf-short","workflow_type":"short_write","status":"paused","state_version":1,"scope":"全篇","user_goal":"整篇回炉","lifecycle":{"status":"paused"},"current_stage":"feedback_impact_sync","stage_execution":{"status":"paused","stage_id":"feedback_impact_sync"},"runtime_guard":{"heartbeat":{"updated_at":"2026-07-24T00:00:00.000Z"},"stall_policy":{"heartbeat_timeout_minutes":999999},"checkpoint_policy":{"resume_from":"feedback_impact_sync"},"token_estimate":{"input_files":1,"input_chars_estimate":1,"output_chars_budget":1,"agent_count":0,"batch_size":1,"risk_level":"low"},"adaptive_budget_policy":{},"output_health_gate":{},"max_retry_budget":1,"token_cost_governance":{"cost_ledger_path":"追踪/workflow/token-cost-ledger.jsonl","model_routing_policy":"host_default","tool_output_filter":"compact","retry_budget_result":"not_used"}}}
+JSON
+    node - "$REPO/scripts/lib/task-family-store.js" "$TMP_DIR/book" <<'NODE'
+const [storeFile,root]=process.argv.slice(2);const store=require(storeFile);
+const task=require(`${root}/追踪/workflow/tasks/wf-short/task.json`);
+const projected=store.ensureTaskFamily(root,{...task,status:'running',lifecycle:{status:'active'}},{write:true});
+task.task_family_id=projected.family.task_family_id;
+require('fs').writeFileSync(`${root}/追踪/workflow/tasks/wf-short/task.json`,JSON.stringify(task));
+require('fs').writeFileSync(`${root}/追踪/workflow/current-task.json`,JSON.stringify({workflow_id:'wf-short',task_dir:'追踪/workflow/tasks/wf-short',state_version:1}));
+NODE
+
+    node "$SCRIPT" --project-root "$TMP_DIR/book" --json > "$TMP_DIR/out.json"
+    node - "$TMP_DIR/out.json" <<'NODE'
+const out=JSON.parse(require('fs').readFileSync(process.argv[2],'utf8'));
+const card=(out.task_cards||[])[0];
+if(!card||card.status!=='paused') throw new Error(JSON.stringify(card));
 NODE
 }

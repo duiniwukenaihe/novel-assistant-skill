@@ -7,9 +7,11 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { acceptTransaction, inspectChapter, prepareTransaction } = require('./lib/chapter-commit-store');
 const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
+const { buildPendingAction, buildShortDraftPendingAction, decoratePendingAction } = require('./lib/workflow-action-renderer');
+const { initializeAssemblyIntegrityRevisionQueue } = require('./lib/short-feedback-revision-queue');
 const { validateShortSectionAcceptanceProof } = require('./lib/short-section-acceptance-proof');
 const { resolvePlannedSectionCount } = require('./lib/short-workflow-state');
-const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
+const { mutateTaskAuthority, resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson, atomicWriteText } = require('./lib/workflow-state-store');
 
@@ -83,6 +85,9 @@ function main() {
         const expectedPath = `正文/第${String(finding.section_index).padStart(3, '0')}节.md`;
         return item && (String(item.canonical_path || '') !== expectedPath || !String(item.section_commit_id || ''));
       });
+    const recovery = legacyMigrationAvailable
+      ? { status: 'legacy_migration_required', current_stage: task.current_stage, visible_response: '' }
+      : persistAssemblyRecovery(root, task, { missing, invalid, outsidePlan });
     return finish({
       status: 'short_story_assembly_blocked',
       planned_sections: plan.count,
@@ -99,6 +104,9 @@ function main() {
       migration_command: legacyMigrationAvailable
         ? `node scripts/short-section-artifact-migrate.js --project-root ${JSON.stringify(root)} --workflow-id ${JSON.stringify(workflowId)} --confirm --json`
         : '',
+      recovery_status: recovery.status,
+      recovery_stage: recovery.current_stage,
+      visible_response: recovery.visible_response,
     }, 0, args.json);
   }
 
@@ -189,6 +197,84 @@ function main() {
     ...outcome.presentation,
     ...(outcome.applied ? {} : { recovery: applyResult }),
   }, outcome.exitCode, args.json);
+}
+
+function persistAssemblyRecovery(root, task, findings) {
+  const missing = Array.isArray(findings.missing) ? findings.missing : [];
+  const invalid = Array.isArray(findings.invalid) ? findings.invalid : [];
+  const outsidePlan = Array.isArray(findings.outsidePlan) ? findings.outsidePlan : [];
+  try {
+    const next = mutateTaskAuthority(root, task.workflow_id, Number(task.state_version || 0), (draft) => {
+      draft.stage_execution = null;
+      draft.status = 'waiting_user';
+      draft.next_stop_reason = 'assembly_integrity_repair_required';
+      if (outsidePlan.length) {
+        draft.current_stage = 'section_plan_lock';
+        draft.scope = '全篇结构';
+        draft.pending_action = buildPendingAction(null, {
+          stage_id: 'section_plan_lock',
+          label: '重新确认总小节与计划外小节',
+          description: `发现计划外小节：${outsidePlan.join('、')}。先确认保留、并入或移除，再继续合稿。`,
+          risk_level: 'medium',
+          requires_user_confirm: true,
+        });
+        return draft;
+      }
+      const initialized = initializeAssemblyIntegrityRevisionQueue(draft, {
+        missing_sections: missing,
+        invalid_sections: invalid,
+      });
+      const current = Number((initialized.queue || {}).current_section_index || 0);
+      const missingCurrent = missing.includes(current);
+      if (missingCurrent) {
+        draft.current_stage = 'next_section_brief';
+        draft.pending_action = decoratePendingAction({
+          id: `pa-assembly-missing-section-${current}`,
+          question: `全文组装发现第 ${current} 节尚未形成已采用版本`,
+          options: [
+            { number: 1, action_id: 'continue_next_stage', target_stage: 'next_section_brief', label: `补齐并采用第 ${current} 节（推荐）`, risk_level: 'medium', requires_user_confirm: true },
+            { number: 2, action_id: 'inspect_current_state', label: '查看缺失小节与组装依据', risk_level: 'low', requires_user_confirm: false },
+            { number: 3, action_id: 'pause', label: '暂停并保存断点', risk_level: 'low', requires_user_confirm: false },
+            { number: 4, action_id: 'free_text', label: '输入其他要求', risk_level: 'low', requires_user_confirm: false },
+          ],
+          free_text_enabled: true,
+        });
+      } else {
+        draft.current_stage = 'draft_section';
+        draft.pending_action = buildShortDraftPendingAction({ stage_id: 'draft_section', risk_level: 'medium' }, draft);
+      }
+      draft.recommended_next = (draft.pending_action.options || []).map(option => ({
+        number: option.number,
+        action_id: option.action_id,
+        label: option.label,
+      }));
+      return draft;
+    }, { owner: 'short-story-assembly-recovery' });
+    return {
+      status: 'assembly_recovery_persisted',
+      current_stage: next.current_stage,
+      visible_response: renderRecovery(next),
+    };
+  } catch (error) {
+    return {
+      status: String((error || {}).code || 'assembly_recovery_persist_failed'),
+      current_stage: String(task.current_stage || ''),
+      visible_response: '组装问题已识别，但任务状态刚刚发生变化。请重新打开当前任务查看最新恢复队列。',
+    };
+  }
+}
+
+function renderRecovery(task) {
+  const queue = task.feedback_revision_queue || {};
+  const sections = Array.isArray(queue.affected_sections) ? queue.affected_sections.join('、') : '';
+  const options = ((task.pending_action || {}).options || [])
+    .map(option => `${option.number}. ${option.label}`)
+    .join('\n');
+  return [
+    sections ? `全文组装发现第 ${sections} 节需要重新验收；已建立复检队列，不会重写其他已采用小节。` : '全文组装发现结构范围冲突，已停在对应恢复任务。',
+    options,
+    '回复数字选择。',
+  ].filter(Boolean).join('\n');
 }
 
 function matchingAssemblyCommit(root, workflowId, text) {

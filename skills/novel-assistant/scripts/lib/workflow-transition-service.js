@@ -5,7 +5,10 @@ const fs = require('fs');
 const path = require('path');
 const { validateShortSectionAcceptanceProof } = require('./short-section-acceptance-proof');
 const { resolveShortAnchorNext, resolveShortQualityNext } = require('./short-section-acceptance-policy');
-const { activeShortFeedbackRevision } = require('./short-feedback-revision-queue');
+const {
+  activeShortFeedbackRevision,
+  previewShortFeedbackRevisionAcceptance,
+} = require('./short-feedback-revision-queue');
 
 function validateDetailOutlineQualityResult(result, task, projectRoot = '') {
   if (!task || String(task.workflow_type || '') !== 'long_write' || String(task.current_stage || '') !== 'detail_outline_review') {
@@ -395,7 +398,7 @@ function createWorkflowTransitionService(deps) {
       };
     }
 
-    if (!explicitNext && ['short_write', 'short_startup', 'private_short_startup'].includes(String((tpl || {}).workflow_type || ''))
+    if (['short_write', 'short_startup', 'private_short_startup'].includes(String((tpl || {}).workflow_type || ''))
       && stageId === 'section_accept_anchor' && !blocked) {
       if (!result.section_acceptance || typeof result.section_acceptance !== 'object') {
         return {
@@ -425,18 +428,24 @@ function createWorkflowTransitionService(deps) {
       const shortAnchorNext = resolveShortAnchorNext({ result, allowedNext: allowed });
       const revisionQueue = task ? task.feedback_revision_queue : null;
       const revisionActive = activeShortFeedbackRevision(task || {});
+      const revisionPreview = previewShortFeedbackRevisionAcceptance(
+        task || {},
+        Number((((result || {}).section_acceptance || {}).section_index) || 0),
+      );
+      const revisionContinues = revisionPreview.status === 'feedback_revision_continues';
+      const revisionCompletes = revisionPreview.status === 'feedback_revision_completes';
       const revisionCompleted = revisionQueue && String(revisionQueue.status || '') === 'completed';
-      const resolvedAnchorNext = revisionActive
+      const resolvedAnchorNext = revisionContinues
         ? 'next_section_brief'
-        : revisionCompleted ? 'full_story_assembly' : shortAnchorNext;
+        : (revisionCompletes || revisionCompleted) ? 'full_story_assembly' : shortAnchorNext;
       return {
         next_stage_id: resolvedAnchorNext,
         complete_current_stage: true,
         remaining_stages: buildRemainingForNext(tpl, stageId, resolvedAnchorNext, machine.completed_stages || [], []),
         blocked: false,
-        reason: revisionCompleted
+        reason: revisionCompletes || revisionCompleted
           ? 'short_feedback_revision_completed'
-          : revisionActive ? 'short_feedback_revision_next_section' : shortAnchorNext === 'full_story_assembly' ? 'short_story_sections_completed' : 'short_section_accepted_next_brief',
+          : revisionContinues || revisionActive ? 'short_feedback_revision_next_section' : shortAnchorNext === 'full_story_assembly' ? 'short_story_sections_completed' : 'short_section_accepted_next_brief',
       };
     }
 

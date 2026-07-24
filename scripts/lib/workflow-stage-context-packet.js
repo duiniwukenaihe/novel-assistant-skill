@@ -34,6 +34,7 @@ const fs = require('fs');
 const path = require('path');
 const { compactToTokens, estimateTokens } = require('./context-budget');
 const { inferShortSectionIndex } = require('./short-workflow-state');
+const { currentShortFeedbackRevisionSection } = require('./short-feedback-revision-queue');
 const { atomicWriteJson, atomicWriteText } = require('./workflow-state-store');
 const { buildShortMemorySnapshot } = require('./short-memory-snapshot');
 const {
@@ -63,6 +64,8 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
 
   const projectState = readProjectState(root);
   const sectionIndex = positiveInteger(
+    currentShortFeedbackRevisionSection(task)
+    ||
     inferShortSectionIndex({
       projectState,
       stageId,
@@ -317,6 +320,9 @@ function collectAllowedAssets({ root, sectionIndex, stageId, task, memorySnapsho
       inline: JSON.stringify(task.accepted_plan, null, 2),
     }
     : null;
+  const acceptedRevisionPlan = (BRIEF_STAGES.has(stageId) || DRAFT_STAGES.has(stageId) || REVIEW_STAGES.has(stageId))
+    ? activeRevisionPlanAsset(task, sectionIndex)
+    : null;
   if (stageId === 'feedback_impact_sync') {
     return {
       pendingFeedback,
@@ -338,6 +344,7 @@ function collectAllowedAssets({ root, sectionIndex, stageId, task, memorySnapsho
   return {
     pendingFeedback,
     memorySnapshot: memoryAsset,
+    acceptedRevisionPlan,
     outlineContract: FEEDBACK_STAGES.has(stageId) ? null : outlineContract,
     brief: BRIEF_STAGES.has(stageId)
       ? null
@@ -356,6 +363,44 @@ function collectAllowedAssets({ root, sectionIndex, stageId, task, memorySnapsho
   };
 }
 
+function activeRevisionPlanAsset(task = {}, sectionIndex) {
+  const queue = task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
+    ? task.feedback_revision_queue
+    : null;
+  const plan = task.accepted_plan && typeof task.accepted_plan === 'object'
+    ? task.accepted_plan
+    : null;
+  if (!queue || String(queue.status || '') !== 'running' || !plan) return null;
+  const item = (Array.isArray(queue.items) ? queue.items : [])
+    .find(row => Number((row || {}).section_index || 0) === sectionIndex);
+  if (!item || String(item.status || '') === 'accepted') return null;
+  const group = (Array.isArray(queue.groups) ? queue.groups : [])
+    .find(row => (Array.isArray((row || {}).section_indices) ? row.section_indices : []).map(Number).includes(sectionIndex));
+  return {
+    id: `${String(plan.plan_id || 'accepted-plan')}#section-${String(sectionIndex).padStart(3, '0')}`,
+    path: String(task.accepted_plan_path || '[workflow accepted_plan]'),
+    kind: 'accepted_revision_obligations',
+    required: true,
+    inline: JSON.stringify({
+      plan_id: String(plan.plan_id || ''),
+      feedback_id: String(queue.feedback_id || plan.feedback_id || ''),
+      section_index: sectionIndex,
+      plan_status: String(plan.status || ''),
+      memory_constraint_source: '当前作品记忆快照.canon_constraints',
+      queue_item: {
+        brief_status: String(item.brief_status || ''),
+        prose_status: String(item.prose_status || ''),
+      },
+      revision_group: group ? {
+        group_id: String(group.group_id || ''),
+        goal: String(group.goal || ''),
+        completion_rule: String(group.completion_rule || ''),
+      } : null,
+      instruction: '本节 Brief、正文复检和质量判断必须兑现当前作品记忆快照中的已确认规划约束；如与当前大纲冲突，先返回规划影响链，不得静默忽略。',
+    }, null, 2),
+  };
+}
+
 function assemblePacket({ root, assets, sectionIndex, stageId, tokenBudget }) {
   const entries = [];
   const omitted = [];
@@ -368,6 +413,7 @@ function assemblePacket({ root, assets, sectionIndex, stageId, tokenBudget }) {
     assets.acceptedPlan,
     assets.pendingFeedback,
     assets.memorySnapshot,
+    assets.acceptedRevisionPlan,
     assets.outlineContract,
     assets.brief,
     assets.currentDraft,
@@ -551,7 +597,7 @@ function outlineContractAsset(root, sectionIndex, stageId) {
     };
   }
   const instruction = BRIEF_STAGES.has(stageId)
-    ? '必须逐项复制「大纲覆盖映射」，并在因果动作链中标注每个必写 ID；不得删除、替换或提前兑现。'
+    ? '必须在写作提要的自然结构中覆盖以下剧情义务；不要把机器 ID 或覆盖映射复制进写作提要，工作流会生成独立校验旁证。'
     : REVIEW_STAGES.has(stageId) || ACCEPTANCE_STAGES.has(stageId)
       ? '质量证据必须返回 outline_contract_digest 与 outline_coverage，每个必写 ID 都要引用正文中可核验的原句。'
       : '正文必须执行所有 required_in_draft 条目；不得在写作时改写小节功能、核心爆点或结尾后果。';

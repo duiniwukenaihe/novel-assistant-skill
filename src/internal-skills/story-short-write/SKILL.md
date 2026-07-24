@@ -370,7 +370,7 @@ metadata: {"openclaw":{"source":"https://github.com/worldwonderer/oh-story-claud
 题材例外：爽文、打脸、系统流等高信息密度题材可以更短更密；克制心死、推理沉淀或真相揭示可以略长。不要用固定字数把所有节切成同一种长度。
 **字数统计必须优先使用项目脚本**：`node scripts/chapter-text-stats.js 正文.md --json --sections`。不得临时拼接标题、正文结尾或多行脚本做脆弱统计；短篇小节标题可能在文件第一行。若项目缺少该脚本，才回退跨平台字符统计 `for PYBIN in python3 python py; do "$PYBIN" -c "" 2>/dev/null && break; done; "$PYBIN" -c "from pathlib import Path; print(len(Path('文件路径').read_text(encoding='utf-8')))"`。Windows / DeepSeek / Claude Code 组合下不要让模型自行估算字数；`wc -m` 仅作为 macOS/Linux 备选，禁止使用 `wc -c`（字节数）。如果当前 agent/工具环境没有 Node/Bash/Python 权限，必须明确声明“未完成机器字数验证”，并按行数速算作为临时估计，不得声称已通过字数硬验证。
 **字数判定必须使用容忍策略**：优先运行 `node scripts/word-count-tolerance.js --actual <当前节中文字数> --target <本节目标字数> --unit section --json`。返回 `under_target_within_tolerance` 或 `over_target_review_pacing` 时不是失败；只在 `under_hard_floor` 或故事质量门判定“缺剧情功能”时修订当前节。
-**还要遵守作品内篇幅基准**：第 1 个已采用小节先建立临时基准；累计 3 个普通小节后，改用最近已采用普通小节的滚动中位数，避免某一节偶然过长/过短把全书带偏。篇幅策略由统一机器门内部调用，主会话不得单独运行 `short-section-length-policy.js`。明显偏离时先检查小节功能；过渡、反转、高潮、收束等结构例外由 Brief 声明，并仍须通过机器门和故事质量门。
+**还要记录作品内篇幅基准**：第 1 个已采用小节先建立临时基准；累计 3 个普通小节后，改用最近已采用普通小节的滚动中位数，识别篇幅曲线是否失衡。篇幅策略由统一机器门内部调用，主会话不得单独运行 `short-section-length-policy.js`。整篇写作、整篇回炉或多节队列中的篇幅偏差只记为质量提醒，不得单独触发补字、删字或修订循环；整篇收束时结合小节功能统一决定补写、压缩或保留。用户明确开启的单节任务若出现篇幅偏差，则显示紧凑数字菜单：保留并继续、补写或压缩、输入其他要求或开启新任务。正文为空或残缺到无法审阅时仍须阻断。
 
 **节数守恒**：正文节数必须等于小节大纲规划节数。不得合并多节为一节。如果写作中发现某节不需要独立存在，应回到大纲阶段调整，而非在写作时偷减。
 

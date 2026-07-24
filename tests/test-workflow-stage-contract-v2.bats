@@ -60,6 +60,21 @@ if (machineGate.update_mode !== 'none' || machineGate.projection_mode !== 'none'
   throw new Error(JSON.stringify(machineGate));
 }
 
+const assembly = resolveStageMemoryPolicy(BASE_TEMPLATES.short_write, 'full_story_assembly');
+if (assembly.mode !== 'none' || assembly.context_source !== 'none') throw new Error(JSON.stringify(assembly));
+if (assembly.update_mode !== 'none' || assembly.projection_mode !== 'none' || assembly.receipt_required !== false) {
+  throw new Error(JSON.stringify(assembly));
+}
+
+const fullReview = resolveStageMemoryPolicy(BASE_TEMPLATES.short_write, 'full_story_review');
+if (fullReview.mode !== 'required' || fullReview.context_source !== 'stage_context') throw new Error(JSON.stringify(fullReview));
+if (fullReview.token_budget !== 0 || fullReview.receipt_required !== true) throw new Error(JSON.stringify(fullReview));
+
+for (const stageId of ['deslop', 'final_check']) {
+  const deterministic = resolveStageMemoryPolicy(BASE_TEMPLATES.short_write, stageId);
+  if (deterministic.mode !== 'none' || deterministic.context_source !== 'none') throw new Error(`${stageId}: ${JSON.stringify(deterministic)}`);
+}
+
 const setup = resolveStageMemoryPolicy(BASE_TEMPLATES.setup_update, 'version_check');
 if (setup.mode !== 'none' || setup.context_source !== 'none') throw new Error(JSON.stringify(setup));
 if (setup.update_mode !== 'none' || setup.projection_mode !== 'none' || setup.receipt_required !== false) throw new Error(JSON.stringify(setup));
@@ -274,5 +289,49 @@ if (visible.status !== 'workflow_task_overview' || !String(visible.text || '').i
 if (!String(visible.text || '').includes('当前子任务')) throw new Error(JSON.stringify(out));
 if (!Array.isArray(visible.options) || visible.options.length !== 4) throw new Error(JSON.stringify(out));
 if (visible.options[0].action_id !== 'open_current_subtask') throw new Error(JSON.stringify(out));
+NODE
+
+    node "$REPO/scripts/workflow-task-inbox.js" --project-root "$project" --action show_unfinished_tasks --json > "$TMP_DIR/overview-inbox.json"
+    node - "$TMP_DIR/overview-inbox.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const actions = Array.isArray(out.next_actions) ? out.next_actions : [];
+if (actions.some(action => action.action_id === 'open_task_overview')) throw new Error(JSON.stringify(out));
+if (!actions.length) throw new Error('current subtask actions are missing');
+NODE
+}
+
+@test "task overview is shown once per task plan version" {
+    node - "$REPO" <<'NODE'
+const path = require('path');
+const repo = process.argv[2];
+const {
+  markTaskOverviewPresented,
+  taskOverviewPresentationRequired,
+} = require(path.join(repo, 'scripts/lib/workflow-task-overview-state.js'));
+
+const task = {
+  workflow_id: 'wf-overview-once',
+  workflow_type: 'short_write',
+  user_goal: '整篇回炉',
+  scheduling_contract: { task_form: 'bounded_loop' },
+  feedback_revision_queue: {
+    status: 'running',
+    items: [
+      { section_index: 1, title: '第一节', status: 'pending' },
+      { section_index: 2, title: '第二节', status: 'pending' },
+    ],
+  },
+};
+
+if (!taskOverviewPresentationRequired(task)) throw new Error('first entry must show overview');
+markTaskOverviewPresented(task, '2026-07-23T00:00:00.000Z');
+if (taskOverviewPresentationRequired(task)) throw new Error('same plan must continue with current subtask');
+
+task.feedback_revision_queue.items[0].status = 'accepted';
+if (taskOverviewPresentationRequired(task)) throw new Error('progress changes must not reopen overview');
+
+task.feedback_revision_queue.items.push({ section_index: 3, title: '第三节', status: 'pending' });
+if (!taskOverviewPresentationRequired(task)) throw new Error('structural plan changes must reopen overview');
 NODE
 }

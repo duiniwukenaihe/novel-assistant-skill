@@ -9,12 +9,12 @@ const { classifyWorkflowApply, recoverableStageResult } = require('./lib/workflo
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { inferShortSectionIndex } = require('./lib/short-workflow-state');
+const { currentShortFeedbackRevisionSection } = require('./lib/short-feedback-revision-queue');
 const { writeBriefFreshnessSnapshot } = require('./lib/short-brief-freshness');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { ensureShortProjectState } = require('./lib/short-project-state');
 const {
   buildShortSectionOutlineContract,
-  renderOutlineCoverageTemplate,
   validateBriefOutlineCoverage,
 } = require('./lib/short-section-outline-contract');
 
@@ -42,7 +42,8 @@ function main() {
   } catch (error) {
     return finish({ status: String(error.status || error.code || 'short_project_ownership_conflict'), workflow_id: workflowId, instruction: '当前目录属于另一个未完成短篇任务，请先从任务收件箱恢复。' }, 0, args.json);
   }
-  const sectionIndex = inferShortSectionIndex({ projectState, stageId, scope: String(task.scope || '') });
+  const sectionIndex = currentShortFeedbackRevisionSection(task)
+    || inferShortSectionIndex({ projectState, stageId, scope: String(task.scope || '') });
   if (!sectionIndex) return finish({ status: 'blocked_short_section_identity_missing', instruction: '当前任务没有可靠的小节身份；先由 workflow 恢复小节范围，不得默认生成第1节 Brief。' }, 0, args.json);
   const titleLock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
   const titleEntry = (Array.isArray(titleLock.sections) ? titleLock.sections : []).find((item) => Number((item || {}).section_index) === sectionIndex);
@@ -90,8 +91,10 @@ function main() {
       brief: briefRel,
       outline_contract_digest: outlineContract.contract_digest,
       findings: outlineCoverage.findings,
-      required_template: renderOutlineCoverageTemplate(outlineContract),
-      instruction: '当前写作提要漏写或改写了已确认大纲。只重建本节 Brief：逐项保留大纲义务并映射到因果动作链；不得进入正文。',
+      missing_obligations: outlineCoverage.findings
+        .filter(item => item.obligation_id)
+        .map(item => item.obligation_id),
+      instruction: '当前写作提要缺少已确认的大纲义务。只补缺失的剧情功能、因果动作或承接钩子；不要复制机器编号，也不得进入正文。',
     }, 0, args.json);
   }
   const briefQuality = analyzeBriefQuality(text);
@@ -117,6 +120,20 @@ function main() {
     : '';
   const freshness = writeBriefFreshnessSnapshot({ projectRoot: root, briefPath: briefRel, sectionIndex, acceptedAnchorPath: acceptedAnchor });
   if (freshness.status !== 'snapshot_written') return finish({ status: 'short_brief_dependencies_changed', freshness, instruction: '规划依赖已变化，重新生成当前节写作提要。' }, 0, args.json);
+  const coverageRel = `${task.task_dir}/artifacts/section-${String(sectionIndex).padStart(3, '0')}-brief-outline-coverage.json`;
+  const coverageFile = safeProjectFile(root, coverageRel);
+  if (!coverageFile) return finish({ status: 'blocked_outline_coverage_path_unsafe', path: coverageRel }, 2, args.json);
+  atomicWriteJson(coverageFile, {
+    schema_version: '1.0.0',
+    workflow_id: workflowId,
+    section_index: sectionIndex,
+    brief: briefRel,
+    coverage_mode: outlineCoverage.coverage_mode,
+    outline_contract_digest: outlineContract.contract_digest,
+    section_block_digest: outlineContract.section_block_digest,
+    coverage: outlineCoverage.coverage,
+    generated_at: new Date().toISOString(),
+  });
 
   const packetRel = String(execution.expected_result_packet || `${task.task_dir}/result-packets/${stageId}.result.json`);
   const packetFile = safeProjectFile(root, packetRel);
@@ -128,9 +145,9 @@ function main() {
     step_id: stageId,
     owner_module: String(execution.owner_module || task.workflow_owner || ''),
     step_status: 'completed',
-    outputs: [briefRel, freshness.sidecar],
-    changed_files: [briefRel, freshness.sidecar, '追踪/private-short-extension/project-state.json'],
-    created_files: [freshness.sidecar],
+    outputs: [briefRel, freshness.sidecar, coverageRel],
+    changed_files: [briefRel, freshness.sidecar, coverageRel, '追踪/private-short-extension/project-state.json'],
+    created_files: [freshness.sidecar, coverageRel],
     evidence: [{
       brief: briefRel,
       section_index: sectionIndex,
@@ -139,6 +156,8 @@ function main() {
       outline_contract_digest: outlineContract.contract_digest,
       section_block_digest: outlineContract.section_block_digest,
       outline_obligations: outlineContract.obligations.map((item) => item.id),
+      outline_coverage_mode: outlineCoverage.coverage_mode,
+      outline_coverage_sidecar: coverageRel,
     }],
     verification_result: 'pass',
     blocking_findings: [],

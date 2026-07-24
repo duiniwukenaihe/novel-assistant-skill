@@ -130,6 +130,79 @@ fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
 NODE
 }
 
+@test "quality gate accepts equivalent review card fields instead of looping on missing schema" {
+    prepare_valid_quality_evidence
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,id]=process.argv.slice(2);
+const file=path.join(root,'追踪/workflow/tasks',id,'artifacts/section-006-story-review.json');
+const card=JSON.parse(fs.readFileSync(file,'utf8'));
+card.candidate_digest=String(card.draft_digest||'').replace(/^sha256:/,'');
+card.draft_digest='stale-digest-from-previous-candidate';
+card.workflow_id='model-copied-wrong-workflow-id';
+card.section_index=88;
+card.outline_contract_digest='model-copied-wrong-contract-digest';
+card.quality_dimensions=card.checks.map((row)=>({
+  dimension:row.id,status:row.status,reason:row.evidence,evidence_quote:row.evidence_quote
+}));
+delete card.checks;
+card.draft_outline_obligations=card.outline_coverage.map((row)=>({
+  obligation_id:row.id,status:row.status,evidence_quote:row.evidence_quote
+}));
+delete card.outline_coverage;
+card.revealed_information=card.acceptance_metadata.revealed_information.join('；');
+card.character_state='林昭与对手公开对抗并失去工作权限';
+card.open_hook=card.acceptance_metadata.open_hook;
+delete card.acceptance_metadata;
+fs.writeFileSync(file,JSON.stringify(card,null,2)+'\n');
+NODE
+
+    run node "$QUALITY_GATE" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"packet_ready"'* ]]
+    [[ "$output" != *'quality_evidence_required'* ]]
+}
+
+@test "quality gate returns an exact writable schema when evidence is genuinely incomplete" {
+    prepare_valid_quality_evidence
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,id]=process.argv.slice(2);
+const file=path.join(root,'追踪/workflow/tasks',id,'artifacts/section-006-story-review.json');
+const card=JSON.parse(fs.readFileSync(file,'utf8'));
+card.checks=[];
+card.outline_coverage=[];
+delete card.acceptance_metadata;
+fs.writeFileSync(file,JSON.stringify(card,null,2)+'\n');
+NODE
+
+    run node "$QUALITY_GATE" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"quality_evidence_required"'* ]]
+    [[ "$output" == *'"evidence_schema"'* ]]
+    [[ "$output" == *'"checks"'* ]]
+    [[ "$output" == *'"outline_coverage"'* ]]
+    [[ "$output" == *'"acceptance_metadata"'* ]]
+}
+
+@test "quality gate repairs unescaped quotes in an evidence quote once" {
+    prepare_valid_quality_evidence
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,id]=process.argv.slice(2);
+const file=path.join(root,'追踪/workflow/tasks',id,'artifacts/section-006-story-review.json');
+const card=JSON.parse(fs.readFileSync(file,'utf8'));
+const quote=card.checks[0].evidence_quote;
+const raw=fs.readFileSync(file,'utf8').replace(JSON.stringify(quote),`""${quote}""`);
+fs.writeFileSync(file,raw);
+NODE
+
+    run node "$QUALITY_GATE" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"packet_ready"'* ]]
+    jq -e . "$BOOK/追踪/workflow/tasks/$WORKFLOW_ID/artifacts/section-006-story-review.json" >/dev/null
+}
+
 @test "repair finalizer reports an unstarted stage as recoverable state instead of console error" {
     run node "$FINALIZE" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
     [ "$status" -eq 0 ]
@@ -220,7 +293,7 @@ NODE
     [[ "$output" == *'--normalize-quotes'* ]]
 }
 
-@test "changed draft at acceptance is rechecked and short length becomes a recoverable repair stage" {
+@test "single-section task records length variance and asks before continuing" {
     node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
 const crypto=require('crypto'),fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
 const stateFile=path.join(root,'追踪/private-short-extension/project-state.json');
@@ -247,15 +320,36 @@ NODE
 
     run node "$MACHINE_GATE" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --recheck-policy --apply --json
     [ "$status" -eq 0 ]
-    [[ "$output" == *'"gate_status":"blocking"'* ]]
-    [[ "$output" == *'"next_stage":"section_repair_loop"'* ]]
+    [[ "$output" == *'"status":"short_length_choice_required"'* ]]
+    [[ "$output" == *'"gate_status":"pass"'* ]]
+    [[ "$output" == *'"next_stage":"quality_gate"'* ]]
+    [[ "$output" == *'"accept_length_variance"'* ]]
+    [[ "$output" == *'"revise_length_variance"'* ]]
     node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
 const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
-const packet=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'result-packets/section_machine_gate.result.json'),'utf8'));
-if(!packet.blocking_findings.some((item)=>item.code==='short-section-length-policy')) throw new Error(JSON.stringify(packet.blocking_findings));
-if(packet.length_policy.verdict!=='outside_story_band') throw new Error(JSON.stringify(packet.length_policy));
+const packet=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'result-packets/section_machine_gate.section-006.result.json'),'utf8'));
+if(packet.blocking_findings.some((item)=>item.code==='short-section-length-policy')) throw new Error(JSON.stringify(packet.blocking_findings));
+if(packet.length_policy.verdict!=='outside_story_band_deferred'||packet.length_policy.blocking) throw new Error(JSON.stringify(packet.length_policy));
 const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));
-if(task.current_stage!=='section_repair_loop') throw new Error(JSON.stringify(task));
+if(task.current_stage!=='quality_gate') throw new Error(JSON.stringify(task));
+if((task.stage_execution||{}).status!=='paused'||(task.pending_action.options||[]).length!==3) throw new Error(JSON.stringify(task));
+NODE
+
+    task_file="$BOOK/追踪/workflow/tasks/$WORKFLOW_ID/task.json"
+    pending_id="$(jq -r '.pending_action.id' "$task_file")"
+    choice_hash="$(jq -r '.pending_action.visible_choice_hash' "$task_file")"
+    state_version="$(jq -r '.state_version' "$task_file")"
+    run node "$STATE_MACHINE" resolve-action --project-root "$BOOK" --input 1 \
+      --pending-action-id "$pending_id" --visible-choice-hash "$choice_hash" \
+      --state-version "$state_version" --book-root "$BOOK" --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"stage_started"'* ]]
+    [[ "$output" == *'"action_id":"accept_length_variance"'* ]]
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
+const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));
+if(task.current_stage!=='quality_gate'||(task.stage_execution||{}).status!=='running') throw new Error(JSON.stringify(task));
+if((task.short_length_choice||{}).status!=='accepted_for_final_review') throw new Error(JSON.stringify(task.short_length_choice));
 NODE
 }
 

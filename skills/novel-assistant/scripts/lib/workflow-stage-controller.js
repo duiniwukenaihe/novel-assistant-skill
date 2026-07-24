@@ -38,6 +38,7 @@ const { buildEffectiveTemplates, resolveTemplateForTask } = require('./workflow-
 const { createWorkflowTransitionService } = require('./workflow-transition-service');
 const authority = require('./workflow-task-authority');
 const store = require('./workflow-state-store');
+const { ensureTaskFamily } = require('./task-family-store');
 
 // The transition service needs the same lifecycle helpers the state machine
 // wires up. We provide minimal implementations sufficient for stage routing:
@@ -147,7 +148,11 @@ function appendHistory(root, event, payload) {
 // host needs the full advance flow. The controller's scope is: route, persist,
 // journal once. Tests assert next_stage / recovery_count / heartbeat, not the
 // enriched fields.
-function applyTransitionToTask(task, transition, result, now) {
+function lifecycleRole(tpl, stageId) {
+  return String(((((tpl || {}).unit_lifecycle_contract || {}).stage_roles || {})[stageId]) || '');
+}
+
+function applyTransitionToTask(task, tpl, transition, result, now) {
   const stageId = String(result.stage_id || task.current_stage || '');
   const nextStageId = String(transition.next_stage_id || '');
   const machine = task.machine || { completed_stages: [], remaining_stages: [] };
@@ -162,6 +167,35 @@ function applyTransitionToTask(task, transition, result, now) {
   task.current_stage = nextStageId || stageId;
   task.current_step = nextStageId || stageId;
   task.status = nextStageId ? 'running' : 'completed';
+  task.lifecycle = {
+    ...(task.lifecycle || {}),
+    status: nextStageId ? 'active' : 'completed',
+    updated_at: now,
+    completed_at: nextStageId ? '' : now,
+  };
+  const unit = task.unit_lifecycle && typeof task.unit_lifecycle === 'object'
+    ? task.unit_lifecycle
+    : {};
+  const completedRoles = Array.isArray(unit.completed_roles) ? unit.completed_roles.slice() : [];
+  const completedRole = lifecycleRole(tpl, stageId);
+  if (transition.complete_current_stage && completedRole && !completedRoles.includes(completedRole)) {
+    completedRoles.push(completedRole);
+  }
+  task.unit_lifecycle = {
+    ...unit,
+    unit_type: String(unit.unit_type || (((tpl || {}).unit_lifecycle_contract || {}).unit_type) || 'workflow_batch'),
+    status: nextStageId ? 'active' : 'completed',
+    updated_at: now,
+    current_scope: String(unit.current_scope || task.scope || ''),
+    current_stage: nextStageId || stageId,
+    current_role: nextStageId ? lifecycleRole(tpl, nextStageId) : 'handoff_and_next',
+    stage_roles: unit.stage_roles || (((tpl || {}).unit_lifecycle_contract || {}).stage_roles) || {},
+    required_sequence: unit.required_sequence || (((tpl || {}).unit_lifecycle_contract || {}).required_sequence) || [],
+    completed_roles: completedRoles,
+    last_trusted_artifact: transition.complete_current_stage
+      ? (trustedArtifactFromResult(result) || String(unit.last_trusted_artifact || ''))
+      : String(unit.last_trusted_artifact || ''),
+  };
   task.machine = {
     ...machine,
     completed_stages: completedStages,
@@ -169,6 +203,18 @@ function applyTransitionToTask(task, transition, result, now) {
     last_transition: transition.reason || (nextStageId ? 'stage_completed' : 'workflow_completed'),
     last_result_packet: String(result.result_packet_path || ''),
     next_stop_reason: nextStageId ? 'ready_next_stage' : 'completed',
+    allowed_actions: nextStageId ? ['continue_next_stage', 'pause'] : [],
+    last_execution_event: 'stage_completed',
+  };
+  task.stage_execution = {
+    ...(task.stage_execution || {}),
+    status: 'completed',
+    stage_id: stageId,
+    step_id: String(result.step_id || stageId),
+    owner_module: String(result.owner_module || ((task.stage_execution || {}).owner_module) || ''),
+    completed_at: now,
+    result_packet: String(result.result_packet_path || ''),
+    expected_result_packet: '',
   };
   task.runtime_guard = task.runtime_guard || {};
   const previousTrusted = String(((task.runtime_guard.heartbeat || {}).latest_trusted_artifact) || '');
@@ -185,6 +231,7 @@ function applyTransitionToTask(task, transition, result, now) {
     resume_from: nextStageId || stageId,
     expected_result_packet: '',
   };
+  if (!nextStageId) task.pending_action = null;
   return task;
 }
 
@@ -253,9 +300,14 @@ function attemptAdvance(options) {
 
   const now = new Date().toISOString();
   const next = authority.mutateTaskAuthority(root, workflowId, expectedStateVersion, (draft) => {
-    applyTransitionToTask(draft, transition, result, now);
+    applyTransitionToTask(draft, tpl, transition, result, now);
     return draft;
   }, { owner: 'workflow-stage-controller' });
+
+  // task.json 是任务真相源；阶段提交后立即刷新任务族投影，避免任务已完成但
+  // family / inbox 仍显示 active。这里在 authority 事务完成后单独持项目锁，
+  // 不与 mutateTaskAuthority 的锁嵌套。
+  if (next.task_family_id) ensureTaskFamily(root, next, { write: true });
 
   // Append exactly one journal transition + one history line for this advance.
   // This is the "single journal transition per advance" guarantee.
@@ -276,7 +328,10 @@ function attemptAdvance(options) {
     workflow_id: workflowId,
     completed_stage: stageId,
     next_stage: String(transition.next_stage_id || ''),
-    next_action: next.current_stage ? `continue_${next.current_stage}` : 'workflow_completed',
+    next_action: transition.next_stage_id ? `continue_${transition.next_stage_id}` : 'workflow_completed',
+    next_command: transition.next_stage_id
+      ? 'node scripts/workflow-state-machine.js next-candidates --project-root . --json'
+      : '',
     recovery_count: 0,
     last_trusted_artifact: trustedArtifact,
     reason: transition.reason || '',
