@@ -12,7 +12,8 @@ const { isManagedShortProject } = require('./lib/canonical-write-policy');
 const USAGE = `Usage: node scripts/novel-assistant-sync-runtime.js [--project-root .] [--skill-dir /absolute/novel-assistant] [--dry-run] [--confirm-conflicts] [--json]
 
 Synchronize only the writing collaboration runtime:
-  hooks, rules, agents, agent references, runtime scripts, write policy and .story-deployed.
+  hooks, rules, agents, agent references, Codex AGENTS.md routing block,
+  runtime scripts, write policy and .story-deployed.
 
 It never moves or rewrites prose, outline, chapter detail, setting, tracking ledgers,
 or migration targets. It only initializes missing write-policy metadata. Layout migration
@@ -43,18 +44,27 @@ assertDirectory(setupDir, 'story-setup internal skill dir');
 
 const managedPlan = buildManagedPlan();
 const plan = buildPlan(managedPlan);
+const codexRouteValidation = validateCodexRouteMarkers();
+const codexRouteConflicts = codexRouteValidation.status === 'valid' ? [] : [{
+  path: 'AGENTS.md',
+  reason: 'invalid_novel_assistant_codex_route_markers',
+  detail: codexRouteValidation.reason,
+  owned: false,
+}];
+const allConflicts = managedPlan.conflicts.concat(codexRouteConflicts);
+const blockedCodexRoute = codexRouteConflicts.length > 0;
 const plannedConfirmationRequired = managedPlan.conflicts.length > 0 && (!args.confirmConflicts || args.dryRun);
 let managedApplyResult = null;
 let runtimeSafeFs = null;
 
-if (!args.dryRun && !plannedConfirmationRequired) {
+if (!args.dryRun && !plannedConfirmationRequired && !blockedCodexRoute) {
   runtimeSafeFs = createRuntimeSafeFs(managedProjectRoot);
   managedApplyResult = runtimeSafeFs.capability.status === 'ready'
     ? applyPlan(plan, runtimeSafeFs)
     : {
       status: 'blocked_runtime_safe_fs_unavailable',
       changed: 0,
-      conflicts: managedPlan.conflicts,
+      conflicts: allConflicts,
       runtime_safe_fs: runtimeSafeFs.capability,
     };
 }
@@ -64,7 +74,9 @@ const confirmationRequired = plannedConfirmationRequired
   || (managedApplyResult && managedApplyResult.status === 'confirmation_required');
 
 const result = {
-  status: blockedRuntimeSafeFs
+  status: blockedCodexRoute
+    ? 'blocked_invalid_codex_route_markers'
+    : blockedRuntimeSafeFs
     ? 'blocked_runtime_safe_fs_unavailable'
     : confirmationRequired
       ? 'confirmation_required'
@@ -84,7 +96,7 @@ const result = {
   })),
   conflicts: managedApplyResult && Array.isArray(managedApplyResult.conflicts)
     ? managedApplyResult.conflicts
-    : managedPlan.conflicts,
+    : allConflicts,
   runtime_safe_fs: managedApplyResult && managedApplyResult.runtime_safe_fs
     ? managedApplyResult.runtime_safe_fs
     : { status: 'not_checked' },
@@ -93,13 +105,21 @@ const result = {
   shortStateStorage: shortStateStorageStatus(projectRoot),
   shortStateStorageMigrationCommand: shortStateStorageMigrationCommand(projectRoot),
   protectedContent: ['正文', '大纲', '细纲', '设定', '追踪正文资产'],
-  confirmation_command: confirmationRequired
+  confirmation_command: confirmationRequired && !blockedCodexRoute
     ? 'node scripts/novel-assistant-sync-runtime.js --project-root . --json --confirm-conflicts'
     : '',
 };
 
 if (args.json) {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+} else if (blockedCodexRoute) {
+  process.stdout.write([
+    'novel-assistant writing collaboration runtime blocked',
+    `project: ${projectRoot}`,
+    `status: ${result.status}`,
+    'reason: AGENTS.md contains invalid or conflicting novel-assistant route markers',
+    '',
+  ].join('\n'));
 } else if (blockedRuntimeSafeFs) {
   process.stdout.write([
     'novel-assistant writing collaboration runtime blocked',
@@ -118,7 +138,7 @@ if (args.json) {
   ].join('\n'));
 }
 
-if ((blockedRuntimeSafeFs || confirmationRequired) && !args.dryRun) process.exitCode = 2;
+if ((blockedCodexRoute || blockedRuntimeSafeFs || confirmationRequired) && !args.dryRun) process.exitCode = 2;
 
 function parseArgs(argv) {
   const parsed = { projectRoot: '', skillDir: '', dryRun: false, confirmConflicts: false, json: false };
@@ -147,11 +167,68 @@ function parseArgs(argv) {
 function buildPlan() {
   const operations = [];
   operations.push(managedFilesOp());
+  operations.push(mergeCodexRouteOp());
   operations.push(mergeSettingsHooksOp());
   operations.push(writePolicyOp());
   operations.push(writeSentinelOp());
   operations.push(touchFileOp(path.join(projectRoot, '.claude', '.agents-pending-restart'), 'pending-restart'));
   return operations;
+}
+
+function mergeCodexRouteOp() {
+  const source = path.join(setupDir, 'references', 'codex', 'AGENTS.md.block.tmpl');
+  const target = path.join(projectRoot, 'AGENTS.md');
+  const block = fs.readFileSync(source, 'utf8').trim();
+  return {
+    type: 'codex-route',
+    source,
+    target,
+    count: 1,
+    apply(safeFs) {
+      const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
+      const mode = fs.existsSync(target) ? fs.statSync(target).mode & 0o777 : 0o644;
+      safeFs.writeFile('AGENTS.md', Buffer.from(mergeMarkedBlock(existing, block)), mode);
+    },
+  };
+}
+
+function mergeMarkedBlock(existing, block) {
+  const start = '<!-- novel-assistant:codex-route:start -->';
+  const end = '<!-- novel-assistant:codex-route:end -->';
+  const normalizedBlock = `${start}\n${block}\n${end}`;
+  const startIndex = existing.indexOf(start);
+  const endIndex = existing.indexOf(end, startIndex + start.length);
+  if (startIndex >= 0 && endIndex >= 0) {
+    const suffixStart = endIndex + end.length;
+    return `${existing.slice(0, startIndex)}${normalizedBlock}${existing.slice(suffixStart)}`.replace(/\s*$/, '\n');
+  }
+  const prefix = existing.trimEnd();
+  return `${prefix ? `${prefix}\n\n` : ''}${normalizedBlock}\n`;
+}
+
+function validateCodexRouteMarkers() {
+  const target = path.join(projectRoot, 'AGENTS.md');
+  if (!fs.existsSync(target)) return { status: 'valid', reason: '' };
+  const existing = fs.readFileSync(target, 'utf8');
+  const start = '<!-- novel-assistant:codex-route:start -->';
+  const end = '<!-- novel-assistant:codex-route:end -->';
+  const starts = markerIndexes(existing, start);
+  const ends = markerIndexes(existing, end);
+  if (starts.length === 0 && ends.length === 0) return { status: 'valid', reason: '' };
+  if (starts.length === 1 && ends.length === 1 && starts[0] < ends[0]) return { status: 'valid', reason: '' };
+  return { status: 'invalid', reason: `start_count=${starts.length},end_count=${ends.length},ordered=${starts.length === 1 && ends.length === 1 && starts[0] < ends[0]}` };
+}
+
+function markerIndexes(content, marker) {
+  const indexes = [];
+  let offset = 0;
+  while (offset < content.length) {
+    const index = content.indexOf(marker, offset);
+    if (index < 0) break;
+    indexes.push(index);
+    offset = index + marker.length;
+  }
+  return indexes;
 }
 
 function buildManagedPlan() {

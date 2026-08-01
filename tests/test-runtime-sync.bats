@@ -157,6 +157,66 @@ NODE
     cmp "$TMP_DIR/custom-agent.before" "$PROJECT/.claude/agents/custom-user-agent.md"
 }
 
+@test "runtime sync merges a Codex project route that survives plain continue and numeric replies" {
+    printf '%s\n' '# 用户项目说明' '' '保留这段自定义内容。' > "$PROJECT/AGENTS.md"
+
+    node "$SCRIPT" --project-root "$PROJECT" --skill-dir "$SKILL_DIR" --json > "$TMP_DIR/out.json"
+    node "$SCRIPT" --project-root "$PROJECT" --skill-dir "$SKILL_DIR" --json > "$TMP_DIR/out-second.json"
+
+    grep -q '^# 用户项目说明$' "$PROJECT/AGENTS.md"
+    grep -q '^保留这段自定义内容。$' "$PROJECT/AGENTS.md"
+    grep -q '<!-- novel-assistant:codex-route:start -->' "$PROJECT/AGENTS.md"
+    grep -q '继续.*下一步.*纯数字' "$PROJECT/AGENTS.md"
+    grep -q '每一轮都必须先调用.*novel-assistant' "$PROJECT/AGENTS.md"
+    count="$(grep -c '<!-- novel-assistant:codex-route:start -->' "$PROJECT/AGENTS.md")"
+    [ "$count" -eq 1 ]
+    node -e '
+      const fs = require("fs");
+      const out = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      if (!out.copied.some(item => item.type === "codex-route" && item.target === "AGENTS.md")) process.exit(1);
+    ' "$TMP_DIR/out-second.json"
+}
+
+@test "runtime sync blocks malformed or duplicate Codex route markers without touching user content" {
+    local cases=(orphan-start orphan-end reverse duplicate)
+    for case_name in "${cases[@]}"; do
+        local book="$TMP_DIR/$case_name"
+        mkdir -p "$book/正文" "$book/追踪"
+        printf '%s\n' '正文' > "$book/正文/a.md"
+        case "$case_name" in
+            orphan-start)
+                printf '%s\n' '# 用户规则' '<!-- novel-assistant:codex-route:start -->' '必须保留。' > "$book/AGENTS.md"
+                ;;
+            orphan-end)
+                printf '%s\n' '# 用户规则' '<!-- novel-assistant:codex-route:end -->' '必须保留。' > "$book/AGENTS.md"
+                ;;
+            reverse)
+                printf '%s\n' '# 用户规则' '<!-- novel-assistant:codex-route:end -->' '必须保留。' '<!-- novel-assistant:codex-route:start -->' > "$book/AGENTS.md"
+                ;;
+            duplicate)
+                printf '%s\n' '# 用户规则' '<!-- novel-assistant:codex-route:start -->' '旧块一' '<!-- novel-assistant:codex-route:end -->' '必须保留。' '<!-- novel-assistant:codex-route:start -->' '旧块二' '<!-- novel-assistant:codex-route:end -->' > "$book/AGENTS.md"
+                ;;
+        esac
+        cp "$book/AGENTS.md" "$TMP_DIR/$case_name.before"
+
+        run node "$SCRIPT" --project-root "$book" --skill-dir "$SKILL_DIR" --json
+
+        [ "$status" -ne 0 ]
+        node -e '
+          const result = JSON.parse(process.argv[1]);
+          if (result.status !== "blocked_invalid_codex_route_markers") process.exit(1);
+          if (!result.conflicts.some(item => item.path === "AGENTS.md" && item.reason === "invalid_novel_assistant_codex_route_markers")) process.exit(2);
+        ' "$output"
+        cmp "$TMP_DIR/$case_name.before" "$book/AGENTS.md"
+        test ! -e "$book/.story-deployed"
+    done
+
+    run node "$SCRIPT" --project-root "$TMP_DIR/orphan-start" --skill-dir "$SKILL_DIR"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'runtime blocked'* ]]
+    [[ "$output" != *'runtime synced'* ]]
+}
+
 @test "runtime sync rejects parent replacement during settings metadata write" {
     local outside="$TMP_DIR/outside-settings"
     mkdir -p "$PROJECT/.claude" "$outside"

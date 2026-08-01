@@ -93,6 +93,7 @@ node scripts/novel-assistant-sync-runtime.js --project-root . --dry-run --json
 | `skills/story-setup/references/opencode/plugin.ts` | `.opencode/plugins/story-hooks.ts` | story-setup managed | replace | TypeScript plugin file exists | target_cli 含 opencode |
 | `skills/story-setup/references/opencode/opencode.json.patch` | merge into `opencode.json` | user+managed | merge by plugin key | story-hooks plugin registered | target_cli 含 opencode |
 | `skills/story-setup/references/opencode/pre-commit.sh` | `.git/hooks/pre-commit` | user+managed | marker block merge | executable when platform supports chmod | target_cli 含 opencode |
+| `skills/story-setup/references/codex/AGENTS.md.block.tmpl` | `AGENTS.md` | user+managed | marker block merge | Codex 对“继续/下一步/确认/数字回复”每轮重新调用 `novel-assistant`，不得绕过状态机 | 全部已部署项目 |
 | generated sentinel | `.story-deployed` | story-setup managed | replace | contains `agents_version`, `setup_skill_version`, `target_cli`, `resolver_strategy`, `references_dir` |
 
 ### 2.1 部署 CLAUDE.md
@@ -219,6 +220,8 @@ node scripts/novel-assistant-sync-runtime.js --project-root . --dry-run --json
 7. `skills/story-setup/references/opencode/pre-commit.sh` 合并到 `.git/hooks/pre-commit` 的 story-setup 管理块；不覆盖用户已有 hook。
 
 OpenCode plugin 的正文守卫必须兼容卷内编号结构：既要识别旧 `正文/第001章.md`，也要识别新 `正文/第1卷/第001章_章名.md`，并检查对应 `大纲/第1卷/细纲_第001章.md`。
+
+Codex Desktop / CLI 不依赖 OpenCode 检测：每次新建或更新写作协作环境，都必须把 `references/codex/AGENTS.md.block.tmpl` 以 `novel-assistant:codex-route` 标记块合并进项目根 `AGENTS.md`。保留用户已有内容，重复更新只替换该标记块。这样用户在活动任务里只输入“继续”、确认词或数字时，Codex 仍会在当前轮调用 `novel-assistant` 并消费权威状态机合同。
 
 ### 2.5 部署 Session State 模板
 
