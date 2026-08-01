@@ -3209,7 +3209,7 @@ NODE
     [ "$status" -eq 0 ] || { echo "$output"; false; }
     printf '%s\n' "$output" > "$TMP_DIR/feedback-impact-started.json"
     ln -s "$REPO/scripts" "$TMP_DIR/book/scripts"
-    node - "$TMP_DIR/feedback-impact-started.json" "$TMP_DIR/book" <<'NODE'
+    node - "$TMP_DIR/feedback-impact-started.json" "$TMP_DIR/book" "$REPO" <<'NODE'
 const cp=require('child_process'),fs=require('fs'),path=require('path');
 const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),root=process.argv[3];
 const execution=out.stage_execution||{};
@@ -3232,6 +3232,13 @@ const response=JSON.parse(applied.stdout),saved=JSON.parse(fs.readFileSync(taskF
 if(!['advanced','stage_started'].includes(response.status)||saved.current_stage!=='feedback_apply_patch') throw new Error(JSON.stringify({response,saved}));
 if((saved.short_feedback_impact||{}).feedback_id!==task.pending_feedback.feedback_id) throw new Error(JSON.stringify(saved.short_feedback_impact));
 if((saved.proposed_plan||{}).status!=='awaiting_user_confirmation') throw new Error(JSON.stringify(saved.proposed_plan));
+const pending=saved.pending_action||{},proposal=saved.proposed_plan||{};
+if(pending.feedback_id!==task.pending_feedback.feedback_id||pending.proposal_id!==proposal.proposal_id) throw new Error(JSON.stringify({pending,proposal}));
+if((pending.options||[])[0].label!=='确认当前反馈回写方案（推荐）'||(pending.options||[])[1].label!=='查看当前方案、影响范围与依据') throw new Error(JSON.stringify(pending.options));
+if(saved.stage_execution!==null) throw new Error(JSON.stringify(saved.stage_execution));
+if(!String(((response.visible_response||{}).text)||'').includes(proposal.summary)||String(((response.visible_response||{}).text)||'').includes('继续双门验收与采用')) throw new Error(JSON.stringify(response.visible_response));
+const validation=cp.spawnSync(process.execPath,[path.join(process.argv[4],'scripts/workflow-state-validate.js'),'--project-root',root,'--json'],{encoding:'utf8'});
+if(validation.status!==0||JSON.parse(validation.stdout).status==='blocked') throw new Error(validation.stdout||validation.stderr);
 NODE
 }
 

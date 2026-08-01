@@ -2299,23 +2299,7 @@ function resumePendingShortFeedback(args) {
     task.lifecycle.status = 'active';
     task.lifecycle.updated_at = now;
     task.stage_execution = null;
-    const proposalPending = buildPendingAction(registryCheck.template, stageDef);
-    task.pending_action = decoratePendingAction({
-      ...proposalPending,
-      feedback_id: String(pending.feedback_id || ''),
-      proposal_id: String((task.proposed_plan || {}).proposal_id || ''),
-      question: '反馈影响分析已完成，请确认当前回写方案',
-      options: proposalPending.options.map((option) => {
-        if (String(option.action_id || '') === 'continue_next_stage') {
-          return { ...option, label: '确认当前反馈回写方案（推荐）' };
-        }
-        if (String(option.action_id || '') === 'inspect_current_state') {
-          return { ...option, label: '查看当前方案、影响范围与依据' };
-        }
-        return option;
-      }),
-      visible_choice_hash: '',
-    });
+    task.pending_action = buildShortFeedbackProposalPendingAction(registryCheck.template, task);
     const machine = normalizeMachine(task, registryCheck.template);
     machine.completed_stages = machine.completed_stages.filter(stageId => stageId !== targetStage);
     machine.remaining_stages = [targetStage, ...machine.remaining_stages.filter(stageId => stageId !== targetStage)];
@@ -2628,6 +2612,27 @@ function buildShortFeedbackProposal(task, result, now = new Date().toISOString()
     result_packet_path: String(result.result_packet_path || ''),
     proposed_at: now,
   };
+}
+
+function buildShortFeedbackProposalPendingAction(template, task) {
+  const stageDef = findStage(template, 'feedback_apply_patch');
+  const proposalPending = buildPendingAction(template, stageDef);
+  return decoratePendingAction({
+    ...proposalPending,
+    feedback_id: String(((task || {}).pending_feedback || {}).feedback_id || ''),
+    proposal_id: String(((task || {}).proposed_plan || {}).proposal_id || ''),
+    question: '反馈影响分析已完成，请确认当前回写方案',
+    options: proposalPending.options.map((option) => {
+      if (String(option.action_id || '') === 'continue_next_stage') {
+        return { ...option, label: '确认当前反馈回写方案（推荐）' };
+      }
+      if (String(option.action_id || '') === 'inspect_current_state') {
+        return { ...option, label: '查看当前方案、影响范围与依据' };
+      }
+      return option;
+    }),
+    visible_choice_hash: '',
+  });
 }
 
 function recoverShortFeedbackImpact(root, task, pending) {
@@ -7089,9 +7094,12 @@ function finalizeAcceptedResult({
   if (advanced.status === 'completed') appendHistory(root, 'completed', advanced);
   if (advanced.workflow_type === 'review_repair') return buildReviewAdvanceResponse(advanced, root, autoStart);
   const continuation = autoStart.started ? runningStageResume(advanced, root) : null;
+  const feedbackProposalIntro = awaitingCurrentShortFeedbackProposal(advanced)
+    ? String(((advanced.proposed_plan || {}).summary) || '')
+    : '';
   const visibleResponse = continuation
     ? continuation.visible_response
-    : pendingActionVisibleResponse(advanced, root, result.handoff_summary || '当前阶段已完成。');
+    : pendingActionVisibleResponse(advanced, root, feedbackProposalIntro || result.handoff_summary || '当前阶段已完成。');
   return {
     schemaVersion: SCHEMA_VERSION,
     status: autoStart.started ? 'stage_started' : 'advanced',
@@ -8537,6 +8545,17 @@ function advanceTask(task, result, projectRoot, taskTemplate) {
     expected_result_packet: '',
   };
   task.recommended_next = normalizeRecommendations(result.next_recommendation);
+  const awaitingShortFeedbackProposal = isShortWritingWorkflow(task)
+    && stageId === 'feedback_impact_sync'
+    && nextStageId === 'feedback_apply_patch'
+    && String(((task.proposed_plan || {}).status) || '') === 'awaiting_user_confirmation';
+  if (awaitingShortFeedbackProposal) {
+    task.stage_execution = null;
+    machine.last_transition = 'feedback_proposal_confirmation_required';
+    machine.last_execution_event = 'awaiting_user_confirmation';
+    machine.next_stop_reason = 'awaiting_user_confirmation';
+    machine.allowed_actions = ['continue_next_stage', 'inspect_current_state', 'pause', 'free_text'];
+  }
   if (stageId === 'section_repair_loop'
     && String(result.step_status || '') === 'completed'
     && String(((task.short_feedback_impact || {}).impact_level) || '') === 'expression_only') {
@@ -8563,6 +8582,8 @@ function advanceTask(task, result, projectRoot, taskTemplate) {
   task.pending_action = nextStageId
     ? transition.reason === 'short_quality_single_candidate_ready' && nextStageId === 'section_accept_anchor'
       ? buildShortSectionDecisionPendingAction(tpl, task)
+      : awaitingShortFeedbackProposal
+        ? buildShortFeedbackProposalPendingAction(tpl, task)
       : isShortWritingWorkflow(task) && nextStageId === 'startup_menu'
         ? buildShortStartupMenuPendingAction(task)
         : isShortWritingWorkflow(task) && nextStageId === 'freshness_window'
