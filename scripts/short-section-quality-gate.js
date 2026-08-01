@@ -126,6 +126,7 @@ function main() {
   const repairAction = nextStage === 'feedback_impact_sync'
     ? '进入反馈影响链并生成当前节修订授权'
     : '重建当前节 Brief 后修订';
+  const blockingFindings = [...failed].map((id) => ({ code: id, message: `${id} 需要修订` }));
   atomicWriteJson(packetFile, {
     workflow_id: workflowId,
     workflow_type: String(task.workflow_type || 'short_write'),
@@ -151,7 +152,15 @@ function main() {
     quality_gate_result: passed ? 'pass' : 'revise',
     story_value_result: passed ? 'pass' : 'revise',
     draft_digest: draftDigest,
-    blocking_findings: [...failed].map((id) => ({ code: id, message: `${id} 需要修订` })),
+    blocking_findings: blockingFindings,
+    quality_revision_feedback: passed ? null : {
+      source_stage: stageId,
+      section_index: sectionIndex,
+      scope_snapshot: `第${sectionIndex}节`,
+      impact_level: 'current_brief',
+      summary,
+      findings: blockingFindings,
+    },
     checkpoint_state: {
       current_stage: stageId,
       completed_range: passed ? `第${sectionIndex}节质量门完成` : '',

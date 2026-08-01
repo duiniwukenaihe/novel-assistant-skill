@@ -6701,6 +6701,7 @@ function applyResult(args) {
   if (shortSectionProjection && shortSectionProjection.blocked) return shortSectionProjection.blocked;
   const shortAssemblyProjection = projectShortStoryAssembly(root, task, result);
   if (shortAssemblyProjection && shortAssemblyProjection.blocked) return shortAssemblyProjection.blocked;
+  projectShortQualityRevision(root, task, result);
   const shortFullStoryReviewProjection = projectShortFullStoryReview(root, task, result);
   const shortFeedbackIntegration = recordAcceptedShortFeedback(root, task, result);
   const shortPlanningMemoryProjection = projectAcceptedShortPlanningFeedback(root, task, result);
@@ -7226,6 +7227,46 @@ function projectShortFullStoryReview(projectRoot, task, result) {
     });
   }
   return { status: 'review_revision_queued', finding_count: findings.length, feedback_id: String(((task.pending_feedback || {}).feedback_id) || '') };
+}
+
+function projectShortQualityRevision(projectRoot, task, result) {
+  const stageId = String(result.stage_id || '');
+  if (!isShortWritingWorkflow(task)
+    || !['quality_gate', 'story_value_gate'].includes(stageId)
+    || String(task.current_stage || '') !== stageId
+    || String(result.step_status || '') !== 'completed'
+    || String(result.next_stage_id || '') !== 'feedback_impact_sync') {
+    return { status: 'not_applicable' };
+  }
+  const declared = result.quality_revision_feedback && typeof result.quality_revision_feedback === 'object'
+    ? result.quality_revision_feedback
+    : {};
+  const findings = Array.isArray(declared.findings) && declared.findings.length
+    ? declared.findings
+    : Array.isArray(result.blocking_findings) ? result.blocking_findings : [];
+  if (!findings.length) return { status: 'not_applicable' };
+  const sectionIndex = Number(declared.section_index || result.current_section_index || 0);
+  const scopeSnapshot = String(declared.scope_snapshot || (Number.isInteger(sectionIndex) && sectionIndex > 0 ? `第${sectionIndex}节` : task.scope || '当前节'));
+  const findingText = findings.map((finding) => {
+    const code = String((finding || {}).code || 'quality_revision');
+    const message = String((finding || {}).message || '需要修订');
+    return `${code}：${message}`;
+  }).join('；');
+  const text = [
+    `${scopeSnapshot}质量门要求回炉。`,
+    String(declared.summary || result.handoff_summary || '').trim(),
+    `未通过项：${findingText}`,
+  ].filter(Boolean).join('\n');
+  return enqueueShortFeedback(projectRoot, task, text, {
+    classification: 'current_artifact_feedback',
+    classificationReason: '当前节质量门未通过，必须先分析修订影响再回炉。',
+    explicitImpactLevel: 'current_brief',
+    minimumImpactLevel: 'current_brief',
+    scopeSnapshot,
+    sectionIndex,
+    previousStage: stageId,
+    sourceKind: stageId,
+  });
 }
 
 function archiveAcceptedResultPacket(projectRoot, task, result) {

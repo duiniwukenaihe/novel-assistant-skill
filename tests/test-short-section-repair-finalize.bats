@@ -314,6 +314,15 @@ const fs=require('fs'),path=require('path');
 const [root,id]=process.argv.slice(2);
 const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));
 if(task.current_stage!=='feedback_impact_sync') throw new Error(JSON.stringify({current_stage:task.current_stage,last_transition:(task.machine||{}).last_transition}));
+const pending=task.pending_feedback||{};
+if(!String(pending.feedback_id||'').startsWith('feedback-batch-')) throw new Error(JSON.stringify({pending_feedback:pending}));
+if(pending.previous_stage!=='quality_gate'||pending.section_index!==6) throw new Error(JSON.stringify({pending_feedback:pending}));
+const source=(pending.items||[])[0]||{};
+if(source.source_kind!=='quality_gate'||source.section_index!==6) throw new Error(JSON.stringify({source}));
+if(!String(source.text||'').includes('B02')) throw new Error(JSON.stringify({source}));
+const expected=String((task.stage_execution||{}).expected_result_packet||'');
+if(!expected.includes(pending.feedback_id)||expected.includes('feedback-unbound')) throw new Error(JSON.stringify({expected,pending_feedback:pending}));
+if(!String((task.stage_execution||{}).context_read_command||'')) throw new Error(JSON.stringify({stage_execution:task.stage_execution}));
 NODE
 }
 
