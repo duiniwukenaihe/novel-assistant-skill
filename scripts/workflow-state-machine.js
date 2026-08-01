@@ -2233,7 +2233,11 @@ function resumePendingShortFeedback(args) {
   if (authority.status !== 'ok') return blocked(authority.status, authority.message || '当前任务缺少可信快照。');
   const task = authority.task;
   if (!isShortWritingWorkflow(task)) return blocked('blocked_short_feedback_wrong_workflow', '当前任务不是短篇写作任务。');
-  const pending = task.pending_feedback || {};
+  let pending = task.pending_feedback || {};
+  if (!String(pending.text || '').trim()) {
+    recoverUnboundShortQualityRevision(root, task);
+    pending = task.pending_feedback || {};
+  }
   if (!String(pending.text || '').trim()) return blocked('blocked_short_feedback_missing', '当前没有待处理的短篇反馈。');
   const registryCheck = resolvedTemplateForTask(task);
   if (registryCheck.status !== 'ok') return blockedTaskTemplate(registryCheck);
@@ -2298,6 +2302,28 @@ function resumePendingShortFeedback(args) {
     visible_action: targetStage === 'section_repair_loop' ? '修订当前小节并重新验收' : targetStage === 'feedback_apply_patch' ? '回写受影响的规划资产并重新验收' : '分析反馈影响范围',
     stage_execution: started.stageExecution,
   };
+}
+
+function recoverUnboundShortQualityRevision(projectRoot, task) {
+  const execution = task.stage_execution && typeof task.stage_execution === 'object' ? task.stage_execution : {};
+  if (String(task.current_stage || '') !== 'feedback_impact_sync'
+    || !String(execution.expected_result_packet || '').includes('feedback-unbound')) {
+    return { status: 'not_applicable' };
+  }
+  const attempts = Array.isArray(task.stage_attempt_history) ? task.stage_attempt_history.slice().reverse() : [];
+  const source = attempts.find((attempt) => ['quality_gate', 'story_value_gate'].includes(String((attempt || {}).stage_id || ''))
+    && String((attempt || {}).accepted_result_packet || '').trim());
+  if (!source) return { status: 'accepted_quality_revision_missing' };
+  const packetFile = resolveSafeProjectFile(projectRoot, String(source.accepted_result_packet || ''));
+  const packet = packetFile ? readJson(packetFile) : null;
+  if (!packet || packet.__error
+    || String(packet.workflow_id || '') !== String(task.workflow_id || '')
+    || String(packet.stage_id || '') !== String(source.stage_id || '')
+    || String(packet.next_stage_id || '') !== 'feedback_impact_sync'
+    || String(packet.step_status || '') !== 'completed') {
+    return { status: 'accepted_quality_revision_invalid' };
+  }
+  return projectShortQualityRevision(projectRoot, task, packet, { allowCurrentStageMismatch: true });
 }
 
 function discardShortFeedbackAndReconcile(args) {
@@ -7229,11 +7255,11 @@ function projectShortFullStoryReview(projectRoot, task, result) {
   return { status: 'review_revision_queued', finding_count: findings.length, feedback_id: String(((task.pending_feedback || {}).feedback_id) || '') };
 }
 
-function projectShortQualityRevision(projectRoot, task, result) {
+function projectShortQualityRevision(projectRoot, task, result, options = {}) {
   const stageId = String(result.stage_id || '');
   if (!isShortWritingWorkflow(task)
     || !['quality_gate', 'story_value_gate'].includes(stageId)
-    || String(task.current_stage || '') !== stageId
+    || (!options.allowCurrentStageMismatch && String(task.current_stage || '') !== stageId)
     || String(result.step_status || '') !== 'completed'
     || String(result.next_stage_id || '') !== 'feedback_impact_sync') {
     return { status: 'not_applicable' };

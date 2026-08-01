@@ -326,6 +326,51 @@ if(!String((task.stage_execution||{}).context_read_command||'')) throw new Error
 NODE
 }
 
+@test "legacy unbound quality revision recovers feedback from its accepted result" {
+    prepare_valid_quality_evidence
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,id]=process.argv.slice(2);
+const taskFile=path.join(root,'追踪/workflow/tasks',id,'task.json');
+const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+task.stage_execution.transition_contract={allowed_next:['feedback_impact_sync','section_accept_anchor','section_candidate_compare','short_deslop'],failure_return:'',invalid_transition:'reject'};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+const cardFile=path.join(root,'追踪/workflow/tasks',id,'artifacts/section-006-story-review.json');
+const card=JSON.parse(fs.readFileSync(cardFile,'utf8'));
+card.outline_coverage.find((item)=>item.id==='B02').status='revise';
+fs.writeFileSync(cardFile,JSON.stringify(card,null,2)+'\n');
+NODE
+    node "$QUALITY_GATE" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json >/dev/null
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,id]=process.argv.slice(2);
+const taskFile=path.join(root,'追踪/workflow/tasks',id,'task.json');
+const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+task.pending_feedback=null;
+task.short_feedback_impact=null;
+task.stage_execution.expected_result_packet=`${task.task_dir}/result-packets/feedback_impact_sync.feedback-unbound.result.json`;
+task.stage_attempt_history=[...(task.stage_attempt_history||[]),{
+  stage_id:'quality_gate',status:'completed',
+  accepted_result_packet:`${task.task_dir}/result-packets/quality_gate.section-006.result.json`
+}];
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    run node "$STATE_MACHINE" resume-pending-short-feedback --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    [[ "$output" == *'"status": "pending_short_feedback_resumed"'* ]]
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,id]=process.argv.slice(2);
+const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));
+const pending=task.pending_feedback||{};
+if(!String(pending.feedback_id||'').startsWith('feedback-batch-')) throw new Error(JSON.stringify(pending));
+if(pending.previous_stage!=='quality_gate'||pending.section_index!==6) throw new Error(JSON.stringify(pending));
+const expected=String((task.stage_execution||{}).expected_result_packet||'');
+if(!expected.includes(pending.feedback_id)||expected.includes('feedback-unbound')) throw new Error(JSON.stringify({expected,pending}));
+NODE
+}
+
 @test "quality gate returns an exact writable schema when evidence is genuinely incomplete" {
     prepare_valid_quality_evidence
     node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
