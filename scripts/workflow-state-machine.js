@@ -75,6 +75,8 @@ const {
 } = require('./lib/workflow-template-registry');
 const { buildStageContextPacket } = require('./lib/workflow-stage-context-packet');
 const { buildShortSectionOutlineContract } = require('./lib/short-section-outline-contract');
+const { resolveShortReaderMilestone } = require('./lib/short-reader-milestone-policy');
+const { buildShortQualityEvidenceSchema } = require('./lib/short-section-quality-evidence');
 const { buildLongStageContextPacket } = require('./lib/long-stage-context-packet');
 const { markTaskOverviewPresented } = require('./lib/workflow-task-overview-state');
 const { buildShortRevisionRequirementView } = require('./lib/short-revision-requirement-view');
@@ -5803,37 +5805,27 @@ function attachShortStageExecutionGuidance(root, task, targetStage) {
       const draftRel = String((draftSource || {}).path || '');
       const draftFile = draftRel ? path.join(root, draftRel) : '';
       const outlineContract = buildShortSectionOutlineContract(root, packet.section_index);
-      atomicWriteJson(path.join(root, evidenceRel), {
-        schemaVersion: '1.0.0',
-        workflow_id: String(task.workflow_id || ''),
-        section_index: packet.section_index,
-        draft: draftRel,
-        draft_digest: draftFile && fs.existsSync(draftFile) ? hashFile(draftFile) : '',
-        outline_contract_digest: outlineContract.status === 'current' ? outlineContract.contract_digest : '',
-        outline_coverage: outlineContract.status === 'current'
-          ? outlineContract.obligations.filter((item) => item.required_in_draft).map((item) => ({ id: item.id, status: '', evidence_quote: '' }))
-          : [],
-        checks: ['role_lock', 'causal_chain', 'title_promise', 'protagonist_agency', 'human_emotion', 'hook_payoff', 'story_attraction', 'continuity', 'drift_control', 'outline_fidelity', 'section_function_completion']
-          .map((id) => ({ id, status: '', evidence: '', evidence_quote: '' })),
-        summary: '',
-        acceptance_metadata: {
-          revealed_information: [],
-          present_characters: [],
-          character_state: {},
-          relationship_state: {},
-          knowledge_state: {},
-          world_state: {},
-          decisions: [],
-          causal_links: [],
-          promise_deltas: [],
-          protagonist: '',
-          open_hook: '',
-          carry_forward: [],
-        },
-      });
+      const evidenceFile = path.join(root, evidenceRel);
+      const existingEvidence = readJson(evidenceFile);
+      const unreadableExistingEvidence = fs.existsSync(evidenceFile)
+        && (!existingEvidence || String(existingEvidence.__error || ''))
+        && String(fs.readFileSync(evidenceFile, 'utf8')).trim().length > 0;
+      if (!unreadableExistingEvidence && !hasAuthoredQualityEvidence(existingEvidence)) {
+        const readerMilestone = resolveShortReaderMilestone({ sectionIndex: packet.section_index, outlineContract, task });
+        atomicWriteJson(evidenceFile, {
+          ...buildShortQualityEvidenceSchema({
+            workflowId: String(task.workflow_id || ''),
+            sectionIndex: packet.section_index,
+            draftDigest: draftFile && fs.existsSync(draftFile) ? hashFile(draftFile) : '',
+            outlineContract: outlineContract.status === 'current' ? outlineContract : { obligations: [], section_role: '' },
+            readerMilestone,
+          }),
+          draft: draftRel,
+        });
+      }
       execution.quality_evidence_target = evidenceRel;
       execution.write_set = [evidenceRel];
-      execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；把质量证据写入 ${evidenceRel}，字段固定为 checks[{id,status,evidence,evidence_quote}]、outline_coverage[{id,status,evidence_quote}]、summary、acceptance_metadata{revealed_information,character_state,open_hook}。十一项 checks 与每个必写大纲 ID 都必须引用正文原句；再逐字运行 execution_command。若返回 short_memory_context_refreshed，立即逐字运行其 execution_command，不询问用户。若返回 evidence_schema，按该模板补卡。任何命令都不得追加 2>&1、head、管道或重定向；不要修改正文、搜索实现、协议或历史回执。`;
+      execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；把质量证据写入 ${evidenceRel}，字段固定为 checks[{id,status,evidence,evidence_quote}]、outline_coverage[{id,status,evidence_quote}]、summary、acceptance_metadata{revealed_information,character_state,open_hook}。四项 checks 与每个必写大纲 ID 都必须引用正文原句；再逐字运行 execution_command。若返回 short_memory_context_refreshed，立即逐字运行其 execution_command，不询问用户。若返回 evidence_schema，按该模板补卡。任何命令都不得追加 2>&1、head、管道或重定向；不要修改正文、搜索实现、协议或历史回执。`;
     } else if (['first_section_brief', 'section_brief', 'next_section_brief'].includes(targetStage)) {
       execution.execution_command = `node scripts/short-section-brief-finalize.js --project-root ${quotedRoot} --workflow-id ${quotedWorkflowId} --apply --json`;
       execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；生成第${packet.section_index}节写作提要：只保留承接、目标与阻力、因果动作、人物/视角锁、禁写项、节尾钩子六部分，同一事实只写一次，篇幅和事件数按目标正文动态收敛。随后运行 execution_command；不得读取完整 skill 或历史回执。`;
@@ -5859,6 +5851,25 @@ function shortPlanningCanonicalTarget(stageId) {
     rhythm_pattern_selection: '设定.md',
     section_outline: '小节大纲.md',
   })[String(stageId || '')] || '';
+}
+
+function hasAuthoredQualityEvidence(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (String(value.summary || '').trim()) return true;
+  const checks = Array.isArray(value.checks) ? value.checks : [];
+  if (checks.some((item) => ['status', 'evidence', 'evidence_quote'].some((key) => String((item || {})[key] || '').trim()))) return true;
+  const coverage = Array.isArray(value.outline_coverage) ? value.outline_coverage : [];
+  if (coverage.some((item) => ['status', 'evidence_quote'].some((key) => String((item || {})[key] || '').trim()))) return true;
+  const metadata = value.acceptance_metadata && typeof value.acceptance_metadata === 'object'
+    ? value.acceptance_metadata
+    : {};
+  if ((Array.isArray(metadata.revealed_information) && metadata.revealed_information.length)
+    || (metadata.character_state && typeof metadata.character_state === 'object' && Object.keys(metadata.character_state).length)
+    || String(metadata.open_hook || '').trim()) return true;
+  const reader = value.reader_milestone && typeof value.reader_milestone === 'object'
+    ? value.reader_milestone
+    : {};
+  return Object.values(reader).some((item) => String(item || '').trim());
 }
 
 function shortPlanningInputs(stageId) {

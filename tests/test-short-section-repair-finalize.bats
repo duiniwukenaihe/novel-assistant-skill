@@ -99,6 +99,93 @@ NODE
     [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
+start_story_value_gate() {
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,id]=process.argv.slice(2);
+const taskFile=path.join(root,'追踪/workflow/tasks',id,'task.json');
+const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const packetRel=`${task.task_dir}/result-packets/section_machine_gate.section-006.result.json`;
+const artifactRel=`${task.task_dir}/artifacts/section-006-machine-gate.json`;
+fs.mkdirSync(path.dirname(path.join(root,artifactRel)),{recursive:true});
+fs.writeFileSync(path.join(root,artifactRel),JSON.stringify({draft:'草稿_第006节_候选.md',blocking_count:0},null,2)+'\n');
+const packet={
+  workflow_id:id,workflow_type:'short_write',stage_id:'section_machine_gate',step_id:'section_machine_gate',
+  owner_module:'story-short-write',step_status:'completed',outputs:['草稿_第006节_候选.md',artifactRel],
+  changed_files:[],created_files:[],evidence:[],verification_result:'pass',machine_gate_result:'pass',
+  blocking_findings:[],checkpoint_state:{},output_health_result:'pass',current_section_index:6,
+  candidate_count:1,next_stage_id:'quality_gate',result_packet_path:packetRel
+};
+fs.writeFileSync(path.join(root,packetRel),JSON.stringify(packet,null,2)+'\n');
+task.current_stage='section_machine_gate';task.current_step='section_machine_gate';task.status='running';task.pending_action=null;
+task.pending_feedback=null;task.short_feedback_impact=null;
+task.machine=task.machine||{};
+task.stage_execution={
+  status:'running',stage_id:'section_machine_gate',step_id:'section_machine_gate',owner_module:'story-short-write',
+  expected_result_packet:packetRel,
+  transition_contract:{allowed_next:['section_repair_loop','quality_gate'],failure_return:'',invalid_transition:'reject'}
+};
+task.runtime_guard=task.runtime_guard||{};task.runtime_guard.checkpoint_policy={expected_result_packet:packetRel};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+    node "$STATE_MACHINE" apply-result --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" \
+      --result "$BOOK/追踪/workflow/tasks/$WORKFLOW_ID/result-packets/section_machine_gate.section-006.result.json" --json
+}
+
+@test "new quality stages start with the current four-dimensional evidence schema" {
+    run start_story_value_gate
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    [ -f "$BOOK/追踪/workflow/tasks/$WORKFLOW_ID/artifacts/section-006-story-review.json" ] || { echo "$output"; false; }
+
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
+const file=path.join(root,'追踪/workflow/tasks',id,'artifacts/section-006-story-review.json');
+const card=JSON.parse(fs.readFileSync(file,'utf8'));
+const ids=(card.checks||[]).map(row=>row.id);
+const expected=['causal_progression','protagonist_agency','emotional_tension','reader_pull'];
+if(JSON.stringify(ids)!==JSON.stringify(expected)) throw new Error(JSON.stringify(ids));
+NODE
+}
+
+@test "restarting a quality stage preserves populated legacy evidence instead of clearing it" {
+    evidence="$BOOK/追踪/workflow/tasks/$WORKFLOW_ID/artifacts/section-006-story-review.json"
+    mkdir -p "$(dirname "$evidence")"
+    cat > "$evidence" <<'JSON'
+{
+  "schemaVersion":"1.0.0",
+  "checks":[
+    {"id":"role_lock","status":"revise","evidence":"主角能动性不足，需要回炉。","evidence_quote":"这不是误会，是一场蓄谋已久的欺骗。"}
+  ],
+  "summary":"这是旧项目已经填写完成的质量判断，升级时不得清空。",
+  "legacy_marker":"keep-me"
+}
+JSON
+
+    run start_story_value_gate
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    node -e 'const fs=require("fs"),path=require("path");const [root,id]=process.argv.slice(1);const t=JSON.parse(fs.readFileSync(path.join(root,"追踪/workflow/tasks",id,"task.json"),"utf8"));if(t.current_stage!=="quality_gate")throw new Error(JSON.stringify({stage:t.current_stage,last_transition:(t.machine||{}).last_transition}))' "$BOOK" "$WORKFLOW_ID"
+
+    node - "$evidence" <<'NODE'
+const fs=require('fs');const card=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+if(card.legacy_marker!=='keep-me') throw new Error(JSON.stringify(card));
+if(card.summary!=='这是旧项目已经填写完成的质量判断，升级时不得清空。') throw new Error(JSON.stringify(card));
+if(!Array.isArray(card.checks)||card.checks[0].status!=='revise') throw new Error(JSON.stringify(card));
+NODE
+}
+
+@test "restarting a quality stage preserves malformed legacy evidence for constrained repair" {
+    evidence="$BOOK/追踪/workflow/tasks/$WORKFLOW_ID/artifacts/section-006-story-review.json"
+    mkdir -p "$(dirname "$evidence")"
+    printf '%s\n' '{"checks":[{"id":"role_lock","status":"revise","evidence_quote":"他说"不能删"。"}],"summary":"旧卡包含未转义引号，不能在升级时丢失。"}' > "$evidence"
+    before="$(shasum -a 256 "$evidence" | awk '{print $1}')"
+
+    run start_story_value_gate
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+
+    after="$(shasum -a 256 "$evidence" | awk '{print $1}')"
+    [ "$before" = "$after" ]
+}
+
 prepare_valid_quality_evidence() {
     node - "$BOOK" "$WORKFLOW_ID" "$REPO" <<'NODE'
 const fs=require('fs'),path=require('path'),crypto=require('crypto');
