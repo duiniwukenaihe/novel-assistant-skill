@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const crypto = require('crypto');
+const { validateWorkflowConfirmation } = require('./lib/workflow-confirmation-context');
 const path = require('path');
 const { validateTaskState } = require('./lib/workflow-state-store');
 const { readFocusedTask } = require('./lib/workflow-task-authority');
@@ -183,9 +184,38 @@ function unreconciledShortFeedback(task) {
   const pending = task.pending_feedback || {};
   if (!pending || typeof pending !== 'object' || !String(pending.text || '').trim()) return null;
   const currentStage = String(task.current_stage || '');
-  if (['feedback_impact_sync', 'feedback_apply_patch', 'section_repair_loop'].includes(currentStage)) return null;
+  if (['feedback_impact_sync', 'section_repair_loop'].includes(currentStage)) return null;
   const impact = task.short_feedback_impact || {};
   const expectedFeedbackId = String(pending.feedback_id || `feedback-${crypto.createHash('sha256').update(`${String(pending.received_at || '')}\n${String(pending.text || '').trim()}`, 'utf8').digest('hex').slice(0, 16)}`);
+  if (currentStage === 'feedback_apply_patch') {
+    const proposal = task.proposed_plan && typeof task.proposed_plan === 'object' ? task.proposed_plan : {};
+    const accepted = task.accepted_plan && typeof task.accepted_plan === 'object' ? task.accepted_plan : {};
+    const activeProposalMenu = task.pending_action && String(task.pending_action.status || 'pending') !== 'resolved'
+      && String(task.pending_action.feedback_id || '') === expectedFeedbackId
+      && String(task.pending_action.proposal_id || '') === String(proposal.proposal_id || '')
+      && String(proposal.feedback_id || '') === expectedFeedbackId
+      && String(proposal.status || '') === 'awaiting_user_confirmation'
+      && (task.pending_action.options || []).some(option => String((option || {}).target_stage || '') === 'feedback_apply_patch');
+    if (activeProposalMenu) return null;
+    const proposalMatches = String(proposal.feedback_id || '') === expectedFeedbackId;
+    const acceptedFeedbackId = String(accepted.feedback_id || '');
+    const acceptedProposalMatches = proposalMatches
+      && Boolean(String(proposal.proposal_id || ''))
+      && String(proposal.status || '') === 'accepted'
+      && acceptedFeedbackId === expectedFeedbackId
+      && String(accepted.proposal_id || '') === String(proposal.proposal_id || '');
+    if (acceptedProposalMatches && hasCurrentShortFeedbackConfirmation(task)) return null;
+    return {
+      code: 'blocked_short_feedback_confirmation_unreconciled',
+      field: 'accepted_plan.feedback_id',
+      message: '当前反馈已有影响分析，但尚未确认对应回写方案；不能沿用旧方案进入正式写入。',
+      feedback_id: expectedFeedbackId,
+      accepted_feedback_id: acceptedFeedbackId,
+      proposal_id: String(proposal.proposal_id || ''),
+      accepted_proposal_id: String(accepted.proposal_id || ''),
+      current_stage: currentStage,
+    };
+  }
   return {
     code: 'blocked_short_feedback_unreconciled',
     field: 'pending_feedback',
@@ -195,6 +225,13 @@ function unreconciledShortFeedback(task) {
     impact_applied_at: String(impact.applied_at || ''),
     current_stage: currentStage,
   };
+}
+
+function hasCurrentShortFeedbackConfirmation(task) {
+  const execution = task.stage_execution || {};
+  return execution.status === 'running'
+    && execution.stage_id === 'feedback_apply_patch'
+    && validateWorkflowConfirmation(task, execution).valid;
 }
 
 function readJson(file) {

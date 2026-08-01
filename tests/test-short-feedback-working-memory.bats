@@ -75,7 +75,7 @@ const task={workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/
 feedbackApi.enqueueShortFeedback(root,task,'终局恢复真实鲜榨；宿舍线贯穿第1、2、8、9节。',{scopeSnapshot:'全篇'});
 task.short_feedback_impact={impact_level:'planning',affected_sections:[1,2,8,9],affected_assets:['设定.md','小节大纲.md'],downstream_impact:{replan:['设定.md：终局边界','小节大纲.md：宿舍线'],invalidate_briefs:['写作Brief_第001节.md','写作Brief_第002节.md','写作Brief_第008节.md','写作Brief_第009节.md'],recheck_prose:['正文/第001节.md','正文/第002节.md','正文/第008节.md','正文/第009节.md']}};
 task.proposed_plan={proposal_id:'proposal.fruit-ending-v2',feedback_id:task.pending_feedback.feedback_id,status:'awaiting_user_confirmation',summary:'让鲜果回到工厂，宿舍三人分别承担真友情、塑料关系和普通消费者视角。',execution_summary:'先改设定和小节大纲，再使 1/2/8/9 节 Brief 与正文进入待复检。',requirements:[{requirement_id:'req-ending',text:'恢复真实鲜榨与公开可验证生产',impact_level:'planning'}]};
-const out=planningApi.acceptShortPlanningDecision(root,task,{selected_number:1,action_id:'continue_next_stage',confirmation_input:'1',accepted_at:'2026-07-22T10:00:00.000Z'});
+const out=planningApi.acceptShortPlanningDecision(root,task,{selected_number:1,action_id:'continue_next_stage',confirmation_input:'1',accepted_at:'2026-07-22T10:00:00.000Z',feedback_id:task.pending_feedback.feedback_id,proposal_id:task.proposed_plan.proposal_id});
 if(out.status!=='short_plan_accepted'||task.accepted_plan.status!=='accepted_pending_projection') throw new Error(JSON.stringify(out));
 if(task.accepted_plan.affected_sections.join(',')!=='1,2,8,9') throw new Error(JSON.stringify(task.accepted_plan));
 if(task.accepted_plan.proposal_id!=='proposal.fruit-ending-v2'||task.accepted_plan.summary!==task.proposed_plan.summary||task.proposed_plan.status!=='accepted') throw new Error(JSON.stringify(task));
@@ -89,6 +89,21 @@ NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
+@test "planning decision rejects a selection bound to another proposal" {
+  run node - "$REPO/scripts/lib/short-planning-memory.js" "$BOOK" <<'NODE'
+const api=require(process.argv[2]),root=process.argv[3];
+const task={
+  workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/workflow/tasks/wf-short',
+  pending_feedback:{feedback_id:'feedback-current',text:'重做当前 Brief',impact_level_hint:'current_brief'},
+  short_feedback_impact:{feedback_id:'feedback-current',impact_level:'current_brief',affected_sections:[7]},
+  proposed_plan:{proposal_id:'proposal-current',feedback_id:'feedback-current',status:'awaiting_user_confirmation'}
+};
+const out=api.acceptShortPlanningDecision(root,task,{selected_number:1,action_id:'continue_next_stage',feedback_id:'feedback-current',proposal_id:'proposal-old'});
+if(out.status!=='blocked_feedback_proposal_binding_mismatch'||task.accepted_plan) throw new Error(JSON.stringify({out,task}));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 @test "planning projection stores the confirmed proposal instead of raw chat fragments" {
   printf '%s\n' '# 设定' '终局恢复真实鲜榨。' > "$BOOK/设定.md"
   printf '%s\n' '# 小节大纲' '第9节：公开可验证的新鲜榨线。' > "$BOOK/小节大纲.md"
@@ -98,8 +113,8 @@ const feedbackApi=require(process.argv[2]),planningApi=require(process.argv[3]),
 const task={workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/workflow/tasks/wf-short',scope:'全篇'};
 feedbackApi.enqueueShortFeedback(root,task,'酸就是酸。',{scopeSnapshot:'全篇'});
 task.short_feedback_impact={impact_level:'planning',affected_sections:[9],affected_assets:['设定.md','小节大纲.md'],downstream_impact:{}};
-task.proposed_plan={proposal_id:'proposal.fresh-juice-final',feedback_id:task.pending_feedback.feedback_id,summary:'结局让鲜果回到工厂并公开可验证生产。',requirements:[{requirement_id:'req-real-fresh-juice',text:'恢复真实鲜榨，旧货主动召回退款，新线公开生产证据。',impact_level:'planning'}]};
-planningApi.acceptShortPlanningDecision(root,task,{selected_number:1,action_id:'continue_next_stage',confirmation_input:'采用上面的方案'});
+task.proposed_plan={proposal_id:'proposal.fresh-juice-final',feedback_id:task.pending_feedback.feedback_id,status:'awaiting_user_confirmation',summary:'结局让鲜果回到工厂并公开可验证生产。',requirements:[{requirement_id:'req-real-fresh-juice',text:'恢复真实鲜榨，旧货主动召回退款，新线公开生产证据。',impact_level:'planning'}]};
+planningApi.acceptShortPlanningDecision(root,task,{selected_number:1,action_id:'continue_next_stage',confirmation_input:'采用上面的方案',feedback_id:task.pending_feedback.feedback_id,proposal_id:task.proposed_plan.proposal_id});
 const out=planningApi.projectAcceptedShortPlanningFeedback(root,task,{stage_id:'feedback_apply_patch',step_status:'completed',impact_level:'planning',affected_sections:[9],changed_files:['设定.md','小节大纲.md'],result_packet_path:'result.json'});
 if(out.status!=='planning_constraints_projected'||out.constraint_ids[0]!=='constraint.req-real-fresh-juice') throw new Error(JSON.stringify(out));
 const rows=fs.readFileSync(path.join(root,'追踪/memory/planning-constraints.jsonl'),'utf8').trim().split(/\n/).map(JSON.parse);

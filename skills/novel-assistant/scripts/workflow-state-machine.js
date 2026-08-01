@@ -138,7 +138,7 @@ const { createWorkflowTransitionService, validateLifecycleTransitionRequest } = 
 const { createWorkflowRecoveryService } = require('./lib/workflow-recovery-service');
 const { renderTaskMarkdown } = require('./lib/workflow-user-menu');
 const { checkShortProseEntry } = require('./lib/short-prose-entry-guard');
-const { checkBriefFreshness, writeBriefFreshnessSnapshot } = require('./lib/short-brief-freshness');
+const { checkBriefFreshness, sidecarRelativePath, writeBriefFreshnessSnapshot } = require('./lib/short-brief-freshness');
 const { checkShortMemoryStage } = require('./lib/short-memory-stage-policy');
 const { resolveShortFeedbackPatch } = require('./lib/short-feedback-impact-policy');
 const { inferShortSectionIndex, resolvePlannedSectionCount, resolveShortPlanProgress } = require('./lib/short-workflow-state');
@@ -151,6 +151,7 @@ const { resolveExecutionMemoryPolicy } = require('./lib/workflow-memory-policy')
 const { StoryMemoryRepository } = require('./lib/story-memory-repository');
 const { recordAcceptedShortFeedback } = require('./lib/short-feedback-outbox');
 const { acceptShortPlanningDecision, projectAcceptedShortPlanningFeedback } = require('./lib/short-planning-memory');
+const { validateWorkflowConfirmation } = require('./lib/workflow-confirmation-context');
 const { projectShortReaderPromise } = require('./lib/short-reader-promise');
 const {
   initializeShortFeedbackRevisionQueue,
@@ -2279,6 +2280,71 @@ function resumePendingShortFeedback(args) {
   if (task.stage_execution && task.stage_execution.status === 'running') {
     task.stage_execution = { ...task.stage_execution, status: 'paused', stopped_at: now, stop_reason: 'pending_feedback_resume' };
   }
+  if (targetStage === 'feedback_apply_patch') {
+    const proposal = task.proposed_plan && String(task.proposed_plan.feedback_id || '') === String(pending.feedback_id || '')
+      ? task.proposed_plan
+      : buildShortFeedbackProposal(task, {
+        feedback_id: String(pending.feedback_id || ''),
+        impact_level: String(impact.impact_level || ''),
+        affected_sections: Array.isArray(impact.affected_sections) ? impact.affected_sections : [],
+        affected_assets: Array.isArray(impact.affected_assets) ? impact.affected_assets : [],
+        downstream_impact: impact.downstream_impact && typeof impact.downstream_impact === 'object' ? impact.downstream_impact : {},
+        revision_groups: Array.isArray(impact.revision_groups) ? impact.revision_groups : [],
+      }, now);
+    task.proposed_plan = { ...proposal, status: 'awaiting_user_confirmation' };
+    task.current_stage = targetStage;
+    task.current_step = targetStage;
+    task.status = 'running';
+    task.lifecycle = normalizeLifecycle(task);
+    task.lifecycle.status = 'active';
+    task.lifecycle.updated_at = now;
+    task.stage_execution = null;
+    const proposalPending = buildPendingAction(registryCheck.template, stageDef);
+    task.pending_action = decoratePendingAction({
+      ...proposalPending,
+      feedback_id: String(pending.feedback_id || ''),
+      proposal_id: String((task.proposed_plan || {}).proposal_id || ''),
+      question: '反馈影响分析已完成，请确认当前回写方案',
+      options: proposalPending.options.map((option) => {
+        if (String(option.action_id || '') === 'continue_next_stage') {
+          return { ...option, label: '确认当前反馈回写方案（推荐）' };
+        }
+        if (String(option.action_id || '') === 'inspect_current_state') {
+          return { ...option, label: '查看当前方案、影响范围与依据' };
+        }
+        return option;
+      }),
+      visible_choice_hash: '',
+    });
+    const machine = normalizeMachine(task, registryCheck.template);
+    machine.completed_stages = machine.completed_stages.filter(stageId => stageId !== targetStage);
+    machine.remaining_stages = [targetStage, ...machine.remaining_stages.filter(stageId => stageId !== targetStage)];
+    machine.last_transition = 'feedback_proposal_confirmation_required';
+    machine.last_execution_event = 'awaiting_user_confirmation';
+    machine.next_stop_reason = 'awaiting_user_confirmation';
+    machine.allowed_actions = ['continue_next_stage', 'inspect_current_state', 'pause', 'free_text'];
+    task.machine = machine;
+    writeTaskState(root, task);
+    if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
+    appendHistory(root, 'pending_short_feedback_confirmation_restored', {
+      workflow_id: task.workflow_id || '',
+      feedback_id: String(pending.feedback_id || ''),
+      target_stage: targetStage,
+      proposal_id: String((task.proposed_plan || {}).proposal_id || ''),
+    });
+    const visibleResponse = pendingActionVisibleResponse(task, root, String((task.proposed_plan || {}).summary || ''));
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'workflow_choice_required',
+      workflow_id: task.workflow_id || '',
+      feedback_id: String(pending.feedback_id || ''),
+      target_stage: targetStage,
+      pending_action: refreshedVisibleMenu(task, root),
+      next_candidates: visibleResponse.options || [],
+      visible_response: visibleResponse,
+      interaction_contract: 'render_visible_response_text_verbatim',
+    };
+  }
   task.pending_action = null;
   const started = maybeStartStageExecution(root, task, {
     action_id: 'resume_pending_short_feedback',
@@ -4052,6 +4118,12 @@ function resolveAction(args) {
   const acceptedShortPlan = selected.target_stage === 'feedback_apply_patch'
     ? acceptShortPlanningDecision(root, task, selected)
     : { status: 'not_applicable', accepted_plan: null };
+  if (String(acceptedShortPlan.status || '').startsWith('blocked_')) {
+    return blocked(String(acceptedShortPlan.status), [{
+      field: 'feedback_proposal_binding',
+      message: '当前反馈方案与可见确认菜单不一致，未接受方案，也未启动回写。',
+    }]);
+  }
   completeShortDecisionStage(task, selected, selectedAt, taskTemplate);
   const decisionEntry = enterShortDecisionStage(task, selected, selectedAt, taskTemplate);
   if (decisionEntry) {
@@ -4464,6 +4536,22 @@ function validateVisibleChoiceBinding(task, pending, args, root) {
   if (taskBookRoot !== root || pendingBookRoot !== root || requestedBookRoot !== root) {
     return blockedVisibleChoice(task, root, 'blocked_pending_action_project_mismatch', '当前候选不属于这个书目项目，请重新显示最新候选。');
   }
+  const isFeedbackProposalChoice = String(task.current_stage || '') === 'feedback_apply_patch'
+    && String((pending || {}).status || '').toLowerCase() !== 'resolved'
+    && Array.isArray((pending || {}).options)
+    && pending.options.some(option => String((option || {}).target_stage || '') === 'feedback_apply_patch');
+  if (isFeedbackProposalChoice) {
+    const feedback = task.pending_feedback && typeof task.pending_feedback === 'object' ? task.pending_feedback : {};
+    const proposal = task.proposed_plan && typeof task.proposed_plan === 'object' ? task.proposed_plan : {};
+    if (!String(pending.feedback_id || '')
+      || !String(pending.proposal_id || '')
+      || String(pending.feedback_id || '') !== String(feedback.feedback_id || '')
+      || String(pending.feedback_id || '') !== String(proposal.feedback_id || '')
+      || String(pending.proposal_id || '') !== String(proposal.proposal_id || '')
+      || String(proposal.status || '') !== 'awaiting_user_confirmation') {
+      return blockedVisibleChoice(task, root, 'blocked_feedback_proposal_binding_mismatch', '当前反馈方案已经变化，请重新显示并确认最新方案。');
+    }
+  }
   return null;
 }
 
@@ -4477,12 +4565,14 @@ function visibleChoiceBinding(task, pending, root) {
 }
 
 function refreshedVisibleMenu(task, root) {
-  const progress = shortRevisionQueueProgress(task, root);
+  const progress = awaitingCurrentShortFeedbackProposal(task) ? null : shortRevisionQueueProgress(task, root);
   let sourcePending = task.pending_action && typeof task.pending_action === 'object'
     ? { ...task.pending_action, options: Array.isArray(task.pending_action.options) ? task.pending_action.options.map(option => ({ ...option })) : [] }
     : { options: [] };
   const currentStageId = String(task.current_stage || '');
-  if (!progress && String(sourcePending.id || '') === `pa-${currentStageId}`) {
+  if (!progress
+      && !awaitingCurrentShortFeedbackProposal(task)
+      && String(sourcePending.id || '') === `pa-${currentStageId}`) {
     const registry = resolvedTemplateForTask(task);
     if (registry && registry.status === 'ok') {
       const currentStage = findStage(registry.template, currentStageId);
@@ -4582,7 +4672,7 @@ function refreshedVisibleMenu(task, root) {
 
 function pendingActionVisibleResponse(task, root, intro = '') {
   const pending = refreshedVisibleMenu(task, root);
-  const progress = shortRevisionQueueProgress(task, root);
+  const progress = awaitingCurrentShortFeedbackProposal(task) ? null : shortRevisionQueueProgress(task, root);
   const infoSourceCards = infoSourceSelectionCards(root, task);
   const infoCardPoolMode = String(task.current_stage || '') === 'info_source_selection' && infoSourceCards.length > 0;
   const projectSeedCards = projectSeedTopicCards(root, task);
@@ -4690,6 +4780,14 @@ function pendingActionVisibleResponse(task, root, intro = '') {
       String((progress || {}).text || '').trim(),
     ].filter(Boolean).join('\n\n')),
   };
+}
+
+function awaitingCurrentShortFeedbackProposal(task) {
+  const pendingFeedbackId = String((((task || {}).pending_feedback || {}).feedback_id) || '');
+  const proposal = task && task.proposed_plan && typeof task.proposed_plan === 'object' ? task.proposed_plan : {};
+  return Boolean(pendingFeedbackId)
+    && String(proposal.feedback_id || '') === pendingFeedbackId
+    && String(proposal.status || '') === 'awaiting_user_confirmation';
 }
 
 function shortRevisionQueueProgress(task, root) {
@@ -5647,6 +5745,17 @@ function attachShortStageExecutionGuidance(root, task, targetStage) {
 
   if (targetStage === 'feedback_apply_patch') {
     const acceptedPlan = task.accepted_plan && typeof task.accepted_plan === 'object' ? task.accepted_plan : {};
+    const impactLevel = String(((task.short_feedback_impact || {}).impact_level) || acceptedPlan.impact_level || '');
+    if (impactLevel === 'current_brief') {
+      const sections = (Array.isArray(acceptedPlan.affected_sections) ? acceptedPlan.affected_sections : [])
+        .map(Number).filter(sectionIndex => Number.isInteger(sectionIndex) && sectionIndex > 0);
+      execution.planning_targets = [];
+      execution.write_set = sections.map(sectionIndex => sidecarRelativePath(sectionIndex, root));
+      execution.planning_inputs = [task.accepted_plan_path, '小节大纲.md']
+        .filter((item, index, values) => item && values.indexOf(item) === index && fs.existsSync(path.join(root, item)));
+      execution.execution_command = `node scripts/short-planning-stage-finalize.js --project-root ${quotedRoot} --workflow-id ${quotedWorkflowId} --apply --json`;
+      return;
+    }
     const plannedAssets = Array.isArray(((acceptedPlan.projection_plan || {}).planning_assets))
       ? acceptedPlan.projection_plan.planning_assets
         .map(item => String(item || '').replace(/\\/g, '/').replace(/^\.\//, ''))
@@ -5915,8 +6024,12 @@ function attachShortStageExecutionGuidance(root, task, targetStage) {
       const resultPacket = String(execution.expected_result_packet || '');
       execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；按反馈批次逐项分析影响层级、受影响规划文件、小节范围、保留项、失效 Brief/正文和回写顺序；把结果写入 ${resultPacket}，回执必须包含 schemaVersion、workflow_id、workflow_type、owner_module、stage_id=feedback_impact_sync、step_id=feedback_impact_sync、step_status=completed、outputs=[]、changed_files=[]、evidence=[]、verification_result=pass、checkpoint_state、output_health_result=pass、feedback_id、impact_level、affected_sections、affected_assets、downstream_impact、revision_groups、next_stage_id=feedback_apply_patch、result_packet_path。然后逐字运行 stage_completion_command。本阶段不改创作资产，不得展示或发明用户菜单，不得遗漏前序意见或复用旧反馈结论。`;
     } else if (targetStage === 'feedback_apply_patch') {
-      const staged = (execution.planning_targets || []).map(item => item.staged).join('、');
-      execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；只修改暂存规划资产 ${staged}。按已确认方案回写后运行 execution_command，一次性提交规划资产、建立受影响小节修订队列并使旧 Brief/正文进入待复检。不得直接覆盖正式规划文件或正文。`;
+      if (String(((task.short_feedback_impact || {}).impact_level) || '') === 'current_brief') {
+        execution.resume_hint = '当前反馈只影响当前节 Brief。直接运行 execution_command 标记旧 Brief 失效并建立当前节复检队列；不得修改设定、小节大纲或正文。';
+      } else {
+        const staged = (execution.planning_targets || []).map(item => item.staged).join('、');
+        execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；只修改暂存规划资产 ${staged}。按已确认方案回写后运行 execution_command，一次性提交规划资产、建立受影响小节修订队列并使旧 Brief/正文进入待复检。不得直接覆盖正式规划文件或正文。`;
+      }
     } else {
       execution.resume_hint = '先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；据此完成当前小节，不得加载完整 skill、协议、任务日志、历史回执或平台源码。';
     }
@@ -8182,35 +8295,11 @@ function resultPreviouslyValidatedBeforeAudit(task, result, resultFile, projectR
 }
 
 function validateConfirmationContext(task, execution) {
-  const confirmation = execution.confirmation_context || {};
-  const selection = task.last_selection || {};
-  const pending = task.pending_action || {};
-  const expiresAt = Date.parse(String(confirmation.expires_at || ''));
-  const resumedConfirmedStage = execution.action_id === 'resume_paused_stage'
-    && selection.action_id === 'resume_paused_stage';
-  const matches = Boolean(confirmation.confirmation_token)
-    && confirmation.status === 'confirmed'
-    && confirmation.confirmation_token === execution.confirmation_token
-    && confirmation.confirmation_token === selection.confirmation_token
-    && confirmation.workflow_id === task.workflow_id
-    && confirmation.workflow_type === task.workflow_type
-    && confirmation.stage_id === execution.stage_id
-    && confirmation.step_id === execution.step_id
-    && confirmation.selection_id === pending.id
-    && confirmation.selected_number === execution.selected_number
-    && confirmation.selected_number === selection.selected_number
-    && confirmation.selected_action_id === execution.action_id
-    && confirmation.selected_action_id === selection.action_id
-    && confirmation.visible_choice_hash === pending.visible_choice_hash
-    && confirmation.visible_choice_hash === selection.visible_choice_hash
-    && pending.status === 'resolved'
-    && (selection.requires_user_confirm === true || resumedConfirmedStage)
-    && Number.isFinite(expiresAt)
-    && expiresAt > Date.now();
-  if (!matches) {
+  const checked = validateWorkflowConfirmation(task, execution);
+  if (!checked.valid) {
     return blocked('blocked_confirmation_required', '确认 selection/token 缺失、已过期或与当前 workflow/stage 不匹配，请重新显示并确认当前操作。');
   }
-  if (task.workflow_type === 'cover' && !['generate', 'overwrite'].includes(confirmation.operation)) {
+  if (task.workflow_type === 'cover' && !['generate', 'overwrite'].includes(checked.confirmation.operation)) {
     return blocked('blocked_confirmation_required', '封面确认必须明确是生成新封面还是覆盖现有封面。');
   }
   return null;

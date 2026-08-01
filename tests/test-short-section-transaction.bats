@@ -693,6 +693,51 @@ if(!commit) throw new Error(JSON.stringify(commits));
 NODE
 }
 
+@test "accepted current brief feedback invalidates only the brief and enters its section queue" {
+  BOOK="$BATS_TEST_TMPDIR/feedback-current-brief-book"
+  mkdir -p "$BOOK/追踪/workflow" "$BOOK/追踪/private-short-extension" "$BOOK/正文"
+  printf '%s\n' '素材' > "$BOOK/素材卡.md"
+  printf '%s\n' '设定' > "$BOOK/设定.md"
+  printf '%s\n' '## 第7节：母亲承认代投' > "$BOOK/小节大纲.md"
+  printf '%s\n' '# 第7节写作提要' > "$BOOK/写作Brief_第007节.md"
+  printf '%s\n' '现有正文不得被 feedback_apply_patch 修改。' > "$BOOK/正文/第007节.md"
+  node "$REPO/scripts/workflow-state-machine.js" create --workflow-type short_write --project-root "$BOOK" --scope "第7节" --user-goal "回炉第7节" --no-private-registry --json > "$BATS_TEST_TMPDIR/current-brief-create.json"
+  WORKFLOW_ID="$(node -e 'console.log(require(process.argv[1]).task.workflow_id)' "$BATS_TEST_TMPDIR/current-brief-create.json")"
+  node - "$BOOK" "$WORKFLOW_ID" "$REPO/scripts/lib/short-project-state.js" <<'NODE'
+const fs=require('fs'),path=require('path');const [root,id,stateModule]=process.argv.slice(2);const state=require(stateModule);
+state.ensureShortProjectState(root,{workflowId:id,title:'果汁事件'});state.advanceShortPlanRevision(root,{workflowId:id,outlinePath:'小节大纲.md'});
+const file=path.join(root,'追踪/workflow/tasks',id,'task.json'),task=JSON.parse(fs.readFileSync(file,'utf8'));const feedbackId='feedback-current-brief',proposalId='proposal.feedback-current-brief';
+task.current_stage='feedback_apply_patch';task.current_step='feedback_apply_patch';task.status='running';task.scope='第7节';
+task.pending_feedback={feedback_id:feedbackId,text:'补足母亲当面承认。',scope_snapshot:'第7节',status:'pending'};
+task.short_feedback_impact={status:'ok',feedback_id:feedbackId,impact_level:'current_brief',affected_sections:[7],affected_assets:['写作Brief_第007节.md'],revision_groups:[{group_id:'section-7',scope:[7],layer:'current_brief'}]};
+task.proposed_plan={proposal_id:proposalId,feedback_id:feedbackId,status:'accepted'};
+task.accepted_plan={plan_id:'accepted-plan.feedback-current-brief',proposal_id:proposalId,feedback_id:feedbackId,status:'accepted_pending_projection',impact_level:'current_brief',affected_sections:[7],projection_plan:{planning_assets:[]}};
+const token='current-brief-token',hash='current-brief-hash',expires=new Date(Date.now()+3600000).toISOString();
+task.pending_action={id:'pa-feedback_apply_patch',status:'resolved',visible_choice_hash:hash};task.last_selection={confirmation_token:token,selected_number:1,action_id:'continue_next_stage',visible_choice_hash:hash,requires_user_confirm:true};
+task.stage_execution={status:'running',stage_attempt_id:'sa-current-brief',stage_id:'feedback_apply_patch',step_id:'feedback_apply_patch',action_id:'continue_next_stage',selected_number:1,owner_module:'story-short-write',expected_result_packet:`${task.task_dir}/result-packets/feedback_apply_patch.${feedbackId}.result.json`,confirmation_token:token,confirmation_context:{status:'confirmed',workflow_id:id,workflow_type:'short_write',stage_id:'feedback_apply_patch',step_id:'feedback_apply_patch',selection_id:'pa-feedback_apply_patch',selected_number:1,selected_action_id:'continue_next_stage',expires_at:expires,visible_choice_hash:hash,confirmation_token:token}};
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+  task_file="$BOOK/追踪/workflow/tasks/$WORKFLOW_ID/task.json"
+  node - "$task_file" <<'NODE'
+const fs=require('fs');const file=process.argv[2],task=JSON.parse(fs.readFileSync(file,'utf8'));task.stage_execution.confirmation_context.expires_at='2000-01-01T00:00:00.000Z';fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+  run node "$REPO/scripts/short-planning-stage-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
+  [[ "$output" == *'blocked_confirmation_required'* ]]
+  [ ! -f "$BOOK/追踪/story-system/short/briefs/section-007.json" ]
+  node - "$task_file" <<'NODE'
+const fs=require('fs');const file=process.argv[2],task=JSON.parse(fs.readFileSync(file,'utf8'));task.stage_execution.confirmation_context.expires_at=new Date(Date.now()+3600000).toISOString();fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+  run node "$REPO/scripts/short-planning-stage-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  node -e 'const x=JSON.parse(process.argv[1]);if(x.status!=="applied"||x.next_stage!=="section_brief")throw new Error(JSON.stringify(x));' "$output"
+  [ "$(jq -r '.feedback_revision_queue.current_section_index' "$task_file")" = "7" ]
+  [ "$(jq -r '.current_stage' "$task_file")" = "section_brief" ]
+  [ "$(jq -r '.accepted_plan.status' "$task_file")" = "completed" ]
+  [ "$(jq -r '.accepted_plan.projection_status' "$task_file")" = "completed" ]
+  [ "$(cat "$BOOK/正文/第007节.md")" = "现有正文不得被 feedback_apply_patch 修改。" ]
+  [ "$(jq -r '.invalidated' "$BOOK/追踪/story-system/short/briefs/section-007.json")" = "true" ]
+}
+
 @test "private short project seed uses the same staged planning transaction" {
   if [ ! -f "$REPO/src/private-internal-skills/private-short-extension/SKILL.md" ]; then
     skip "public release intentionally excludes the private short enhancement"

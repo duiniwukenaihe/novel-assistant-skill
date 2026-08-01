@@ -53,6 +53,8 @@ function normalizeSelectedAction(option, selectedNumber, selectedAt, pending) {
     visible_choice_hash: String((pending || {}).visible_choice_hash || ''),
     state_version: Number((pending || {}).state_version || 0),
     book_root: String((pending || {}).book_root || ''),
+    feedback_id: String((pending || {}).feedback_id || ''),
+    proposal_id: String((pending || {}).proposal_id || ''),
     execution_contract: {
       mode: String(option.execution_mode || option.mode || 'exact_selected_option'),
       max_units: Number.isFinite(maxUnits) ? maxUnits : null,

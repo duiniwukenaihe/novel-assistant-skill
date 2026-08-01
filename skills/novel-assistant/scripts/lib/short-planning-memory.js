@@ -12,7 +12,7 @@ function acceptShortPlanningDecision(projectRoot, task = {}, selection = {}) {
   if (!SHORT_WORKFLOWS.has(String(task.workflow_type || ''))) return { status: 'not_applicable', accepted_plan: null };
   const pending = task.pending_feedback && typeof task.pending_feedback === 'object' ? task.pending_feedback : {};
   const impact = task.short_feedback_impact && typeof task.short_feedback_impact === 'object' ? task.short_feedback_impact : {};
-  if (!String(pending.feedback_id || '') || !['planning', 'structure'].includes(String(impact.impact_level || pending.impact_level_hint || ''))) {
+  if (!String(pending.feedback_id || '') || !['current_brief', 'planning', 'structure'].includes(String(impact.impact_level || pending.impact_level_hint || ''))) {
     return { status: 'not_applicable', accepted_plan: null };
   }
 
@@ -23,6 +23,13 @@ function acceptShortPlanningDecision(projectRoot, task = {}, selection = {}) {
   const proposal = task.proposed_plan && String(task.proposed_plan.feedback_id || '') === String(pending.feedback_id || '')
     ? task.proposed_plan
     : null;
+  if (!proposal
+    || !String(proposal.proposal_id || '')
+    || String(proposal.status || '') !== 'awaiting_user_confirmation'
+    || String(selection.feedback_id || '') !== String(pending.feedback_id || '')
+    || String(selection.proposal_id || '') !== String(proposal.proposal_id || '')) {
+    return { status: 'blocked_feedback_proposal_binding_mismatch', accepted_plan: null };
+  }
   const affectedSections = sectionList(impact.affected_sections).length
     ? sectionList(impact.affected_sections)
     : unique(items.flatMap(item => extractSections(item.text))).map(Number).sort((a, b) => a - b);
@@ -40,7 +47,7 @@ function acceptShortPlanningDecision(projectRoot, task = {}, selection = {}) {
     source_kind: 'assistant_proposal_confirmed_by_user',
     workflow_id: String(task.workflow_id || ''),
     feedback_id: String(pending.feedback_id || ''),
-    proposal_id: String((proposal || {}).proposal_id || ''),
+    proposal_id: String(proposal.proposal_id || ''),
     summary: String((proposal || {}).summary || pending.text || '').trim(),
     execution_summary: String((proposal || {}).execution_summary || ''),
     requirements: Array.isArray((proposal || {}).requirements) && proposal.requirements.length
@@ -63,7 +70,7 @@ function acceptShortPlanningDecision(projectRoot, task = {}, selection = {}) {
       selected_number: Number(selection.selected_number || 0) || null,
       selected_action_id: String(selection.action_id || ''),
       confirmation_input: String(selection.confirmation_input || selection.input || ''),
-      confirmed_proposal_id: String((proposal || {}).proposal_id || ''),
+      confirmed_proposal_id: String(proposal.proposal_id || ''),
       confirmed_summary: String((proposal || {}).summary || pending.text || '').trim(),
       accepted_at: now,
     },
@@ -93,11 +100,37 @@ function projectAcceptedShortPlanningFeedback(projectRoot, task = {}, result = {
     ? task.pending_feedback
     : {};
   const impactLevel = String(result.impact_level || result.feedback_impact_level || ((task.short_feedback_impact || {}).impact_level) || '');
+  const root = path.resolve(projectRoot);
+  if (impactLevel === 'current_brief' && String(pending.feedback_id || '')) {
+    const accepted = task.accepted_plan && String(task.accepted_plan.feedback_id || '') === String(pending.feedback_id || '')
+      ? task.accepted_plan
+      : null;
+    if (!accepted || !String(accepted.proposal_id || '')) {
+      return { status: 'blocked_current_brief_acceptance_missing', projected: 0 };
+    }
+    const now = new Date().toISOString();
+    task.accepted_plan = {
+      ...accepted,
+      status: 'completed',
+      projection_status: 'completed',
+      projected_assets: [],
+      completed_at: now,
+    };
+    if (String(task.accepted_plan_path || '')) atomicWriteJson(path.join(root, task.accepted_plan_path), task.accepted_plan);
+    appendJsonl(path.join(root, String(task.task_dir || ''), 'decision-journal.jsonl'), {
+      event_type: 'short_brief_feedback_plan_completed',
+      plan_id: String(task.accepted_plan.plan_id || ''),
+      proposal_id: String(task.accepted_plan.proposal_id || ''),
+      feedback_id: String(pending.feedback_id || ''),
+      affected_sections: sectionList(result.affected_sections),
+      completed_at: now,
+    });
+    return { status: 'current_brief_plan_completed', projected: 0 };
+  }
   if (!['planning', 'structure'].includes(impactLevel) || !String(pending.feedback_id || '')) {
     return { status: 'not_applicable', projected: 0 };
   }
 
-  const root = path.resolve(projectRoot);
   const changed = unique([
     ...(Array.isArray(result.changed_assets) ? result.changed_assets : []),
     ...(Array.isArray(result.changed_files) ? result.changed_files : []),

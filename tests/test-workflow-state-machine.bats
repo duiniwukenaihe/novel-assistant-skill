@@ -3356,6 +3356,91 @@ NODE
     [[ "$output" == *'"target_stage": "feedback_impact_sync"'* ]]
 }
 
+@test "pending planning feedback recovery returns to the bound proposal menu before canonical writes" {
+    mkdir -p "$TMP_DIR/book"
+    printf '# 设定\n' > "$TMP_DIR/book/设定.md"
+    printf '# 小节大纲\n' > "$TMP_DIR/book/小节大纲.md"
+    printf '# 正文\n' > "$TMP_DIR/book/正文.md"
+    node "$SCRIPT" create --workflow-type short_write --project-root "$TMP_DIR/book" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
+    local task_file
+    task_file="$(focused_task_file "$TMP_DIR/book")"
+    node - "$task_file" <<'NODE'
+const fs=require('fs');const file=process.argv[2];const task=JSON.parse(fs.readFileSync(file,'utf8'));
+const feedbackId='feedback-current-plan';
+task.current_stage='next_section_brief';task.current_step='next_section_brief';task.status='running';
+task.pending_feedback={feedback_id:feedbackId,text:'第7节补足母亲当面承认，再回写设定和小节大纲。',scope_snapshot:'第7节',status:'pending'};
+task.short_feedback_impact={status:'ok',feedback_id:feedbackId,impact_level:'planning',affected_sections:[7],affected_assets:['设定.md','小节大纲.md'],downstream_impact:{invalidate_briefs:['写作Brief_第007节.md'],recheck_prose:['正文/第007节.md']}};
+task.proposed_plan={schema_version:'1.0.0',proposal_id:'proposal.feedback-current-plan',status:'awaiting_user_confirmation',feedback_id:feedbackId,summary:'补足母亲当面承认并重建第7节规划。',requirements:[{requirement_id:'req-current',text:'母亲必须当面承认明知与代投。',impact_level:'planning'}],impact_level:'planning',affected_sections:[7]};
+task.accepted_plan={plan_id:'accepted-plan.feedback-current-plan',proposal_id:'proposal.feedback-current-plan.v1',feedback_id:feedbackId,status:'accepted_pending_projection',projection_status:'pending'};
+task.feedback_revision_queue={status:'running',current_section_index:4,items:[{section_index:4,status:'current',brief_status:'pending',prose_status:'pending_recheck'}]};
+task.pending_action=null;
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+    local workflow_id
+    workflow_id="$(jq -r '.workflow_id' "$task_file")"
+
+    run node "$SCRIPT" resume-pending-short-feedback --project-root "$TMP_DIR/book" --workflow-id "$workflow_id" --json
+    [ "$status" -eq 0 ]
+    printf '%s\n' "$output" > "$TMP_DIR/resumed-proposal.json"
+    node - "$TMP_DIR/resumed-proposal.json" "$task_file" <<'NODE'
+const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),task=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+if(out.status!=='workflow_choice_required'||out.target_stage!=='feedback_apply_patch') throw new Error(JSON.stringify(out));
+if(task.current_stage!=='feedback_apply_patch'||task.stage_execution!==null) throw new Error(JSON.stringify(task.stage_execution));
+if(task.proposed_plan.status!=='awaiting_user_confirmation'||task.accepted_plan.proposal_id!=='proposal.feedback-current-plan.v1') throw new Error(JSON.stringify(task));
+const options=(task.pending_action||{}).options||[];
+if(options.length!==4||options[0].target_stage!=='feedback_apply_patch'||options[0].requires_user_confirm!==true) throw new Error(JSON.stringify(options));
+const visibleOptions=(out.visible_response||{}).options||[];
+if((visibleOptions[0]||{}).target_stage!=='feedback_apply_patch'||(visibleOptions[0]||{}).requires_user_confirm!==true) throw new Error(JSON.stringify(visibleOptions));
+if((visibleOptions[0]||{}).label!=='确认当前反馈回写方案（推荐）'||(visibleOptions[1]||{}).label!=='查看当前方案、影响范围与依据') throw new Error(JSON.stringify(visibleOptions));
+if((out.visible_response||{}).work_queue!==null||String((out.visible_response||{}).text||'').includes('本轮整篇回炉')) throw new Error(JSON.stringify(out.visible_response));
+if(!String((out.visible_response||{}).text||'').includes('1.')||String((out.visible_response||{}).text||'').includes('回复“继续”')) throw new Error(JSON.stringify(out.visible_response));
+NODE
+
+    node - "$SCRIPT" "$TMP_DIR/book" "$task_file" <<'NODE'
+const cp=require('child_process'),fs=require('fs'),path=require('path');const [script,root,file]=process.argv.slice(2);const task=JSON.parse(fs.readFileSync(file,'utf8'));const pending=task.pending_action;
+const run=cp.spawnSync(process.execPath,[script,'resolve-action','--project-root',root,'--input','1','--pending-action-id',pending.id,'--visible-choice-hash',pending.visible_choice_hash,'--state-version',String(task.state_version),'--book-root',root,'--json'],{encoding:'utf8'});
+if(run.status!==0) throw new Error(run.stdout||run.stderr);const out=JSON.parse(run.stdout),updated=JSON.parse(fs.readFileSync(file,'utf8'));
+if(out.status!=='stage_started'||updated.stage_execution.status!=='running') throw new Error(run.stdout);
+if(updated.accepted_plan.feedback_id!=='feedback-current-plan'||updated.proposed_plan.status!=='accepted') throw new Error(JSON.stringify(updated));
+const confirmation=updated.stage_execution.confirmation_context||{};
+if(confirmation.selection_id!==pending.id||!confirmation.visible_choice_hash||Date.parse(confirmation.expires_at)<=Date.now()) throw new Error(JSON.stringify(confirmation));
+const validation=cp.spawnSync(process.execPath,[path.join(path.dirname(script),'workflow-state-validate.js'),'--project-root',root,'--json'],{encoding:'utf8'});
+if(validation.status!==0||JSON.parse(validation.stdout).status==='blocked') throw new Error(validation.stdout||validation.stderr);
+NODE
+}
+
+@test "feedback proposal choice rejects a proposal changed after the menu was rendered" {
+    mkdir -p "$TMP_DIR/book"
+    printf '# 设定\n' > "$TMP_DIR/book/设定.md"
+    printf '# 小节大纲\n' > "$TMP_DIR/book/小节大纲.md"
+    printf '# 正文\n' > "$TMP_DIR/book/正文.md"
+    node "$SCRIPT" create --workflow-type short_write --project-root "$TMP_DIR/book" --scope "第7节" --user-goal "新开短篇" --json >/dev/null
+    local task_file
+    task_file="$(focused_task_file "$TMP_DIR/book")"
+    node - "$task_file" <<'NODE'
+const fs=require('fs');const file=process.argv[2];const task=JSON.parse(fs.readFileSync(file,'utf8'));
+task.pending_feedback={feedback_id:'feedback-current',text:'重做当前 Brief',status:'pending',impact_level_hint:'current_brief',section_index:7,items:[]};
+task.short_feedback_impact={status:'ok',feedback_id:'feedback-current',impact_level:'current_brief',affected_sections:[7],affected_assets:['Brief/第007节.md']};
+task.proposed_plan={proposal_id:'proposal-current',feedback_id:'feedback-current',status:'awaiting_user_confirmation',summary:'只重做第7节 Brief'};
+task.accepted_plan={feedback_id:'feedback-old',proposal_id:'proposal-old',status:'accepted_pending_projection'};
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+    local workflow_id
+    workflow_id="$(jq -r '.workflow_id' "$task_file")"
+    node "$SCRIPT" resume-pending-short-feedback --project-root "$TMP_DIR/book" --workflow-id "$workflow_id" --json >/dev/null
+    node - "$task_file" <<'NODE'
+const fs=require('fs');const file=process.argv[2];const task=JSON.parse(fs.readFileSync(file,'utf8'));
+task.proposed_plan={proposal_id:'proposal-old',feedback_id:'feedback-old',status:'awaiting_user_confirmation',summary:'旧方案'};
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    run node "$SCRIPT" resolve-action --project-root "$TMP_DIR/book" --input 1 --bind-current --json
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'blocked_feedback_proposal_binding_mismatch'* ]]
+    [ "$(jq -r '.stage_execution // ""' "$task_file")" = "" ]
+    [ "$(jq -r '.accepted_plan.feedback_id' "$task_file")" = "feedback-old" ]
+}
+
 @test "pending expression-only short feedback resumes section repair without impact reanalysis" {
     mkdir -p "$TMP_DIR/book"
     printf '# 设定\n' > "$TMP_DIR/book/设定.md"
@@ -3436,8 +3521,13 @@ NODE
     feedback_id="$(jq -r '.pending_feedback.feedback_id' "$task_file")"
     node - "$task_file" <<'NODE'
 const fs=require('fs');const file=process.argv[2];const task=JSON.parse(fs.readFileSync(file,'utf8'));
-task.current_stage='feedback_apply_patch';task.current_step='feedback_apply_patch';task.stage_execution={status:'completed',stage_id:'feedback_impact_sync',step_id:'feedback_impact_sync'};
-task.pending_action={id:'pa-feedback-apply',question:'请选择下一步',options:[{number:1,action_id:'continue_next_stage',label:'继续确认并回写反馈影响（推荐）',target_stage:'feedback_apply_patch',risk_level:'high',requires_user_confirm:true,recommended:true},{number:2,action_id:'pause',label:'暂停',target_stage:'',risk_level:'low',requires_user_confirm:false}],free_text_enabled:true};
+const feedbackId=task.pending_feedback.feedback_id,proposalId=`proposal.${feedbackId}`;
+task.current_stage='feedback_apply_patch';task.current_step='feedback_apply_patch';
+task.short_feedback_impact={status:'ok',feedback_id:feedbackId,impact_level:'planning'};
+task.proposed_plan={proposal_id:proposalId,feedback_id:feedbackId,status:'accepted',summary:'更新设定和小节大纲'};
+task.accepted_plan={plan_id:`accepted-plan.${feedbackId}`,feedback_id:feedbackId,proposal_id:proposalId,status:'accepted_pending_projection'};
+task.stage_execution={status:'running',stage_id:'feedback_apply_patch',step_id:'feedback_apply_patch',execution_command:'node scripts/short-planning-stage-finalize.js --project-root . --apply --json'};
+task.pending_action={id:'pa-feedback-apply',status:'resolved',feedback_id:feedbackId,proposal_id:proposalId,options:[{number:1,action_id:'continue_next_stage',target_stage:'feedback_apply_patch'}]};
 fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
 NODE
     run node "$SCRIPT" resolve-action --project-root "$TMP_DIR/book" --input "根据已确认的方案继续执行规划回写" --json

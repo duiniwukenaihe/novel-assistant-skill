@@ -170,6 +170,10 @@ function checkBriefFreshness({ projectRoot, briefPath, sectionIndex, acceptedAnc
     stale.push(String(briefPath));
     changedDimensions.add('brief');
   }
+  if (previous.invalidated === true) {
+    stale.push(`feedback:${String(previous.invalidated_by_feedback || 'current')}`);
+    changedDimensions.add('brief');
+  }
   for (const missing of built.missing_dependencies) {
     if (!stale.includes(missing)) stale.push(missing);
     // Missing dependencies are structural gaps; tag as identity so callers see
@@ -205,6 +209,24 @@ function checkBriefFreshness({ projectRoot, briefPath, sectionIndex, acceptedAnc
   };
 }
 
+function invalidateBriefFreshnessSnapshot({ projectRoot, sectionIndex, feedbackId = '' }) {
+  const relative = sidecarRelativePath(sectionIndex, projectRoot);
+  const file = safeProjectPath(projectRoot, relative);
+  if (!file) throw new Error('unsafe brief sidecar path');
+  let snapshot = {};
+  try { snapshot = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { snapshot = {}; }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify({
+    ...snapshot,
+    schema_version: String(snapshot.schema_version || '1.0.0'),
+    section_index: Number(sectionIndex),
+    invalidated: true,
+    invalidated_by_feedback: String(feedbackId || ''),
+    invalidated_at: new Date().toISOString(),
+  }, null, 2)}\n`, 'utf8');
+  return { status: 'invalidated', sidecar: relative };
+}
+
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
 }
@@ -212,6 +234,7 @@ function readJson(file) {
 module.exports = {
   buildBriefFreshnessSnapshot,
   checkBriefFreshness,
+  invalidateBriefFreshnessSnapshot,
   invalidatedBrief,
   sidecarRelativePath,
   writeBriefFreshnessSnapshot,

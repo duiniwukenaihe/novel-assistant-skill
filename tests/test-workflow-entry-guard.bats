@@ -674,6 +674,33 @@ if(String(visible.text||'').includes('1. 当前反馈尚未同步影响链')) th
 NODE
 }
 
+@test "feedback apply with an unconfirmed current proposal returns to the numeric recovery menu" {
+    STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
+    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$BOOK" --scope "第7节" --user-goal "继续短篇" --json >/dev/null
+    node - "$BOOK" <<'NODE'
+const fs=require('fs'),path=require('path');const root=process.argv[2];
+const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
+const taskFile=path.join(root,pointer.task_dir,'task.json');const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+task.current_stage='feedback_apply_patch';task.current_step='feedback_apply_patch';
+task.pending_feedback={feedback_id:'feedback-current',text:'补足第7节母亲当面承认。',scope_snapshot:'第7节',status:'pending'};
+task.short_feedback_impact={status:'ok',feedback_id:'feedback-current',impact_level:'planning',affected_sections:[7],affected_assets:['设定.md','小节大纲.md']};
+task.proposed_plan={proposal_id:'proposal.feedback-current',feedback_id:'feedback-current',status:'awaiting_user_confirmation',summary:'补足母亲当面承认。'};
+task.accepted_plan={plan_id:'accepted-plan.feedback-current',proposal_id:'proposal.feedback-current.v1',feedback_id:'feedback-current',projection_status:'pending'};
+task.pending_action=null;task.stage_execution={status:'running',stage_id:'feedback_apply_patch',step_id:'feedback_apply_patch'};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    run node "$SCRIPT" --project-root "$BOOK" --compact --json
+    [ "$status" -eq 0 ]
+    printf '%s\n' "$output" > "$TMP_DIR/unconfirmed-feedback-menu.json"
+    node - "$TMP_DIR/unconfirmed-feedback-menu.json" <<'NODE'
+const fs=require('fs');const report=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),visible=report.visible_response||{},options=visible.options||[];
+if(report.status!=='blocked'||visible.status!=='blocked_pending_feedback_unreconciled') throw new Error(JSON.stringify(report));
+if(options.length!==4||!String((options[0]||{}).execution_command||'').includes('resume-pending-short-feedback')) throw new Error(JSON.stringify(options));
+if(!String(visible.text||'').includes('1.')||String(visible.text||'').includes('回复“继续”')) throw new Error(String(visible.text||''));
+NODE
+}
+
 @test "explicit whole story short revision bypasses inbox and returns one direct command" {
     STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
     mkdir -p "$BOOK"

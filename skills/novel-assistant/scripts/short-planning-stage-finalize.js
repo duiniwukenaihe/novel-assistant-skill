@@ -24,6 +24,8 @@ const {
 } = require('./lib/short-project-state');
 const { appendIntegrationEvent } = require('./lib/integration-outbox');
 const { ensureCurrentShortMemoryStage } = require('./lib/short-memory-stage-recovery');
+const { invalidateBriefFreshnessSnapshot, sidecarRelativePath } = require('./lib/short-brief-freshness');
+const { validateWorkflowConfirmation } = require('./lib/workflow-confirmation-context');
 const {
   analyzeShortOutlineNarrativeQuality,
   inferPlannedSections,
@@ -641,6 +643,9 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
   if (String(execution.status || '') !== 'running' || String(execution.stage_id || '') !== 'feedback_apply_patch') {
     return finish({ status: 'stage_action_not_applicable', actual: String(task.current_stage || ''), instruction: '读取当前 execution_command，不要重试旧阶段命令。' }, 0, args.json);
   }
+  if (String(((task.short_feedback_impact || {}).impact_level) || '') === 'current_brief') {
+    return runFeedbackBriefInvalidation({ root, workflowId, task, execution, args });
+  }
   const acceptedPlan = task.accepted_plan && typeof task.accepted_plan === 'object' ? task.accepted_plan : {};
   const expectedAssets = normalizePlanningAssets((((acceptedPlan || {}).projection_plan || {}).planning_assets));
   const targets = Array.isArray(execution.planning_targets) ? execution.planning_targets
@@ -855,6 +860,85 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
     affected_sections: affectedSections,
     commit_id: String(commit.commit_id || ''),
     result_packet: packetRel,
+    next_stage: String(outcome.result.current_stage || ((outcome.result.task || {}).current_stage) || ''),
+    ...outcome.presentation,
+    ...(outcome.applied ? {} : { recovery: outcome.result }),
+  }, outcome.exitCode, args.json);
+}
+
+function runFeedbackBriefInvalidation({ root, workflowId, task, execution, args }) {
+  const acceptedPlan = task.accepted_plan && typeof task.accepted_plan === 'object' ? task.accepted_plan : {};
+  const pending = task.pending_feedback && typeof task.pending_feedback === 'object' ? task.pending_feedback : {};
+  if (String(acceptedPlan.feedback_id || '') !== String(pending.feedback_id || '')
+      || String(acceptedPlan.proposal_id || '') !== String(((task.proposed_plan || {}).proposal_id) || '')) {
+    return finish({ status: 'short_feedback_acceptance_mismatch', instruction: '重新显示当前反馈方案并确认；不得沿用旧方案。' }, 0, args.json);
+  }
+  if (!validateWorkflowConfirmation(task, execution).valid) {
+    return finish({ status: 'blocked_confirmation_required', instruction: '当前确认已失效或与方案不匹配，请重新显示并确认当前操作。' }, 0, args.json);
+  }
+  const affectedSections = normalizeSectionList(acceptedPlan.affected_sections || (task.short_feedback_impact || {}).affected_sections);
+  if (!affectedSections.length) {
+    return finish({ status: 'short_feedback_brief_scope_missing', instruction: '当前 Brief 回炉必须明确受影响小节。' }, 0, args.json);
+  }
+  if (!args.apply) return finish({ status: 'short_feedback_brief_invalidation_ready', affected_sections: affectedSections }, 0, args.json);
+  const sidecarPaths = affectedSections.map(sectionIndex => sidecarRelativePath(sectionIndex, root));
+  const rollbackSnapshots = sidecarPaths.map(relative => {
+    const file = safeProjectFile(root, relative);
+    return { file, existed: Boolean(file && fs.existsSync(file)), content: file && fs.existsSync(file) ? fs.readFileSync(file) : null };
+  });
+  const changedFiles = affectedSections.map((sectionIndex) => invalidateBriefFreshnessSnapshot({
+    projectRoot: root,
+    sectionIndex,
+    feedbackId: String(pending.feedback_id || ''),
+  }).sidecar);
+  const packetRel = String(execution.expected_result_packet || `${task.task_dir}/result-packets/feedback_apply_patch.result.json`);
+  const packetFile = safeProjectFile(root, packetRel);
+  atomicWriteJson(packetFile, {
+    schemaVersion: '1.0.0',
+    workflow_id: workflowId,
+    workflow_type: String(task.workflow_type || 'short_write'),
+    owner_module: String(execution.owner_module || task.workflow_owner || ''),
+    stage_id: 'feedback_apply_patch',
+    step_id: 'feedback_apply_patch',
+    step_status: 'completed',
+    outputs: [],
+    changed_files: changedFiles,
+    changed_assets: [],
+    created_files: [],
+    evidence: [{ accepted_plan_id: String(acceptedPlan.plan_id || ''), invalidated_brief_sidecars: changedFiles }],
+    verification_result: 'pass',
+    blocking_findings: [],
+    output_health_result: 'pass',
+    checkpoint_state: { current_stage: 'feedback_apply_patch', completed_range: `第 ${affectedSections.join('、')} 节旧 Brief 已标记失效`, remaining_range: '重建当前 Brief', resume_from: '' },
+    next_recommendation: '重建当前小节 Brief 后复检现有正文。',
+    handoff_summary: '当前反馈方案已确认，旧 Brief 已失效并进入受控重建。',
+    feedback_id: String(pending.feedback_id || ''),
+    impact_level: 'current_brief',
+    affected_sections: affectedSections,
+    cross_section_impact: affectedSections.length > 1,
+    brief_invalidated: true,
+    accepted_section: true,
+    downstream_impact: { invalidate_briefs: affectedSections, recheck_prose: affectedSections },
+    revision_groups: Array.isArray((task.short_feedback_impact || {}).revision_groups) ? task.short_feedback_impact.revision_groups : [],
+    memory_updates: [],
+    result_packet_path: packetRel,
+  });
+  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const outcome = classifyWorkflowApply(applied);
+  if (!outcome.applied) {
+    for (const snapshot of rollbackSnapshots) {
+      if (!snapshot.file) continue;
+      if (snapshot.existed) fs.writeFileSync(snapshot.file, snapshot.content);
+      else if (fs.existsSync(snapshot.file)) fs.unlinkSync(snapshot.file);
+    }
+  }
+  return finish({
+    status: outcome.applied ? 'applied' : 'apply_blocked',
+    workflow_status: outcome.workflowStatus,
+    workflow_id: workflowId,
+    stage_id: 'feedback_apply_patch',
+    affected_sections: affectedSections,
+    changed_files: changedFiles,
     next_stage: String(outcome.result.current_stage || ((outcome.result.task || {}).current_stage) || ''),
     ...outcome.presentation,
     ...(outcome.applied ? {} : { recovery: outcome.result }),
