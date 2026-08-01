@@ -6525,7 +6525,10 @@ function nextCandidates(args) {
   const tpl = registryCheck.template;
   const current = findStage(tpl, task.current_stage);
   const status = shouldStopBeforeStage(task, current) ? 'requires_user_confirm' : 'ok';
-  const visibleResponse = pendingActionVisibleResponse(task, root);
+  const feedbackProposalIntro = awaitingCurrentShortFeedbackProposal(task)
+    ? String(((task.proposed_plan || {}).summary) || '')
+    : '';
+  const visibleResponse = pendingActionVisibleResponse(task, root, feedbackProposalIntro);
   return {
     schemaVersion: SCHEMA_VERSION,
     status,

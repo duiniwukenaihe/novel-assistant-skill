@@ -3403,6 +3403,14 @@ if((out.visible_response||{}).work_queue!==null||String((out.visible_response||{
 if(!String((out.visible_response||{}).text||'').includes('1.')||String((out.visible_response||{}).text||'').includes('回复“继续”')) throw new Error(JSON.stringify(out.visible_response));
 NODE
 
+    run node "$SCRIPT" next-candidates --project-root "$TMP_DIR/book" --compact --json
+    [ "$status" -eq 0 ]
+    printf '%s\n' "$output" > "$TMP_DIR/reentered-proposal.json"
+    node - "$TMP_DIR/reentered-proposal.json" <<'NODE'
+const fs=require('fs'),out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),text=String(((out.visible_response||{}).text)||'');
+if(!text.includes('补足母亲当面承认并重建第7节规划。')||!text.includes('确认当前反馈回写方案（推荐）')) throw new Error(text);
+NODE
+
     node - "$SCRIPT" "$TMP_DIR/book" "$task_file" <<'NODE'
 const cp=require('child_process'),fs=require('fs'),path=require('path');const [script,root,file]=process.argv.slice(2);const task=JSON.parse(fs.readFileSync(file,'utf8'));const pending=task.pending_action;
 const run=cp.spawnSync(process.execPath,[script,'resolve-action','--project-root',root,'--input','1','--pending-action-id',pending.id,'--visible-choice-hash',pending.visible_choice_hash,'--state-version',String(task.state_version),'--book-root',root,'--json'],{encoding:'utf8'});
