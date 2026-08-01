@@ -402,11 +402,38 @@ function portableProjectCommand(command, projectRoot) {
   return value;
 }
 
+function shortFeedbackExecutionContractCurrent(task, execution) {
+  if (String((task || {}).current_stage || '') !== 'feedback_impact_sync') return true;
+  const expected = String((execution || {}).expected_result_packet || '');
+  const writeSet = Array.isArray((execution || {}).write_set) ? execution.write_set.map(String) : [];
+  const completion = String((execution || {}).stage_completion_command || (execution || {}).execution_command || '');
+  return Boolean(expected
+    && writeSet.length === 1
+    && writeSet[0] === expected
+    && /workflow-state-machine\.js apply-result/u.test(completion)
+    && completion.includes(`--result ${JSON.stringify(expected)}`));
+}
+
+function shortFeedbackContractRecoveryIntent(task) {
+  return {
+    status: 'stage_contract_recovery_ready',
+    intent_type: 'recover_running_feedback_contract',
+    workflow_id: String((task || {}).workflow_id || ''),
+    target_scope: String((task || {}).scope || ''),
+    interaction_mode: 'execute_command',
+    requires_user_confirm: false,
+    preserves_completed_workflow_evidence: true,
+    execution_workdir: '.',
+    execution_command: `node scripts/workflow-state-machine.js resume-pending-short-feedback --project-root . --workflow-id ${JSON.stringify(String((task || {}).workflow_id || ''))} --json`,
+  };
+}
+
 function runningStageIntent(task, projectRoot) {
   const execution = task && task.stage_execution && task.stage_execution.status === 'running'
     ? task.stage_execution
     : null;
   if (!execution) return null;
+  if (!shortFeedbackExecutionContractCurrent(task, execution)) return shortFeedbackContractRecoveryIntent(task);
   const completionCommand = portableProjectCommand(
     execution.stage_completion_command || execution.execution_command,
     projectRoot,
@@ -414,7 +441,7 @@ function runningStageIntent(task, projectRoot) {
   const portableExecution = {
     ...execution,
     execution_workdir: '.',
-    execution_command: portableProjectCommand(execution.execution_command, projectRoot),
+    execution_command: completionCommand,
     quality_command: portableProjectCommand(execution.quality_command, projectRoot),
     stage_completion_command: completionCommand,
     current_required_action: 'edit_write_set',

@@ -366,8 +366,12 @@ const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,
 const pending=task.pending_feedback||{};
 if(!String(pending.feedback_id||'').startsWith('feedback-batch-')) throw new Error(JSON.stringify(pending));
 if(pending.previous_stage!=='quality_gate'||pending.section_index!==6) throw new Error(JSON.stringify(pending));
-const expected=String((task.stage_execution||{}).expected_result_packet||'');
+const execution=task.stage_execution||{};
+const expected=String(execution.expected_result_packet||'');
 if(!expected.includes(pending.feedback_id)||expected.includes('feedback-unbound')) throw new Error(JSON.stringify({expected,pending}));
+if(!Array.isArray(execution.write_set)||execution.write_set.length!==1||execution.write_set[0]!==expected) throw new Error(JSON.stringify(execution));
+if(!/workflow-state-machine\.js apply-result/.test(String(execution.execution_command||''))) throw new Error(JSON.stringify(execution));
+if(execution.stage_completion_command!==execution.execution_command||(execution.after_write_action||{}).command!==execution.execution_command) throw new Error(JSON.stringify(execution));
 NODE
 }
 

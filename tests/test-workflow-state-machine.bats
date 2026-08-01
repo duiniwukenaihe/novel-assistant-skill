@@ -3196,6 +3196,118 @@ if(!/\/feedback_impact_sync\.feedback-batch-[a-f0-9]+\.result\.json$/.test(packe
 NODE
 }
 
+@test "short feedback impact stage exposes a writable completion contract" {
+    mkdir -p "$TMP_DIR/book"
+    printf '# 设定\n' > "$TMP_DIR/book/设定.md"
+    printf '# 小节大纲\n' > "$TMP_DIR/book/小节大纲.md"
+    printf '# 正文\n' > "$TMP_DIR/book/正文.md"
+    mkdir -p "$TMP_DIR/book/追踪/private-short-extension"
+    printf '%s\n' '{"project_id":"feedback-contract-test","project_title":"反馈合同测试","plan_revision":1}' > "$TMP_DIR/book/追踪/private-short-extension/project-state.json"
+    node "$SCRIPT" create --workflow-type short_write --project-root "$TMP_DIR/book" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
+
+    run node "$SCRIPT" resolve-action --project-root "$TMP_DIR/book" --input "整篇回炉：先更新设定和小节大纲。" --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    printf '%s\n' "$output" > "$TMP_DIR/feedback-impact-started.json"
+    ln -s "$REPO/scripts" "$TMP_DIR/book/scripts"
+    node - "$TMP_DIR/feedback-impact-started.json" "$TMP_DIR/book" <<'NODE'
+const cp=require('child_process'),fs=require('fs'),path=require('path');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),root=process.argv[3];
+const execution=out.stage_execution||{};
+const packet=String(execution.expected_result_packet||'');
+if(execution.write_set.length!==1||execution.write_set[0]!==packet) throw new Error(JSON.stringify(execution));
+if(!/workflow-state-machine\.js apply-result/.test(String(execution.execution_command||''))) throw new Error(JSON.stringify(execution));
+if(!String(execution.execution_command||'').includes(`--result ${JSON.stringify(packet)}`)) throw new Error(JSON.stringify(execution));
+if(execution.stage_completion_command!==execution.execution_command) throw new Error(JSON.stringify(execution));
+if(execution.current_required_action!=='edit_write_set') throw new Error(JSON.stringify(execution));
+if((execution.after_write_action||{}).command!==execution.execution_command) throw new Error(JSON.stringify(execution));
+for(const field of ['outputs=[]','changed_files=[]','evidence=[]','checkpoint_state']) if(!String(execution.resume_hint||'').includes(field)) throw new Error(JSON.stringify(execution.resume_hint));
+const taskFile=path.join(root,'追踪/workflow/tasks',out.workflow_id,'task.json');
+const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const result={schemaVersion:'1.0.0',workflow_id:task.workflow_id,workflow_type:task.workflow_type,owner_module:execution.owner_module,stage_id:'feedback_impact_sync',step_id:'feedback_impact_sync',step_status:'completed',outputs:[],changed_files:[],evidence:[],verification_result:'pass',checkpoint_state:{completed_stage:'feedback_impact_sync'},output_health_result:'pass',feedback_id:task.pending_feedback.feedback_id,impact_level:'planning',affected_sections:[1],affected_assets:['小节大纲.md'],downstream_impact:{invalidate_briefs:[1],recheck_prose:[1]},revision_groups:[{group_id:'revision-1',goal:'回写规划',section_indices:[1],completion_condition:'规划已同步'}],next_stage_id:'feedback_apply_patch',result_packet_path:packet};
+fs.mkdirSync(path.dirname(path.join(root,packet)),{recursive:true});
+fs.writeFileSync(path.join(root,packet),JSON.stringify(result,null,2)+'\n');
+const applied=cp.spawnSync(execution.stage_completion_command,{cwd:root,encoding:'utf8',shell:true});
+if(applied.status!==0) throw new Error(applied.stderr||applied.stdout);
+const response=JSON.parse(applied.stdout),saved=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+if(!['advanced','stage_started'].includes(response.status)||saved.current_stage!=='feedback_apply_patch') throw new Error(JSON.stringify({response,saved}));
+if((saved.short_feedback_impact||{}).feedback_id!==task.pending_feedback.feedback_id) throw new Error(JSON.stringify(saved.short_feedback_impact));
+if((saved.proposed_plan||{}).status!=='awaiting_user_confirmation') throw new Error(JSON.stringify(saved.proposed_plan));
+NODE
+}
+
+@test "stale running feedback impact contract returns one deterministic recovery command" {
+    mkdir -p "$TMP_DIR/book"
+    printf '# 设定\n' > "$TMP_DIR/book/设定.md"
+    printf '# 小节大纲\n' > "$TMP_DIR/book/小节大纲.md"
+    printf '# 正文\n' > "$TMP_DIR/book/正文.md"
+    node "$SCRIPT" create --workflow-type short_write --project-root "$TMP_DIR/book" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
+    node "$SCRIPT" resolve-action --project-root "$TMP_DIR/book" --input "整篇回炉：更新结局。" --json >/dev/null
+    local task_file
+    task_file="$(focused_task_file "$TMP_DIR/book")"
+    node - "$task_file" <<'NODE'
+const fs=require('fs');const file=process.argv[2],task=JSON.parse(fs.readFileSync(file,'utf8'));
+task.stage_execution.write_set=[];task.stage_execution.execution_command='';task.stage_execution.stage_completion_command='';task.stage_execution.after_write_action=null;
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    run node "$SCRIPT" next-candidates --project-root "$TMP_DIR/book" --compact --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    printf '%s\n' "$output" > "$TMP_DIR/stale-feedback-contract.json"
+    node - "$TMP_DIR/stale-feedback-contract.json" <<'NODE'
+const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),visible=out.visible_response||{};
+if(out.status!=='stage_contract_recovery_ready'||visible.render_mode!=='silent_execute') throw new Error(JSON.stringify(out));
+if(!String(out.execution_command||'').includes('resume-pending-short-feedback')) throw new Error(JSON.stringify(out));
+if(String(out.execution_command||'')!==String(visible.execution_command||'')) throw new Error(JSON.stringify(out));
+NODE
+}
+
+@test "feedback impact completion rejects a result from another feedback batch" {
+    mkdir -p "$TMP_DIR/book/追踪/private-short-extension"
+    printf '# 设定\n' > "$TMP_DIR/book/设定.md"
+    printf '# 小节大纲\n' > "$TMP_DIR/book/小节大纲.md"
+    printf '# 正文\n' > "$TMP_DIR/book/正文.md"
+    printf '%s\n' '{"project_id":"feedback-identity-test","project_title":"反馈身份测试","plan_revision":1}' > "$TMP_DIR/book/追踪/private-short-extension/project-state.json"
+    node "$SCRIPT" create --workflow-type short_write --project-root "$TMP_DIR/book" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
+    node "$SCRIPT" resolve-action --project-root "$TMP_DIR/book" --input "整篇回炉：更新结局。" --json > "$TMP_DIR/feedback-start.json"
+    ln -s "$REPO/scripts" "$TMP_DIR/book/scripts"
+    node - "$TMP_DIR/feedback-start.json" "$TMP_DIR/book" <<'NODE'
+const cp=require('child_process'),fs=require('fs'),path=require('path');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),root=process.argv[3],execution=out.stage_execution||{};
+const packet=execution.expected_result_packet,taskFile=path.join(root,'追踪/workflow/tasks',out.workflow_id,'task.json');
+const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const result={schemaVersion:'1.0.0',workflow_id:task.workflow_id,workflow_type:task.workflow_type,owner_module:execution.owner_module,stage_id:'feedback_impact_sync',step_id:'feedback_impact_sync',step_status:'completed',outputs:[],changed_files:[],evidence:[],verification_result:'pass',checkpoint_state:{completed_stage:'feedback_impact_sync'},output_health_result:'pass',feedback_id:'feedback-batch-from-another-turn',impact_level:'planning',affected_sections:[1],affected_assets:['小节大纲.md'],downstream_impact:{invalidate_briefs:[1]},revision_groups:[],next_stage_id:'feedback_apply_patch',result_packet_path:packet};
+fs.mkdirSync(path.dirname(path.join(root,packet)),{recursive:true});fs.writeFileSync(path.join(root,packet),JSON.stringify(result,null,2)+'\n');
+const applied=cp.spawnSync(execution.stage_completion_command,{cwd:root,encoding:'utf8',shell:true});
+const response=JSON.parse(applied.stdout),saved=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+if(applied.status===0||response.status!=='blocked_short_feedback_identity_mismatch') throw new Error(JSON.stringify({status:applied.status,response}));
+if(saved.current_stage!=='feedback_impact_sync'||saved.short_feedback_impact||saved.proposed_plan) throw new Error(JSON.stringify(saved));
+NODE
+}
+
+@test "running feedback impact normalizes a stale host command to the authoritative completion command" {
+    mkdir -p "$TMP_DIR/book"
+    printf '# 设定\n' > "$TMP_DIR/book/设定.md"
+    printf '# 小节大纲\n' > "$TMP_DIR/book/小节大纲.md"
+    printf '# 正文\n' > "$TMP_DIR/book/正文.md"
+    node "$SCRIPT" create --workflow-type short_write --project-root "$TMP_DIR/book" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
+    node "$SCRIPT" resolve-action --project-root "$TMP_DIR/book" --input "整篇回炉：更新结局。" --json >/dev/null
+    local task_file
+    task_file="$(focused_task_file "$TMP_DIR/book")"
+    node - "$task_file" <<'NODE'
+const fs=require('fs');const file=process.argv[2],task=JSON.parse(fs.readFileSync(file,'utf8'));
+task.stage_execution.execution_command='node scripts/workflow-stage-controller.js advance --project-root . --workflow-id stale --result stale.json --json';
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    node "$SCRIPT" next-candidates --project-root "$TMP_DIR/book" --compact --json > "$TMP_DIR/normalized-feedback-command.json"
+    node - "$TMP_DIR/normalized-feedback-command.json" <<'NODE'
+const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),execution=out.stage_execution||{};
+if(out.status!=='stage_execution_resume_ready') throw new Error(JSON.stringify(out));
+if(!/workflow-state-machine\.js apply-result/.test(String(execution.execution_command||''))) throw new Error(JSON.stringify(execution));
+if(execution.execution_command!==execution.stage_completion_command||(execution.after_write_action||{}).command!==execution.stage_completion_command) throw new Error(JSON.stringify(execution));
+NODE
+}
+
 @test "natural whole story rework feedback enters the existing short workflow" {
     mkdir -p "$TMP_DIR/book"
     printf '# 设定\n' > "$TMP_DIR/book/设定.md"

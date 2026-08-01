@@ -737,6 +737,39 @@ if(JSON.stringify({direct,visible}).includes(root)) throw new Error('absolute pr
 NODE
 }
 
+@test "entry guard recovers a stale running feedback impact contract instead of silently resuming it" {
+    STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
+    printf '# 素材卡\n' > "$BOOK/素材卡.md"
+    printf '# 设定\n' > "$BOOK/设定.md"
+    printf '# 小节大纲\n' > "$BOOK/小节大纲.md"
+    printf '# 正文\n' > "$BOOK/正文.md"
+    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$BOOK" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
+    node "$STATE_MACHINE" resolve-action --project-root "$BOOK" --input "整篇回炉：更新结局。" --json >/dev/null
+    local task_file
+    task_file="$(node - "$BOOK" <<'NODE'
+const fs=require('fs'),path=require('path'),root=process.argv[2];
+const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
+process.stdout.write(path.join(root,pointer.task_dir,'task.json'));
+NODE
+)"
+    node - "$task_file" <<'NODE'
+const fs=require('fs');const file=process.argv[2],task=JSON.parse(fs.readFileSync(file,'utf8'));
+task.stage_execution.write_set=[];task.stage_execution.execution_command='';task.stage_execution.stage_completion_command='';task.stage_execution.after_write_action=null;
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    run node "$SCRIPT" --project-root "$BOOK" --user-intent "继续执行整篇回炉" --compact --json
+    [ "$status" -eq 0 ]
+    printf '%s\n' "$output" > "$TMP_DIR/stale-feedback-entry.json"
+    node - "$TMP_DIR/stale-feedback-entry.json" <<'NODE'
+const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),direct=out.direct_intent||{},visible=out.visible_response||{};
+if(direct.status!=='stage_contract_recovery_ready'||direct.interaction_mode!=='execute_command') throw new Error(JSON.stringify(direct));
+if(!String(direct.execution_command||'').includes('resume-pending-short-feedback')) throw new Error(JSON.stringify(direct));
+if(visible.render_mode!=='silent_execute'||visible.selection_contract!=='execute_direct_intent_command') throw new Error(JSON.stringify(visible));
+if(String(visible.text||'')!=='') throw new Error(JSON.stringify(visible));
+NODE
+}
+
 @test "bare skill invocation keeps the global inbox before entering a running task" {
     STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
     printf '# 素材卡\n' > "$BOOK/素材卡.md"

@@ -201,6 +201,7 @@ const REVIEW_EVIDENCE_PROTOCOL_VERSION = '2.0.0';
 const WORKFLOW_SESSION_LEASE_MS = 20 * 60 * 1000;
 const SHORT_EXECUTABLE_STAGE_CONTRACTS = new Set([
   'startup_scan', 'info_source_pool', 'material_learning',
+  'feedback_impact_sync',
   'section_plan_lock', 'short_structure_impact_audit', 'hook_retention_gate', 'hook_value_gate',
   'first_section_brief', 'section_brief', 'next_section_brief',
   'draft_first_section', 'draft_section', 'draft_next_section',
@@ -4934,17 +4935,56 @@ function bindStageCompletionContract(execution) {
   };
 }
 
+function shortFeedbackExecutionContractCurrent(task, execution) {
+  if (String((task || {}).current_stage || '') !== 'feedback_impact_sync') return true;
+  const expected = String((execution || {}).expected_result_packet || '');
+  const writeSet = Array.isArray((execution || {}).write_set) ? execution.write_set.map(String) : [];
+  const completion = String((execution || {}).stage_completion_command || (execution || {}).execution_command || '');
+  return Boolean(expected
+    && writeSet.length === 1
+    && writeSet[0] === expected
+    && /workflow-state-machine\.js apply-result/u.test(completion)
+    && completion.includes(`--result ${JSON.stringify(expected)}`));
+}
+
+function shortFeedbackContractRecovery(task) {
+  const command = `node scripts/workflow-state-machine.js resume-pending-short-feedback --project-root . --workflow-id ${JSON.stringify(String((task || {}).workflow_id || ''))} --json`;
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'stage_contract_recovery_ready',
+    selection_status: 'recover',
+    workflow_id: String((task || {}).workflow_id || ''),
+    workflow_type: String((task || {}).workflow_type || ''),
+    current_stage: 'feedback_impact_sync',
+    interaction_mode: 'execute_command',
+    presentation_allowed: false,
+    execution_workdir: '.',
+    execution_command: command,
+    visible_response: {
+      render_mode: 'silent_execute',
+      user_visible: false,
+      status: 'stage_contract_recovery_ready',
+      selection_contract: 'execute_direct_intent_command',
+      interaction_mode: 'execute_command',
+      execution_workdir: '.',
+      execution_command: command,
+      requires_user_confirm: false,
+    },
+  };
+}
+
 function runningStageResume(task, root) {
   const execution = task && task.stage_execution && task.stage_execution.status === 'running'
     ? task.stage_execution
     : null;
   if (!execution) return null;
+  if (!shortFeedbackExecutionContractCurrent(task, execution)) return shortFeedbackContractRecovery(task);
   const boundExecution = bindStageCompletionContract(execution);
   const completionCommand = portableProjectCommand(boundExecution.stage_completion_command, root);
   const portableExecution = {
     ...boundExecution,
     execution_workdir: '.',
-    execution_command: portableProjectCommand(execution.execution_command, root),
+    execution_command: completionCommand,
     quality_command: portableProjectCommand(execution.quality_command, root),
     stage_completion_command: completionCommand,
     after_write_action: {
@@ -5318,6 +5358,14 @@ function validateStartedStageExecutionContract(task, stageId) {
       status: 'missing',
       reason: String(((execution.memory_context || {}).status) || '当前阶段要求的记忆上下文不可用。'),
     };
+  }
+  if (String(stageId || '') === 'feedback_impact_sync') {
+    if (!shortFeedbackExecutionContractCurrent(task, execution)) {
+      return {
+        status: 'missing',
+        reason: '反馈影响阶段缺少唯一可写结果包或权威 apply-result 完成命令。',
+      };
+    }
   }
   if (String(execution.execution_command || '').trim() || String(execution.context_read_command || '').trim()) return { status: 'ok' };
   return {
@@ -5776,6 +5824,14 @@ function attachShortStageExecutionGuidance(root, task, targetStage) {
     }
   }
 
+  if (targetStage === 'feedback_impact_sync') {
+    const resultPacket = String(execution.expected_result_packet || '');
+    execution.write_set = [resultPacket];
+    execution.context_read_command = `node scripts/workflow-stage-context.js read-current --project-root . --workflow-id ${quotedWorkflowId}`;
+    execution.execution_command = `node scripts/workflow-state-machine.js apply-result --project-root ${quotedRoot} --workflow-id ${quotedWorkflowId} --result ${JSON.stringify(resultPacket)} --json`;
+    Object.assign(execution, bindStageCompletionContract(execution));
+  }
+
   try {
     const packet = buildStageContextPacket({ projectRoot: root, task, stage: targetStage });
     if (packet.status !== 'assembled') {
@@ -5856,7 +5912,8 @@ function attachShortStageExecutionGuidance(root, task, targetStage) {
       execution.execution_command = `node scripts/short-section-brief-finalize.js --project-root ${quotedRoot} --workflow-id ${quotedWorkflowId} --apply --json`;
       execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；生成第${packet.section_index}节写作提要：只保留承接、目标与阻力、因果动作、人物/视角锁、禁写项、节尾钩子六部分，同一事实只写一次，篇幅和事件数按目标正文动态收敛。随后运行 execution_command；不得读取完整 skill 或历史回执。`;
     } else if (targetStage === 'feedback_impact_sync') {
-      execution.resume_hint = '先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；按反馈批次逐项输出影响层级、受影响规划文件、小节范围、保留项、失效 Brief/正文和回写顺序。本阶段不改创作资产，不得遗漏前序意见或复用旧反馈结论。';
+      const resultPacket = String(execution.expected_result_packet || '');
+      execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；按反馈批次逐项分析影响层级、受影响规划文件、小节范围、保留项、失效 Brief/正文和回写顺序；把结果写入 ${resultPacket}，回执必须包含 schemaVersion、workflow_id、workflow_type、owner_module、stage_id=feedback_impact_sync、step_id=feedback_impact_sync、step_status=completed、outputs=[]、changed_files=[]、evidence=[]、verification_result=pass、checkpoint_state、output_health_result=pass、feedback_id、impact_level、affected_sections、affected_assets、downstream_impact、revision_groups、next_stage_id=feedback_apply_patch、result_packet_path。然后逐字运行 stage_completion_command。本阶段不改创作资产，不得展示或发明用户菜单，不得遗漏前序意见或复用旧反馈结论。`;
     } else if (targetStage === 'feedback_apply_patch') {
       const staged = (execution.planning_targets || []).map(item => item.staged).join('、');
       execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；只修改暂存规划资产 ${staged}。按已确认方案回写后运行 execution_command，一次性提交规划资产、建立受影响小节修订队列并使旧 Brief/正文进入待复检。不得直接覆盖正式规划文件或正文。`;
