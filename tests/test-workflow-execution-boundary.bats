@@ -15,6 +15,9 @@ if (!withChild.stream_abort || !withChild.process_liveness || !withChild.exact_u
 const withoutChild = boundary.capabilitiesFor('managed_runner', { runnerOwnedChild: false, usageSource: 'host' });
 if (withoutChild.stream_abort || withoutChild.process_liveness) throw new Error(JSON.stringify(withoutChild));
 if (!withoutChild.checkpoint || !withoutChild.result_packet) throw new Error(JSON.stringify(withoutChild));
+for (const key of ['streaming_control', 'unattended']) {
+  if (Object.prototype.hasOwnProperty.call(withoutChild, key)) throw new Error(JSON.stringify(withoutChild));
+}
 NODE
 }
 
@@ -24,6 +27,9 @@ const boundary = require(process.argv[2]);
 const caps = boundary.capabilitiesFor('cooperative_interactive', { runnerOwnedChild: true, usageSource: 'host' });
 if (caps.stream_abort || caps.process_liveness || caps.exact_usage) throw new Error(JSON.stringify(caps));
 if (!caps.checkpoint || !caps.result_packet) throw new Error(JSON.stringify(caps));
+for (const key of ['streaming_control', 'unattended', 'streaming_health', 'abort_execution']) {
+  if (Object.prototype.hasOwnProperty.call(caps, key)) throw new Error(JSON.stringify(caps));
+}
 if (boundary.visibleModeLabel('cooperative_interactive') !== '协作模式') throw new Error('bad cooperative label');
 if (boundary.visibleModeLabel('managed_runner') !== '托管运行') throw new Error('bad managed label');
 NODE

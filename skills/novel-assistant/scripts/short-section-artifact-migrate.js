@@ -7,6 +7,7 @@ const { commitAcceptedSection } = require('./lib/short-section-commit-store');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
+const { readShortProjectState, resolveShortStateRelative, shortStateFile } = require('./lib/short-project-state');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -24,8 +25,8 @@ function main() {
     }, 0, args.json);
   }
 
-  const stateFile = path.join(root, '追踪/private-short-extension/project-state.json');
-  const state = readJson(stateFile) || {};
+  const stateFile = shortStateFile(root, 'project-state.json', { forWrite: true });
+  const state = readShortProjectState(root) || {};
   const accepted = Array.isArray(state.accepted_sections) ? state.accepted_sections.slice().sort((a, b) => Number(a.section_index) - Number(b.section_index)) : [];
   const legacy = accepted.filter((item) => !isCurrentArtifact(item));
   if (!legacy.length) return finish({ status: 'short_artifacts_current', migrated_sections: [] }, 0, args.json);
@@ -44,7 +45,7 @@ function main() {
       missing.push({ section_index: sectionIndex, source_path: sourceRel });
       continue;
     }
-    const anchorRel = String(item.anchor_path || `追踪/private-short-extension/section-${String(sectionIndex).padStart(3, '0')}-anchor.json`);
+    const anchorRel = String(item.anchor_path || resolveShortStateRelative(root, `section-${String(sectionIndex).padStart(3, '0')}-anchor.json`, { forWrite: true }));
     const anchor = readJson(safeProjectFile(root, anchorRel)) || {};
     const userConfirmed = userConfirmedSections.has(sectionIndex);
     const qualityResult = normalizeLegacyQuality(anchor.quality_result, userConfirmed);

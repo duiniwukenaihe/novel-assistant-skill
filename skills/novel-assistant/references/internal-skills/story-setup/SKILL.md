@@ -1,6 +1,6 @@
 ---
 name: story-setup
-version: 1.4.5
+version: 1.4.6
 description: |
   网文写作工具集基础设施部署。将 hooks/rules/agents/CLAUDE.md 等基础设施部署到用户项目目录。
   触发方式：/story-setup、「准备写书」「帮我搭一下环境」「配置写作项目」
@@ -43,7 +43,7 @@ node scripts/novel-assistant-sync-runtime.js --project-root . --dry-run --json
 
 已部署项目必须逐字使用上面的无占位符命令；脚本会从 Claude Code、Codex、ZCode 的本地安装目录中选择最新 `novel-assistant` bundle。禁止把尖括号占位符原样发送给 shell。确认预览无冲突后只去掉 `--dry-run`。
 
-该命令一次性预览 hooks / agents / rules / scripts / references / 写入策略 / `.story-deployed`，并创建 `.claude/.agents-pending-restart`。确认预览无冲突后，去掉 `--dry-run` 执行；若返回 `confirmation_required`，先展示冲突路径，再由用户明确确认后追加 `--confirm-conflicts`。不得把同一动作拆成多条 `cp` / `rsync` / `mkdir` / `chmod` / `cat` / heredoc 命令让用户反复授权；只有脚本缺失或返回结构化错误时，才进入下方手工部署步骤。
+该命令一次性预览 hooks / agents / rules / scripts / references / 写入策略 / `.story-deployed`，并创建 `.claude/.agents-pending-restart`。确认预览无冲突后，去掉 `--dry-run` 执行；若返回 `confirmation_required`，先展示冲突路径，再逐字执行返回的 `confirmation_command`，不得猜测 `--confirm` 等不存在的参数。不得把同一动作拆成多条 `cp` / `rsync` / `mkdir` / `chmod` / `cat` / heredoc 命令让用户反复授权；只有脚本缺失或返回结构化错误时，才进入下方手工部署步骤。
 
 运行时文件的所有权记录在 `.story-runtime-managed.json`：仅清单已托管且内容未被用户改动的文件可更新；刷新前会为已托管的变更写入 `追踪/runtime-snapshots/<timestamp>/manifest.json`。该命令不移动正文、大纲、细纲、设定或追踪创作资产；目录迁移仍按 Phase 2.6 另行确认。
 
@@ -158,6 +158,9 @@ node scripts/novel-assistant-sync-runtime.js --project-root . --dry-run --json
   - `output-pollution-check.js`
   - `runtime-guard-validate.js`
   - `token-cost-ledger.js`
+  - `token-efficiency-benchmark.js`
+  - `tool-output-compact.js`
+  - `source-ingest.js`
   - `workflow-entry-guard.js`
   - `workflow-runtime-supervisor.js`
   - `workflow-state-machine.js`
@@ -311,8 +314,8 @@ node scripts/story-schema-validate.js <book-project-dir>
 - 写入以下字段（YAML `key: value` 格式，hook 用 `references/templates/hooks/lib/sentinel.sh` 读取）：
   ```
   deployed_at: <date -u +"%Y-%m-%dT%H:%M:%SZ">
-  agents_version: 18
-  setup_skill_version: 1.4.5
+  agents_version: 19
+  setup_skill_version: 1.4.6
   novel_assistant_bundle_id: <从 novel-assistant-manifest.json 读取 bundleId；不可读时写 unknown>
   novel_assistant_source_commit: <从 novel-assistant-manifest.json 读取 sourceCommit；不可读时写 unknown>
   target_cli: claude-code（或 opencode，或 claude-code,opencode）
@@ -321,7 +324,7 @@ node scripts/story-schema-validate.js <book-project-dir>
   ```
 - 此文件供 session-start.sh 和写作 skill 检测部署状态，避免重复提示
 - 同时创建一次性标记文件 `.claude/.agents-pending-restart`（空文件即可）。session-start.sh 在下一个会话启动时据此确认 agents 已随新会话注册，并自动删除该标记——用来向用户确认「重启已生效」。
-- 如果 `.story-deployed` 已存在但无 `agents_version` 或版本 < 18，提示用户重新运行 story-setup 以更新 hooks/agents/rules/reference bundle、运行时脚本、OpenCode 资产、`style-learner.md`、`user-style-learning.md`、退化检测器和章节定位参考，并执行长篇目录迁移（具体变更见 `UPGRADING.md`）
+- 如果 `.story-deployed` 已存在但无 `agents_version` 或版本 < 19，提示用户重新运行 story-setup 以更新 hooks/agents/rules/reference bundle、运行时脚本、OpenCode 资产、`professional-reader.md`、专业读者审阅合同、退化检测器和章节定位参考，并执行长篇目录迁移（具体变更见 `UPGRADING.md`）
 
 ### 更新完成后的收束规则
 
@@ -356,7 +359,7 @@ node scripts/story-schema-validate.js <book-project-dir>
 2. 验证 rules 路径：
    - 检查 `.claude/rules/` 下的规则文件是否存在且包含 `paths` frontmatter
 3. 验证 agents：
-   - 检查 `.claude/agents/` 下的 8 个 agent 定义文件是否存在，包括 `style-learner.md`
+   - 检查 `.claude/agents/` 下的 9 个 agent 定义文件是否存在，包括 `style-learner.md` 与 `professional-reader.md`
 4. 验证 agent reference bundle：
    - 检查 `.claude/agent-references/novel-assistant/` 下 reference 文件完整
    - 检查所有 `novel-assistant/references/agent-references/<file>.md` 都能解析到 deployed bundle
@@ -366,7 +369,7 @@ node scripts/story-schema-validate.js <book-project-dir>
    - 检查 `opencode.json` 的 `plugin` 数组包含 `./.opencode/plugins/story-hooks.ts`
    - 检查 `.opencode/commands/` 中所有兼容命令都导向 `novel-assistant`
 6. 验证部署标记：
-   - 检查 `.story-deployed` 是否存在且包含时间戳、`agents_version: 18`、`setup_skill_version: 1.4.5`、`novel_assistant_bundle_id`、`novel_assistant_source_commit`、`target_cli`、`resolver_strategy`、`references_dir`
+   - 检查 `.story-deployed` 是否存在且包含时间戳、`agents_version: 19`、`setup_skill_version: 1.4.6`、`novel_assistant_bundle_id`、`novel_assistant_source_commit`、`target_cli`、`resolver_strategy`、`references_dir`
 7. 验证长篇结构迁移：
    - 如识别到长篇书目，检查 `追踪/版本/*_layout-migration/manifest.json`（有旧扁平文件时）或确认无需迁移
    - 检查 `追踪/章节资产.jsonl` 与 `追踪/schema/chapters.jsonl` 可生成
@@ -413,8 +416,8 @@ hooks 注册合并按 command 字段去重：
 ## 重新部署
 
 - `.story-deployed` 不存在 → 全新安装，Phase 2 全部执行
-- `.story-deployed` 存在且 `agents_version: 18` → 提示已部署，用普通文本确认是否重新部署
-- `.story-deployed` 存在但 `agents_version` < 18 → 提示需要更新，重新执行 Phase 2 覆盖 agents/hooks/rules/reference bundle、运行时脚本、OpenCode 资产，执行长篇目录迁移，CLAUDE.md / AGENTS.md 和 settings.local.json / opencode.json 走合并策略
+- `.story-deployed` 存在且 `agents_version: 19` → 提示已部署，用普通文本确认是否重新部署
+- `.story-deployed` 存在但 `agents_version` < 19 → 提示需要更新，重新执行 Phase 2 覆盖 agents/hooks/rules/reference bundle、运行时脚本、OpenCode 资产，执行长篇目录迁移，CLAUDE.md / AGENTS.md 和 settings.local.json / opencode.json 走合并策略
 
 ---
 
@@ -425,7 +428,7 @@ hooks 注册合并按 command 字段去重：
 | references/templates/CLAUDE.md.tmpl | 项目根 CLAUDE.md 模板 |
 | references/templates/hooks/ | hook 脚本模板 + `lib/common.sh`/`lib/sentinel.sh`，含正文前置细纲守卫与正文写后质量门禁 |
 | references/templates/rules/ | 4 条 path-scoped 规则模板 |
-| references/templates/agents/ | 8 个 agent 定义模板（story-architect, character-designer, narrative-writer, consistency-checker, story-researcher, story-explorer, chapter-extractor, style-learner） |
+| references/templates/agents/ | 9 个 agent 定义模板（story-architect, character-designer, narrative-writer, consistency-checker, story-researcher, story-explorer, chapter-extractor, style-learner, professional-reader） |
 | references/agent-references/ | Agent 模板自带的参考资料源码副本；部署主路径为 `.claude/agent-references/novel-assistant/`，可复制旧 `story-setup` fallback，避免跨 skill references |
 | references/opencode/ | OpenCode / OpenClaw 资产：AGENTS.md 模板、agents、commands、plugin、opencode.json patch、pre-commit |
 | references/templates/settings-hooks.json | hooks 注册 JSON 片段 |

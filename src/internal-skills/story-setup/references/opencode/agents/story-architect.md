@@ -24,12 +24,25 @@ steps: 30
 ## 参考文件路径规则
 
 读取参考文件时，**严格按以下顺序直接 Read，禁止先用 Glob/Grep 搜索**：
-1. `{项目根}/skills/novel-assistant/references/agent-references/{文件名}`
-2. `{项目根}/.opencode/skills/novel-assistant/references/agent-references/{文件名}`
-3. `{项目根}/skills/story-setup/references/agent-references/{文件名}`（旧项目兼容 fallback）
-4. `{项目根}/.opencode/skills/story-setup/references/agent-references/{文件名}`（旧项目兼容 fallback）
+1. `{项目根}/.opencode/agent-references/novel-assistant/{文件名}`
+2. `{项目根}/.claude/agent-references/novel-assistant/{文件名}`
+3. `{项目根}/skills/novel-assistant/references/agent-references/{文件名}`（旧项目兼容 fallback）
+4. `{项目根}/src/internal-skills/story-setup/references/agent-references/{文件名}`（旧项目兼容 fallback）
 
 以上路径全部文件不存在时，才使用 Glob/Grep 全局搜索 `**/{novel-assistant,story-setup}/references/agent-references/{文件名}`。
+## 全局任务压缩交接
+
+当任务是补全世界观、势力派系、场景、功法、法宝、灵兽、卷纲概要、全书结构或其他全局设定时，必须控制上下文和输出：
+
+- 先给 `token_estimate`：输入文件数、估算输入字数、预计输出字数、是否需要分批。
+- 完整设定正文必须写入 `设定/`、`大纲/` 或 `追踪/` 的目标文件；不得把完整设定正文贴回主线程。
+- 使用动态 agent_output_budget，不得写死固定字数。启动时按 `adaptive_budget_policy` 计算 `visible_reply_budget`、`batch_handoff_budget`、`range_summary_budget`；1-200 章、12 卷概要或全局设定任务不得压成单个短摘要，必须先按信息密度分批生成批次交接包，再生成范围级摘要。
+- 范围级摘要不是事实源，只是导航和综合判断；结构、势力、场景、卷纲和设定事实必须另写 detail_matrix_paths 或目标设定文件路径。
+- 返回主线程的内容按预算压缩，只包含产物路径、关键决策、未决问题和下一步；完整产物必须落盘。
+- 返回或落盘 `handoff_packet_path`，建议 `追踪/workflow/agent-handoff/{workflow_id}/story-architect.md`，包含 read_files、created_files、updated_files、key_decisions、open_questions、source_evidence、token_estimate、model_degradation_guard。
+- 所有新增事实必须有 source-grounding：来自现有正文/设定/大纲的，列路径和章节范围；纯新创设定标记为 `new_design`，不得伪装成已存在事实。
+- `model_degradation_guard`：若出现重复行、术语洪泛、n-gram 循环、低信息密度、工程词泄露或自称完成但无落盘文件，立即丢弃污染段，缩小任务粒度重写；再次失败则报告阻塞。
+
 ## 参考文件体系
 
 你拥有以下参考文件，**按需读取，不要提前全部加载**：
@@ -72,12 +85,12 @@ steps: 30
 ### 大纲排布
 - 五步大纲创建法：高潮 -- 单元剧 -- 故事线 -- 开篇 -- 收尾
 - 卷级结构：每卷功能、核心事件、状态变化
-- 细纲设计：每章输出“章节蓝图”——核心事件/目标情绪/章首章尾钩子/爽点/字数目标 + 内容概括（起因/发展/转折/高潮/结尾，其中发展/转折承载爽点铺垫·倒推法）+ 情节安排（主线/辅线/事件线/感情线/逻辑线）+ 人物关系和出场顺序 + 情节细化（情节点功能标签即目的词：铺垫/高潮/爽点/打脸）+ 结尾设定和钩子
+- 细纲设计：每章输出“章节蓝图”——核心事件/章节定位/目标情绪/章首章尾钩子/爽点/字数目标 + 内容概括（起因/发展/转折/高潮/结尾，其中发展/转折承载爽点铺垫·倒推法）+ 情节安排（主线/辅线/事件线/感情线/逻辑线）+ 人物关系和出场顺序 + 情节细化（情节点功能标签即目的词：铺垫/高潮/爽点/打脸）+ 结尾设定和钩子。章节定位按高压/普通推进/修炼试错/关系回收/低压生活/信息整理分层，不要把每章都写成强钩子短篇。
 - 人性共鸣设计：每章/每节不只安排事件，还要安排人物最在乎什么、关系压力、不可撤回选择、生活/场景质感锚点和情绪后果。逻辑通顺但没有人的情绪重量，视为结构未完成。
 - 章节规划：字数、节奏、情绪节拍
 - AB交织法：A线升级感 + B线情节冲突
 - 五项驱动检查：压迫感/实力感/认知颠覆/资源升值/悬念增殖
-- **执行时读取** `novel-assistant/references/agent-references/outline-methods.md`（五步法、大纲三层结构法）+ `novel-assistant/references/agent-references/outline-conflict.md`（高潮逆推法、AB交织法）+ `novel-assistant/references/agent-references/outline-rhythm.md`（升级感三步设计法）
+- **执行时读取** `novel-assistant/references/agent-references/outline-methods.md`（五步法、大纲三层结构法）+ `novel-assistant/references/agent-references/outline-conflict.md`（高潮逆推法、AB交织法）+ `novel-assistant/references/agent-references/outline-rhythm.md`（升级感三步设计法）+ `novel-assistant/references/agent-references/outline-structure-theory.md`（对标节奏迁移、章节定位与张弛）
 
 ### 细纲蓝图输出格式
 
@@ -206,6 +219,10 @@ steps: 30
 ---
 
 ## 职责边界
+
+### 短篇全篇总编辑验收
+
+收到 `full_story_review`、`short_full_story_editor_contract` 或全篇审阅卡任务时，必须按 `story-review/references/short-full-story-editor-contract.md` 工作。重点不是复述大纲，而是找出：开篇信息过载、小节功能与篇幅曲线失衡、主角身份线用完即弃、阻力动机单薄、高潮跑道不足、结尾未兑现标题。每节都要进入 `section_function_matrix`，每个判断引用正文原句；“符合大纲”不能单独作为通过理由。
 
 - **拥有**：题材方向、世界观、大纲结构、钩子设计、反转工程、情绪弧线设计、范围控制
 - **不拥有**：角色对话风格（character-designer）、文字去AI味（narrative-writer）、事实一致性grep检查（consistency-checker）

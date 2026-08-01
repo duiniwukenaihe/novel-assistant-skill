@@ -182,7 +182,7 @@ function normalizeDocument(input, quoteMode) {
       line: 1,
       column: 1,
       type: 'dash-density',
-      message: `破折号密度失控：正文约 ${proseCharCount} 字出现 ${preservedDashCount} 处破折号；正文产物不保留破折号，反复用破折号制造停顿时必须回炉重写或人工改写。`,
+      message: `破折号密度失控：正文约 ${proseCharCount} 字出现 ${preservedDashCount} 处破折号；少量有功能用法可以保留，反复用破折号制造停顿时必须回炉重写或人工改写。`,
     });
     unrecoverable = true;
   }
@@ -277,11 +277,13 @@ function choosePauseReplacement(text, start, length, token) {
   const after = nextNonSpace(text, start + length);
   const rest = text.slice(start + length).trimStart();
 
-  // 正文产物不保留 `……`、`——`、`—` 或 `--`；对话打断和数字区间不设破折号例外。
+  // 稀疏的中文双破折号可能承担插入说明、语义转折或对话打断；
+  // 这里只规范化数字区间、单个长横线和双连字符，密度与逐字污染由上层门禁处理。
   if (before === '') return '';
   // 紧跟开引号/开括号的停顿符号属于句首边界，删空即可，避免产出 `「，…」` 或 `「。」`。
   if (isOpeningDelimiter(before)) return '';
   if (/\d/.test(before) && /\d/.test(after)) return '到';
+  if (token === '——') return null;
   if (isClosingQuote(after)) return isSentencePunctuation(before) ? '' : '。';
 
   if (!after) return isSentencePunctuation(before) ? '' : '。';

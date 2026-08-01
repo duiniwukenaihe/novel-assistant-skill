@@ -8,6 +8,40 @@ setup() {
     mkdir -p "$BOOK/追踪/workflow" "$BOOK/追踪/输出门禁"
 }
 
+@test "running stage labels section plan lock in user-facing Chinese" {
+  run node -e 'const fs=require("fs"); const s=fs.readFileSync(process.argv[1], "utf8"); if (!s.includes("section_plan_lock") || !s.includes("确认总节数与小节标题")) process.exit(1);' "$SCRIPT"
+  [ "$status" -eq 0 ]
+}
+
+@test "bare entry keeps section acceptance behind the global inbox" {
+    mkdir -p "$BOOK/追踪/workflow/tasks/wf-short-accept"
+    cat > "$BOOK/追踪/workflow/tasks/wf-short-accept/task.json" <<'JSON'
+{
+  "schemaVersion":"1.0.0",
+  "workflow_id":"wf-short-accept",
+  "workflow_type":"short_write",
+  "workflow_contract_version":3,
+  "workflow_profile":"private",
+  "workflow_owner":"private-short-extension",
+  "task_dir":"追踪/workflow/tasks/wf-short-accept",
+  "status":"running",
+  "scope":"全篇",
+  "user_goal":"测试短篇",
+  "current_stage":"section_accept_anchor",
+  "current_step":"section_accept_anchor",
+  "lifecycle":{"status":"active"},
+  "machine":{"completed_stages":["first_section_brief","draft_first_section","section_machine_gate","story_value_gate"],"remaining_stages":["section_accept_anchor","next_section_brief"]},
+  "runtime_guard":{"heartbeat":{"updated_at":"2026-07-12T00:00:00.000Z"},"stall_policy":{"heartbeat_timeout_minutes":999999}},
+  "stage_execution":{"status":"running","stage_id":"section_accept_anchor","execution_command":"node scripts/short-section-accept-finalize.js --project-root . --workflow-id \"wf-short-accept\" --apply --json"}
+}
+JSON
+    write_focus_pointer wf-short-accept
+
+    output="$(node "$SCRIPT" --project-root "$BOOK" --compact --json)"
+    echo "$output" | grep -q '1. 查看未完成任务（1 个）（推荐）'
+    ! echo "$output" | grep -q '当前阶段：采用当前小节并写入锚点'
+}
+
 teardown() {
     rm -rf "$TMP_DIR"
 }
@@ -45,6 +79,37 @@ NODE
     ! echo "$output" | grep -q '"migration_inventory"'
     ! echo "$output" | grep -q '"task_families"'
     [ "${#output}" -lt 6000 ]
+}
+
+@test "workflow entry guard lazily migrates one old short workflow and memory contract" {
+    node "$REPO/scripts/workflow-state-machine.js" create --workflow-type short_write --project-root "$BOOK" --scope "第1节" --user-goal "旧短篇" --no-private-registry --json >/dev/null
+    task_file="$(node - "$BOOK" <<'NODE'
+const fs=require('fs'),path=require('path');const root=process.argv[2];const p=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));process.stdout.write(path.join(root,p.task_dir,'task.json'));
+NODE
+)"
+    workflow_id="$(node -e 'console.log(require(process.argv[1]).workflow_id)' "$task_file")"
+    node - "$task_file" <<'NODE'
+const fs=require('fs');const file=process.argv[2];const task=JSON.parse(fs.readFileSync(file,'utf8'));
+delete task.workflow_contract_version;
+task.current_stage='section_outline';task.current_step='section_outline';task.scope='第1节';task.lifecycle.scope='第1节';
+task.stage_execution={status:'running',stage_attempt_id:'sa-old-outline',stage_id:'section_outline',work_unit_scope:'第1节',planning_target:'追踪/workflow/staging/old/小节大纲.md',memory_context:{packet_json:'old-context.json',memory_contract:{memory_revision:'sha256:old'}}};
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    output="$(node "$SCRIPT" --project-root "$BOOK" --compact --json)"
+    echo "$output" | grep -q '"status":"short_workflow_migration_pending"'
+    echo "$output" | grep -q '升级并恢复当前短篇任务'
+    echo "$output" | grep -q 'migrate-short-lean-workflow'
+
+    output="$(node "$SCRIPT" --project-root "$BOOK" --write --compact --json)"
+    echo "$output" | grep -q '"status":"short_lean_workflow_migrated"'
+    node - "$task_file" <<'NODE'
+const fs=require('fs');const task=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+if(task.workflow_contract_version!==3||task.scope!=='全篇'||task.lifecycle.scope!=='全篇') throw new Error(JSON.stringify(task));
+if(task.stage_execution!==null||task.memory_migration.status!=='refresh_on_resume') throw new Error(JSON.stringify(task));
+if(task.workflow_profile!=='public'||task.workflow_owner==='private-short-extension') throw new Error(JSON.stringify(task));
+if(!task.migration_history.some(item=>item.preserved_stage_attempt_id==='sa-old-outline')) throw new Error(JSON.stringify(task.migration_history));
+NODE
 }
 
 @test "workflow entry guard writes task index and guard report when requested" {
@@ -92,6 +157,7 @@ NODE
   "runtime_guard":{"heartbeat":{"updated_at":"2026-07-11T10:00:00.000Z","latest_trusted_artifact":"追踪/workflow/current-task.json"},"stall_policy":{"heartbeat_timeout_minutes":999999},"checkpoint_policy":{"resume_from":"repair_execution_plan"}},
   "pending_action":{"id":"pa-session","status":"pending","options":[{"number":1,"label":"继续当前阶段","action_id":"continue_next_stage"}]}
 }
+
 JSON
     write_focus_pointer session-entry
 
@@ -117,6 +183,34 @@ NODE
     echo "$output" | grep -q '3. 暂不接管'
     echo "$output" | grep -q '4. 输入其他要求'
     ! echo "$output" | grep -q '继续当前阶段（推荐）'
+}
+
+@test "bare entry keeps a running short outline behind the global inbox" {
+    mkdir -p "$BOOK/追踪/workflow/tasks/short-outline-running"
+    cat > "$BOOK/追踪/workflow/tasks/short-outline-running/task.json" <<'JSON'
+{
+  "workflow_id":"short-outline-running","workflow_type":"short_write","workflow_contract_version":3,"task_dir":"追踪/workflow/tasks/short-outline-running","status":"running","scope":"全篇","user_goal":"新开短篇",
+  "current_stage":"section_outline","current_step":"section_outline","lifecycle":{"status":"active","scope":"全篇"},
+  "machine":{"completed_stages":["short_setting","platform_genre_lock","rhythm_pattern_selection"],"remaining_stages":["section_outline"]},
+  "unit_lifecycle":{"status":"running","current_stage":"section_outline","current_role":"brief_or_contract"},
+  "runtime_guard":{"heartbeat":{"updated_at":"2099-01-01T00:00:00.000Z"},"stall_policy":{"heartbeat_timeout_minutes":999999},"checkpoint_policy":{"resume_from":"section_outline"}},
+  "stage_execution":{"status":"running","stage_id":"section_outline","step_id":"section_outline","work_unit_scope":"全篇","execution_command":"node scripts/short-planning-stage-finalize.js --project-root . --workflow-id short-outline-running --apply --json"},
+  "pending_action":null
+}
+JSON
+    write_focus_pointer short-outline-running
+    printf '# 素材卡\n\n- 暂定作品名：迁移后的真实短篇标题\n' > "$BOOK/素材卡.md"
+
+    output="$(node "$SCRIPT" --project-root "$BOOK" --json)"
+    echo "$output" | grep -q '1. 查看未完成任务（1 个）（推荐）'
+    ! echo "$output" | grep -q '当前任务：迁移后的真实短篇标题'
+
+    output="$(node "$SCRIPT" --project-root "$BOOK" --write --session-id codex:test --compact --json)"
+    node - "$BOOK/追踪/workflow/tasks/short-outline-running/task.json" <<'NODE'
+const fs=require('fs');const task=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+if(task.scope!=='全篇'||task.lifecycle.scope!=='全篇') throw new Error(JSON.stringify({scope:task.scope,lifecycle:task.lifecycle}));
+if(String(((task.stage_execution||{}).work_unit_scope)||'')!=='全篇') throw new Error(JSON.stringify(task.stage_execution));
+NODE
 }
 
 @test "initialized project with zero unfinished tasks still gets the numbered inbox home" {
@@ -286,6 +380,9 @@ JSON
 {
   "workflow_id":"state-bad",
   "workflow_type":"short_write",
+  "workflow_contract_version":3,
+  "workflow_profile":"private",
+  "workflow_owner":"private-short-extension",
   "task_dir":"追踪/workflow/tasks/state-bad",
   "status":"running",
   "current_stage":"section_machine_gate",
@@ -632,11 +729,15 @@ const direct=out.direct_intent||{},visible=out.visible_response||{},execution=vi
 if(direct.status!=='stage_execution_resume_ready'||direct.interaction_mode!=='resume_stage') throw new Error(JSON.stringify(direct));
 if(visible.render_mode!=='silent_resume'||visible.selection_contract!=='resume_running_stage') throw new Error(JSON.stringify(visible));
 if(execution.execution_workdir!=='.'||!String(execution.execution_command||'').includes('--project-root .')) throw new Error(JSON.stringify(execution));
+if(execution.stage_completion_command!==execution.execution_command) throw new Error(JSON.stringify(execution));
+if(execution.current_required_action!=='edit_write_set'||(execution.after_write_action||{}).command!==execution.stage_completion_command) throw new Error(JSON.stringify(execution));
+if(execution.completion_required_before_reply!==true) throw new Error(JSON.stringify(execution));
+if(out.presentation_allowed!==false||visible.user_visible!==false||'text' in visible) throw new Error(JSON.stringify(visible));
 if(JSON.stringify({direct,visible}).includes(root)) throw new Error('absolute project root leaked into host continuation');
 NODE
 }
 
-@test "bare skill invocation shows running stage controls instead of silently resuming" {
+@test "bare skill invocation keeps the global inbox before entering a running task" {
     STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
     printf '# 素材卡\n' > "$BOOK/素材卡.md"
     printf '# 设定\n' > "$BOOK/设定.md"
@@ -650,13 +751,14 @@ NODE
     printf '%s\n' "$output" > "$TMP_DIR/bare-running-stage.json"
     node - "$TMP_DIR/bare-running-stage.json" <<'NODE'
 const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),visible=out.visible_response||{};
-if(out.recommended_next!=='show_running_stage_controls') throw new Error(JSON.stringify(out));
-if(visible.status!=='running_stage_waiting_choice'||visible.selection_contract!=='execute_command_or_route_intent') throw new Error(JSON.stringify(visible));
-for(const expected of ['1. 继续当前阶段（推荐）','2. 查看当前进度与依据','3. 暂停并保存断点','4. 输入其他要求']) {
+if(out.recommended_next!=='show_task_inbox_only') throw new Error(JSON.stringify(out));
+if(visible.status!=='task_inbox_ready'||visible.selection_contract!=='execute_command_or_route_intent') throw new Error(JSON.stringify(visible));
+for(const expected of ['1. 查看未完成任务（1 个）（推荐）','2. 查看智能推荐新任务','3. 开启当前作品新目标','4. 输入其他要求']) {
   if(!String(visible.text||'').includes(expected)) throw new Error(JSON.stringify(visible));
 }
+if(String(visible.text||'').includes('当前任务：')||String(visible.text||'').includes('当前阶段：')) throw new Error(JSON.stringify(visible));
 if(out.direct_intent) throw new Error('bare skill invocation must not infer a business intent');
-if((visible.options||[]).slice(0,3).some(option=>option.interaction_mode!=='execute_command'||!String(option.execution_command||'').includes('--project-root .'))) throw new Error(JSON.stringify(visible.options));
+if((visible.options||[]).slice(0,3).some(option=>option.interaction_mode!=='execute_command'||!String(option.execution_command||'').includes('workflow-task-inbox.js'))) throw new Error(JSON.stringify(visible.options));
 NODE
 }
 

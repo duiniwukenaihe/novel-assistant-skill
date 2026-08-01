@@ -47,10 +47,15 @@ teardown() {
   rm -rf "$(dirname "$BOOK")"
 }
 
-@test "short review entry binds professional review owner and allows prose only after plan contract" {
+@test "short review entry binds professional review owner and allows prose review with plan risk" {
   run node "$SCRIPT" --project-root "$BOOK" --json
   [ "$status" -eq 0 ]
-  printf '%s' "$output" | jq -e '.status == "ready_for_professional_review" and .route_receipt.workflow_type == "short_review" and .route_receipt.owner_module == "story-review" and .full_prose_scan_allowed == true'
+  printf '%s' "$output" | jq -e '
+    .status == "ready_for_professional_review_with_plan_risk" and
+    .route_receipt.workflow_type == "short_review" and
+    .route_receipt.owner_module == "story-review" and
+    .full_prose_scan_allowed == true and
+    .plan_repair_checklist.blocking_for_read_only_review == false'
 }
 
 @test "short review entry continues read-only prose review when only the plan contract is risky" {

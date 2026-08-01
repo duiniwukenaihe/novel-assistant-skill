@@ -19,6 +19,8 @@ Claude Code、Codex CLI、Codex Desktop 和 ZCode 共用可迁移命令协议：
 
 `resume_running_stage` 同时携带 `completion_required_before_reply=true`。交互宿主必须按 `execution_sequence` 在同一轮执行到阶段完成命令返回；不得在只完成 `write_set` 后提前回复。完成命令返回另一个无需用户确认的 `resume_running_stage` 时，继续内部修复并重跑，最多两次；返回需要创作取舍的 `workflow_choice_required` 时才显示最多四项数字菜单。一次最小宿主重试仍失败或重试预算耗尽时，保存最后可信断点并显示恢复菜单。
 
+当 `render_mode=silent_resume` 时，`presentation_allowed=false` 且 `user_visible=false`；宿主不得渲染或复述内部 `resume_hint`。写完 `write_set` 后，当前唯一动作是执行 `stage_completion_command`（缺失时回退到 `execution_command`），不能把“下一步执行完成命令”作为可见回复。
+
 宿主工具参数在命令启动前损坏时，runner/交互宿主记录 `host_tool_call_malformed` 并以最小参数重试一次。只有命令已经启动且 stderr 指向真实脚本文件与行号，才归类为 `script_syntax_error`；业务阻断 JSON 不能显示成控制台 Error。
 
 可见文案必须使用 `协作模式` / `托管运行` 区分两类能力。成本来源必须使用 `宿主实测`、`代理估算`、`不可用` 三类标签；`estimated` 只能展示为 `代理估算`，不得写成实测。

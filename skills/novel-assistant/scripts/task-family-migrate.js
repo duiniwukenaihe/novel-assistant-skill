@@ -16,7 +16,21 @@ const SUPPORTED_SOURCES = new Set(['oh-story', 'novel-assistant']);
 const TERMINAL = new Set(['completed', 'completed_verified', 'done', 'pass', 'closed', 'cancelled', 'canceled']);
 const USAGE = 'Usage: node scripts/task-family-migrate.js --project-root <book-dir> --source <oh-story|novel-assistant> [--write --confirm] [--json]';
 
-function main(argv = process.argv) {
+function previewMigration(projectRoot, source) {
+  const root = path.resolve(projectRoot);
+  const sourceCheck = validateSource(root, source);
+  if (!sourceCheck.ok) {
+    return { exitCode: 2, result: { schemaVersion: '1.0.0', status: 'blocked_task_family_migration_source', message: sourceCheck.message } };
+  }
+  const collected = collectTasks(root);
+  const preview = buildPreview(root, collected);
+  if (preview.candidate_task_count > 0 && preview.pending_task_count === 0 && !collected.conflicts.length) {
+    return { exitCode: 0, result: { ...preview, status: 'task_family_migration_current', requires_confirmation: false } };
+  }
+  return { exitCode: 0, result: preview };
+}
+
+function runMigration(argv = process.argv) {
   const args = parseArgs(argv);
   const root = path.resolve(args.projectRoot);
   const sourceCheck = validateSource(root, args.source);
@@ -24,6 +38,13 @@ function main(argv = process.argv) {
 
   const collected = collectTasks(root);
   const preview = buildPreview(root, collected);
+  // Idempotency: every candidate already carries task-family metadata and there
+  // is no state divergence to repair. A second run (or a project already on the
+  // current protocol) returns migration_current and skips writing/locking so we
+  // never create duplicate task families or re-stamp authority metadata.
+  if (preview.candidate_task_count > 0 && preview.pending_task_count === 0 && !collected.conflicts.length) {
+    return print({ ...preview, status: 'task_family_migration_current', requires_confirmation: false }, args.json, 0);
+  }
   if (!args.write) return print(preview, args.json, 0);
   if (!args.confirm) return print({ ...preview, status: 'blocked_task_family_migration_confirmation_required', message: '迁移仅修改 workflow 元数据；请使用 --write --confirm 确认。' }, args.json, 2);
   if (collected.conflicts.length) return print({ ...preview, status: 'blocked_task_family_migration_state_conflict', message: 'current-task 与 durable task.json 不一致，需先修复状态分叉。' }, args.json, 2);
@@ -211,7 +232,13 @@ function migrate(root, records, source) {
 
 function normalizeTaskDir(workflowId, taskDir) {
   const expected = path.posix.join('追踪', 'workflow', 'tasks', String(workflowId || ''));
-  return String(taskDir || expected).replace(/\\/g, '/').replace(/^\.\//, '') || expected;
+  let value = String(taskDir || expected).replace(/\\/g, '/').replace(/^\.\//, '');
+  // A relocated project may still record an absolute task_dir that pointed at the
+  // previous project root. Collapse it back to the canonical relative path so the
+  // migrated record only references paths relative to the current project root.
+  const tail = value.match(/追踪\/workflow\/tasks\/[^/]+(?:\/[^/]+)*$/);
+  if (tail && tail[0] !== value) value = tail[0];
+  return value || expected;
 }
 
 function hashCreativeAssets(root) {
@@ -244,4 +271,6 @@ function readJson(file) { try { return fs.existsSync(file) ? JSON.parse(fs.readF
 function rel(root, file) { return path.relative(root, file).split(path.sep).join('/'); }
 function print(value, json, code) { if (json) console.log(JSON.stringify(value, null, 2)); else console.log(value.status); process.exitCode = code; return value; }
 
-try { main(); } catch (error) { print({ schemaVersion: '1.0.0', status: 'task_family_migration_error', message: error.message }, process.argv.includes('--json'), 2); }
+try { if (require.main === module) runMigration(); } catch (error) { print({ schemaVersion: '1.0.0', status: 'task_family_migration_error', message: error.message }, process.argv.includes('--json'), 2); }
+
+module.exports = { runMigration, previewMigration };

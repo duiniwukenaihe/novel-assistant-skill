@@ -212,3 +212,52 @@ test('checks standalone short-story body file named 正文.md', () => {
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('rejects outline-field translation and chapter-end summary narration', () => {
+  const root = makeBook()
+  try {
+    writeFileSync(path.join(root, '正文/第1卷/第001章_字段翻译.md'), [
+      '## 第1章 字段翻译',
+      '',
+      '本章的目标是让主角认清现实。',
+      '主角遇到的阻力来自家族压力。',
+      '这一节的反转在于他选择了离开。',
+      '承接上一章，他带着行李走出门。',
+      '总结一下，这一章意味着他终于长大了。',
+      '下一节他将面对真正的敌人。',
+      '',
+    ].join('\n'), 'utf8')
+
+    const result = runGate(root, '--chapter', '1')
+    assert.equal(result.status, 2, result.stdout)
+    const parsed = JSON.parse(result.stdout)
+    assert.equal(parsed.status, 'fail')
+    // 至少检测到工程词泄漏或章尾总结簇之一
+    assert.equal(parsed.findings.length > 0, true, 'expected findings for outline-field translation')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('accepts prose that fulfills outline duty through action without field names', () => {
+  const root = makeBook()
+  try {
+    writeFileSync(path.join(root, '正文/第1卷/第001章_动作兑现.md'), [
+      '## 第1章 动作兑现',
+      '',
+      '陈洛把辞职信放在主任桌上。',
+      '主任没看，只是把茶杯推到他面前。',
+      '他没接。',
+      '走廊里有人在打电话，说的是下个月的排班。',
+      '他走出大楼的时候，天还没黑。',
+      '',
+    ].join('\n'), 'utf8')
+
+    const result = runGate(root, '--chapter', '1')
+    assert.equal(result.status, 0, result.stdout)
+    const parsed = JSON.parse(result.stdout)
+    assert.equal(parsed.status, 'pass')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

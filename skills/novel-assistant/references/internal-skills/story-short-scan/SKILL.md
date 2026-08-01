@@ -291,6 +291,14 @@ node scripts/scan-download-hints.js "扫榜库/20260709-fanqie-debut" --sort-by 
 4. **外部阻断类**：429、验证码、登录失效、IP 限制、平台结构大改，不做忙等重试。保存已采集 artifact、阻断原因、下次续跑目标和需要用户处理的登录/验证动作。
 5. **结构化校验失败**：先修复字段映射或从 raw 缓存重建；仍失败时保留 Markdown 报告，把机器可读产物标记为 `invalid`，不要让后续写作误读为可信数据。
 
+采集到 raw/html/json 后，先将文件留在项目目录，再执行一次统一来源摄取：
+
+```bash
+node scripts/source-ingest.js --project-root . --task-dir "<当前任务目录>" --source "<项目内 raw 相对路径>" --json
+```
+
+把返回的 `source_id`、`source_digest`、`artifact_path` 写入当前阶段 result packet。热点分析、素材卡与路线建议只读取 `artifact_path`，不得再次抓取同一来源。内容变化时保留稳定 `source_id` 并生成新的 `source_digest`；只刷新依赖该来源的素材结果，不阻塞其他来源、整个 Workflow 或全局 Memory。
+
 **文件命名**：`{平台}{类型}_{YYYYMMDD}.md`，例：`点众男频短篇_20260501.md`
 
 **用户提供操作指引：**

@@ -63,7 +63,7 @@ if (require.main === module) {
   try {
     process.stdout.write(`${JSON.stringify(main(process.argv.slice(2)), null, 2)}\n`);
   } catch (error) {
-    process.stdout.write(`${JSON.stringify({ status: error.status || error.code || 'blocked_canonical_write_policy_error', message: error.message, targets: error.targets }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ status: error.status || error.code || 'blocked_canonical_write_policy_error', message: error.message, targets: error.targets, recovery: error.recovery }, null, 2)}\n`);
     process.exitCode = 1;
   }
 }

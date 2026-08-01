@@ -11,6 +11,7 @@ const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { appendIntegrationEvent } = require('./lib/integration-outbox');
+const { readShortProjectState, shortStateFile } = require('./lib/short-project-state');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -27,7 +28,7 @@ function main() {
   const proseFile = path.join(root, '正文.md');
   if (!fs.existsSync(proseFile)) return finish({ status: 'short_final_prose_missing', instruction: '返回全文组装阶段恢复 正文.md。' }, 0, args.json);
   const text = fs.readFileSync(proseFile, 'utf8');
-  const plan = resolvePlannedSectionCount({ projectState: readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {}, titleLock: readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {}, outlineText: readText(path.join(root, '小节大纲.md')) });
+  const plan = resolvePlannedSectionCount({ projectState: readShortProjectState(root) || {}, titleLock: readJson(shortStateFile(root, 'section-title-lock.json')) || {}, outlineText: readText(path.join(root, '小节大纲.md')) });
   const headings = [...text.matchAll(/^##\s+第\s*0*(\d+)\s*节\b/gmu)].map((match) => Number(match[1]));
   const expected = plan.status === 'locked' ? Array.from({ length: plan.count }, (_, index) => index + 1) : [];
   const deslop = readJson(path.join(root, `${task.task_dir}/result-packets/short_deslop.result.json`))
@@ -63,11 +64,11 @@ function main() {
     handoff_summary: `最终检查通过：${plan.count} 节完整，正式稿与去 AI 回执一致。${lengthAdvisories.length ? ` 已汇总 ${lengthAdvisories.length} 节篇幅提醒，不影响完成状态。` : ''}`,
     memory_updates: [], result_packet_path: packetRel,
   });
-  const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(run);
   let integrationEvent = null;
   if (outcome.applied) {
-    const projectState = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
+    const projectState = readShortProjectState(root) || {};
     try {
       integrationEvent = appendIntegrationEvent(root, {
         event_type: 'story_completed',
@@ -96,7 +97,7 @@ function main() {
 
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file !== root && file.startsWith(`${root}${path.sep}`) ? file : ''; }
 function collectLengthAdvisories(root) {
-  const dir = path.join(root, '追踪', 'private-short-extension');
+  const dir = path.dirname(shortStateFile(root, 'project-state.json'));
   let names = [];
   try { names = fs.readdirSync(dir); } catch (_) { return []; }
   return names

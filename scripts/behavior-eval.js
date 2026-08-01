@@ -175,6 +175,7 @@ async function runEvaluation(plan, options = {}) {
       hostPlan,
       plan: executionPlan,
       projectDirectory,
+      runDirectory,
       eventLog,
       timeoutMs,
       terminationGraceMs,
@@ -255,7 +256,7 @@ function buildInvocation({ host, adapter, executable, plan, projectDirectory, pa
 }
 
 async function evaluateHost(context) {
-  const { hostPlan, plan, projectDirectory, eventLog, timeoutMs, terminationGraceMs, ledger } = context;
+  const { hostPlan, plan, projectDirectory, runDirectory, eventLog, timeoutMs, terminationGraceMs, ledger } = context;
   const attempts = [];
   for (let attempt = 0; attempt <= MAX_HEALTH_RECOVERIES; attempt += 1) {
     const invocation = hostPlan.invocations[attempt];
@@ -263,6 +264,7 @@ async function evaluateHost(context) {
       host: hostPlan.host,
       plan,
       projectDirectory,
+      runDirectory,
       eventLog,
       invocation,
       timeoutMs,
@@ -278,7 +280,7 @@ async function evaluateHost(context) {
 }
 
 async function runHostInvocation(context) {
-  const { host, plan, projectDirectory, eventLog, invocation, timeoutMs, terminationGraceMs, attempt, ledger } = context;
+  const { host, plan, projectDirectory, runDirectory, eventLog, invocation, timeoutMs, terminationGraceMs, attempt, ledger } = context;
   const healthPolicy = host === 'codex' ? { maxProviderFailure: 1 } : {};
   const execution = await executeInvocation(invocation, { timeoutMs, terminationGraceMs, authorization: ledger, healthPolicy }, (channel, chunk) => {
     appendEvent(eventLog, { type: 'host_output', host, attempt, channel, text: String(chunk) });
@@ -299,7 +301,8 @@ async function runHostInvocation(context) {
   const unavailable = providerUnavailable(events, execution.exit, execution.spawnError);
   if (unavailable) return hostResult(host, plan, 'blocked_host_unavailable', usage, healthEvents, execution.exit, [], unavailable);
   if (execution.exit.code !== 0 || !hasSuccessSignal(host, events)) return hostResult(host, plan, 'fail', usage, healthEvents, execution.exit, [], 'host did not complete successfully');
-  const evidence = verifyResultPacket(projectDirectory, plan.scenario);
+  const verifiedEvidence = verifyResultPacket(projectDirectory, plan.scenario);
+  const evidence = archiveHostEvidence(projectDirectory, runDirectory, host, verifiedEvidence);
   // A host may complete the declared behavior but omit dollar telemetry.
   // Verified host usage remains a hard requirement; the pre-approved budget
   // remains the guard when a subscription host cannot report actual USD.
@@ -487,6 +490,34 @@ function verifyResultPacket(projectDirectory, scenario) {
     assertions.push({ name, status: valid ? 'pass' : 'not_met', evidence: valid ? evidence.map((item) => ({ path: item.path, sha256: item.sha256 })) : [] });
   }
   return assertions.every((assertion) => assertion.status === 'pass') ? { status: 'pass', assertions } : { status: 'fail', assertions, reason: 'assertion evidence did not verify' };
+}
+
+function archiveHostEvidence(projectDirectory, runDirectory, host, verified) {
+  if (!verified || !Array.isArray(verified.assertions)) return verified;
+  try {
+    const assertions = verified.assertions.map((assertion) => ({
+      ...assertion,
+      evidence: (assertion.evidence || []).map((item) => {
+        const source = resolveProjectFile(fs.realpathSync(projectDirectory), item.path);
+        const relative = path.posix.join('evidence', host, String(item.path).split(path.sep).join('/'));
+        const target = path.resolve(runDirectory, ...relative.split('/'));
+        if (!target.startsWith(`${path.resolve(runDirectory)}${path.sep}`)) throw new Error('evidence archive path escapes run directory');
+        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+        if (!fs.existsSync(target)) {
+          fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+          fs.chmodSync(target, 0o600);
+        } else if (fs.lstatSync(target).isSymbolicLink() || !fs.statSync(target).isFile()) {
+          throw new Error('evidence archive target is not a regular file');
+        }
+        const archivedHash = crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex');
+        if (archivedHash !== item.sha256) throw new Error('archived evidence digest mismatch');
+        return { path: relative, sha256: item.sha256 };
+      }),
+    }));
+    return { ...verified, assertions };
+  } catch (error) {
+    return { status: 'fail', assertions: [], reason: `evidence archive failed: ${error.message}` };
+  }
 }
 
 function readSafeJson(root, relative) {

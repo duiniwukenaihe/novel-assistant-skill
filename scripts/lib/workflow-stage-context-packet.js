@@ -32,6 +32,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { readShortProjectState, resolveShortStateRelative, shortStateFile } = require('./short-project-state');
 const { compactToTokens, estimateTokens } = require('./context-budget');
 const { inferShortSectionIndex } = require('./short-workflow-state');
 const { currentShortFeedbackRevisionSection } = require('./short-feedback-revision-queue');
@@ -41,6 +42,7 @@ const {
   buildShortSectionOutlineContract,
   renderOutlineCoverageTemplate,
 } = require('./short-section-outline-contract');
+const { SHORT_WORKFLOW_TYPES } = require('./short-workflow-types');
 
 const DRAFT_STAGES = new Set(['draft_first_section', 'draft_next_section', 'draft_section']);
 const REVIEW_STAGES = new Set(['section_repair_loop', 'quality_gate', 'story_value_gate']);
@@ -48,7 +50,6 @@ const BRIEF_STAGES = new Set(['first_section_brief', 'section_brief', 'next_sect
 const ACCEPTANCE_STAGES = new Set(['section_accept_anchor']);
 const FEEDBACK_STAGES = new Set(['feedback_impact_sync', 'feedback_apply_patch']);
 const CONTEXT_STAGES = new Set([...DRAFT_STAGES, ...REVIEW_STAGES, ...BRIEF_STAGES, ...ACCEPTANCE_STAGES, ...FEEDBACK_STAGES]);
-const SHORT_WORKFLOW_TYPES = new Set(['short_write', 'short_startup', 'private_short_startup']);
 const PACKET_SCHEMA_VERSION = '1.0.0';
 const CONTINUITY_TAIL_PARAGRAPHS = 2;
 
@@ -63,6 +64,7 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
   if (!CONTEXT_STAGES.has(stageId)) return notApplicable('stage_not_short_section');
 
   const projectState = readProjectState(root);
+  const wholeStoryFeedback = FEEDBACK_STAGES.has(stageId) && isWholeStoryFeedback(task);
   const sectionIndex = positiveInteger(
     currentShortFeedbackRevisionSection(task)
     ||
@@ -71,7 +73,7 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
       stageId,
       scope: String((task || {}).scope || ''),
     })
-  );
+  ) || (wholeStoryFeedback ? 1 : 0);
   if (!sectionIndex) return notApplicable('section_identity_missing');
 
   const taskId = String((task || {}).workflow_id || `wf-short-${sectionIndex}`);
@@ -94,7 +96,7 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
   });
   const tokenBudget = budget.token_budget;
   const attemptId = safePathSegment((((task || {}).stage_execution || {}).stage_attempt_id) || 'attempt-pending');
-  const packetScope = FEEDBACK_STAGES.has(stageId) && isWholeStoryFeedback(task)
+  const packetScope = wholeStoryFeedback
     ? 'whole-story'
     : `section-${String(sectionIndex).padStart(3, '0')}`;
   const packetBase = `${taskDir}/context-packets/${stageId}/${packetScope}/${attemptId}`;
@@ -111,9 +113,13 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
       budget_source: budget.source,
       required_context: assembled.blocked_required,
       omitted: assembled.omitted,
+      deduplicated_items: assembled.deduplicated_items,
+      included_assets: assembled.included_assets,
+      omitted_assets: assembled.omitted_assets,
     };
   }
   const identity = shortProjectIdentity(root, projectState, sectionIndex);
+  const modelProfile = ((((task || {}).runtime_guard || {}).model_profile) || {});
   const markdown = renderMarkdown({
     workflowId: taskId,
     sectionIndex,
@@ -123,6 +129,7 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
     usedTokens: assembled.used_tokens,
     omitted: assembled.omitted,
     identity,
+    modelProfile,
   });
 
   const packetMdAbs = safeResolve(root, packetMdRel);
@@ -146,11 +153,16 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
     optional_tokens_available: budget.optional_tokens_available,
     estimated_tokens: assembled.used_tokens,
     digest: assembled.digest,
+    deduplicated_items: assembled.deduplicated_items,
+    included_assets: assembled.included_assets,
+    omitted_assets: assembled.omitted_assets,
     advisory,
     source_files: assembled.entries.map((entry) => ({
       id: entry.id,
+      artifact_id: entry.artifact_id,
       path: entry.path,
       kind: entry.kind,
+      content_digest: entry.content_digest,
       estimated_tokens: entry.estimated_tokens,
       truncated: entry.truncated,
     })),
@@ -158,6 +170,7 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
     excludes: EXPLICIT_EXCLUDES,
     memory_contract: memorySnapshot.contract || null,
     memory_read_receipt: memorySnapshot.receipt || null,
+    model_profile: modelProfile,
     created_at: new Date().toISOString(),
   });
 
@@ -167,17 +180,27 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
     packet_json: packetJsonRel,
     estimated_tokens: assembled.used_tokens,
     digest: assembled.digest,
+    deduplicated_items: assembled.deduplicated_items,
+    included_assets: assembled.included_assets,
+    omitted_assets: assembled.omitted_assets,
     token_budget: tokenBudget,
     budget_source: budget.source,
     required_tokens: budget.required_tokens,
     optional_tokens_available: budget.optional_tokens_available,
-    source_files: assembled.entries.map((entry) => ({ id: entry.id, path: entry.path, kind: entry.kind })),
+    source_files: assembled.entries.map((entry) => ({
+      id: entry.id,
+      artifact_id: entry.artifact_id,
+      path: entry.path,
+      kind: entry.kind,
+      content_digest: entry.content_digest,
+    })),
     omitted: assembled.omitted,
     section_index: sectionIndex,
     project_title: identity.project_title,
     current_section_title: identity.current_section_title,
     memory_contract: memorySnapshot.contract || null,
     memory_read_receipt: memorySnapshot.receipt || null,
+    model_profile: modelProfile,
     advisory,
   };
 }
@@ -200,7 +223,8 @@ function resolveStageTokenBudget({ root, assets, sectionIndex, stageId, runtimeE
   }
 
   const demand = inspectAssetDemand({ root, assets, sectionIndex, stageId });
-  const ratio = optionalBudgetRatio(stageId);
+  const modelMultiplier = positiveMultiplier(runtimeEstimate.model_context_multiplier, 1);
+  const ratio = optionalBudgetRatio(stageId) * modelMultiplier;
   const optionalAllowance = demand.optional_tokens > 0
     ? Math.min(demand.optional_tokens, Math.max(256, Math.ceil(demand.required_tokens * ratio)))
     : 0;
@@ -230,6 +254,11 @@ function optionalBudgetRatio(stageId) {
   return 0.5;
 }
 
+function positiveMultiplier(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 && number <= 2 ? number : fallback;
+}
+
 function budgetDecision(tokenBudget, source, demand, optionalAllowance) {
   return {
     token_budget: tokenBudget,
@@ -256,7 +285,7 @@ const EXPLICIT_EXCLUDES = Object.freeze([
 function collectAllowedAssets({ root, sectionIndex, stageId, task, memorySnapshot }) {
   const briefPath = `写作Brief_第${String(sectionIndex).padStart(3, '0')}节.md`;
   const anchorPath = sectionIndex > 1
-    ? `追踪/private-short-extension/section-${String(sectionIndex - 1).padStart(3, '0')}-anchor.json`
+    ? resolveShortStateRelative(root, `section-${String(sectionIndex - 1).padStart(3, '0')}-anchor.json`)
     : '';
   const previousAnchor = anchorPath ? readJsonFile(safeResolve(root, anchorPath)) : null;
   const previousCanonical = previousAnchor && String(previousAnchor.status || '') === 'accepted'
@@ -272,20 +301,8 @@ function collectAllowedAssets({ root, sectionIndex, stageId, task, memorySnapsho
       inline: JSON.stringify(memorySnapshot.payload, null, 2),
     }
     : null;
-  if (stageId === 'section_repair_loop') {
-    const gatePacket = String((((task || {}).machine || {}).last_result_packet) || '');
-    return {
-      gateFindings: gatePacket
-        ? { id: gatePacket, path: gatePacket, kind: 'gate_findings', required: true }
-        : null,
-      brief: { id: briefPath, path: briefPath, kind: 'repair_constraints', required: true },
-      currentDraft: currentDraftAsset(root, sectionIndex),
-      memorySnapshot: memoryAsset,
-    };
-  }
-
-  const includePlanSummaries = DRAFT_STAGES.has(stageId) || BRIEF_STAGES.has(stageId) || FEEDBACK_STAGES.has(stageId);
-  const pendingFeedback = FEEDBACK_STAGES.has(stageId) && String((((task || {}).pending_feedback || {}).text) || '').trim()
+  const expressionOnlyRepair = isExpressionOnlyRepairStage(task, stageId);
+  const pendingFeedback = (FEEDBACK_STAGES.has(stageId) || expressionOnlyRepair) && String((((task || {}).pending_feedback || {}).text) || '').trim()
     ? {
       id: String((((task || {}).pending_feedback || {}).feedback_id) || 'pending-feedback'),
       path: '[workflow pending_feedback]',
@@ -311,6 +328,35 @@ function collectAllowedAssets({ root, sectionIndex, stageId, task, memorySnapsho
       }, null, 2),
     }
     : null;
+  if (stageId === 'section_repair_loop') {
+    const acceptedRevisionPlan = activeRevisionPlanAsset(root, task, sectionIndex);
+    if (expressionOnlyRepair) {
+      return {
+        pendingFeedback,
+        acceptedRevisionPlan,
+        currentDraft: currentDraftAsset(root, sectionIndex, {
+          kind: 'current_draft_expression_focus',
+          feedbackText: String((((task || {}).pending_feedback || {}).text) || ''),
+        }),
+      };
+    }
+    const gatePacket = String((((task || {}).machine || {}).last_result_packet) || '');
+    const repairOutlineContract = buildShortSectionOutlineContract(root, sectionIndex).status === 'current'
+      ? outlineContract
+      : null;
+    return {
+      gateFindings: gatePacket
+        ? { id: gatePacket, path: gatePacket, kind: 'gate_findings', required: true }
+        : null,
+      memorySnapshot: memoryAsset,
+      acceptedRevisionPlan,
+      outlineContract: repairOutlineContract,
+      brief: { id: briefPath, path: briefPath, kind: 'repair_constraints', required: true },
+      currentDraft: currentDraftAsset(root, sectionIndex),
+    };
+  }
+
+  const includePlanSummaries = DRAFT_STAGES.has(stageId) || BRIEF_STAGES.has(stageId) || FEEDBACK_STAGES.has(stageId);
   const acceptedPlan = stageId === 'feedback_apply_patch' && task.accepted_plan && typeof task.accepted_plan === 'object'
     ? {
       id: String(task.accepted_plan.plan_id || 'accepted-short-plan'),
@@ -321,7 +367,7 @@ function collectAllowedAssets({ root, sectionIndex, stageId, task, memorySnapsho
     }
     : null;
   const acceptedRevisionPlan = (BRIEF_STAGES.has(stageId) || DRAFT_STAGES.has(stageId) || REVIEW_STAGES.has(stageId))
-    ? activeRevisionPlanAsset(task, sectionIndex)
+    ? activeRevisionPlanAsset(root, task, sectionIndex)
     : null;
   if (stageId === 'feedback_impact_sync') {
     return {
@@ -363,30 +409,48 @@ function collectAllowedAssets({ root, sectionIndex, stageId, task, memorySnapsho
   };
 }
 
-function activeRevisionPlanAsset(task = {}, sectionIndex) {
+function activeRevisionPlanAsset(root, task = {}, sectionIndex) {
   const queue = task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
     ? task.feedback_revision_queue
     : null;
-  const plan = task.accepted_plan && typeof task.accepted_plan === 'object'
-    ? task.accepted_plan
-    : null;
-  if (!queue || String(queue.status || '') !== 'running' || !plan) return null;
+  const plan = loadAcceptedPlan(root, task);
+  const canonicalConstraints = readActivePlanningConstraints(root, task, sectionIndex);
+  if (!queue || String(queue.status || '') !== 'running' || (!plan && !canonicalConstraints.length)) return null;
   const item = (Array.isArray(queue.items) ? queue.items : [])
     .find(row => Number((row || {}).section_index || 0) === sectionIndex);
   if (!item || String(item.status || '') === 'accepted') return null;
   const group = (Array.isArray(queue.groups) ? queue.groups : [])
     .find(row => (Array.isArray((row || {}).section_indices) ? row.section_indices : []).map(Number).includes(sectionIndex));
+  const planId = String((plan || {}).plan_id || canonicalConstraints[0]?.provenance?.plan_id || 'accepted-plan');
   return {
-    id: `${String(plan.plan_id || 'accepted-plan')}#section-${String(sectionIndex).padStart(3, '0')}`,
-    path: String(task.accepted_plan_path || '[workflow accepted_plan]'),
+    id: `${planId}#section-${String(sectionIndex).padStart(3, '0')}`,
+    path: String(task.accepted_plan_path || '追踪/memory/planning-constraints.jsonl'),
     kind: 'accepted_revision_obligations',
     required: true,
     inline: JSON.stringify({
-      plan_id: String(plan.plan_id || ''),
-      feedback_id: String(queue.feedback_id || plan.feedback_id || ''),
+      plan_id: planId,
+      feedback_id: String(queue.feedback_id || (plan || {}).feedback_id || ''),
       section_index: sectionIndex,
-      plan_status: String(plan.status || ''),
+      plan_status: String((plan || {}).status || canonicalConstraints[0]?.status || ''),
       memory_constraint_source: '当前作品记忆快照.canon_constraints',
+      task_accepted_requirements: (Array.isArray((plan || {}).requirements) ? plan.requirements : [])
+        .map((row, index) => ({
+          requirement_id: String((row || {}).requirement_id || `requirement-${index + 1}`),
+          text: String((row || {}).text || (row || {}).content || '').trim(),
+          affected_sections: sectionListFromRequirement(row, plan, queue),
+        }))
+        .filter(row => row.text && sectionApplies(row.affected_sections, sectionIndex)),
+      canonical_planning_constraints: canonicalConstraints.map(row => ({
+        constraint_id: String(row.constraint_id || ''),
+        content: String(row.content || ''),
+        affected_sections: Array.isArray(row.affected_sections) ? row.affected_sections.map(Number).filter(Boolean) : [],
+        source_kind: String(row.source_kind || ''),
+        provenance: row.provenance && typeof row.provenance === 'object' ? {
+          workflow_id: String(row.provenance.workflow_id || ''),
+          feedback_id: String(row.provenance.feedback_id || ''),
+          plan_id: String(row.provenance.plan_id || ''),
+        } : null,
+      })),
       queue_item: {
         brief_status: String(item.brief_status || ''),
         prose_status: String(item.prose_status || ''),
@@ -396,9 +460,98 @@ function activeRevisionPlanAsset(task = {}, sectionIndex) {
         goal: String(group.goal || ''),
         completion_rule: String(group.completion_rule || ''),
       } : null,
-      instruction: '本节 Brief、正文复检和质量判断必须兑现当前作品记忆快照中的已确认规划约束；如与当前大纲冲突，先返回规划影响链，不得静默忽略。',
+      instruction: '本节 Brief、正文复检和质量判断必须兑现 task_accepted_requirements 与 canonical_planning_constraints；如与当前大纲冲突，先返回规划影响链，不得静默忽略。',
     }, null, 2),
   };
+}
+
+function loadAcceptedPlan(root, task = {}) {
+  if (task.accepted_plan && typeof task.accepted_plan === 'object') return task.accepted_plan;
+  const rel = String(task.accepted_plan_path || '');
+  const abs = rel ? safeResolve(root, rel) : '';
+  return abs ? readJsonFile(abs) : null;
+}
+
+function readActivePlanningConstraints(root, task = {}, sectionIndex) {
+  const file = safeResolve(root, '追踪/memory/planning-constraints.jsonl');
+  const workflowId = String(task.workflow_id || '');
+  const feedbackId = String(((task.feedback_revision_queue || {}).feedback_id) || ((task.pending_feedback || {}).feedback_id) || '');
+  const latest = new Map();
+  for (const row of readJsonlFile(file)) {
+    const id = String((row || {}).constraint_id || '');
+    if (!id) continue;
+    latest.set(id, row);
+  }
+  return [...latest.values()]
+    .filter(row => isActiveRow(row))
+    .filter(row => {
+      const provenance = row.provenance && typeof row.provenance === 'object' ? row.provenance : {};
+      const rowWorkflowId = String(provenance.workflow_id || '');
+      const rowFeedbackId = String(provenance.feedback_id || '');
+      if (workflowId && rowWorkflowId && rowWorkflowId !== workflowId) return false;
+      if (feedbackId && rowFeedbackId && rowFeedbackId !== feedbackId) return false;
+      const sections = constraintSections(row);
+      return sectionApplies(sections, sectionIndex);
+    })
+    .slice(-16);
+}
+
+function readJsonlFile(file) {
+  if (!file || !fs.existsSync(file)) return [];
+  try {
+    return fs.readFileSync(file, 'utf8')
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map(line => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+function isActiveRow(row) {
+  const status = String((row || {}).status || 'active').toLowerCase();
+  return !['superseded', 'rejected', 'quarantined', 'closed', 'invalid'].includes(status) && !(row || {}).valid_to;
+}
+
+function sectionListFromRequirement(row, plan = {}, queue = {}) {
+  const textSections = inferSectionsFromText(`${String((row || {}).text || '')}\n${String((row || {}).content || '')}`);
+  if (textSections.length) return textSections;
+  const rowSections = Array.isArray((row || {}).affected_sections) ? row.affected_sections.map(Number).filter(Boolean) : [];
+  if (rowSections.length) return rowSections;
+  const planSections = Array.isArray((plan || {}).affected_sections) ? plan.affected_sections.map(Number).filter(Boolean) : [];
+  if (planSections.length) return planSections;
+  return Array.isArray((queue || {}).affected_sections) ? queue.affected_sections.map(Number).filter(Boolean) : [];
+}
+
+function constraintSections(row) {
+  const affected = Array.isArray((row || {}).affected_sections) ? row.affected_sections.map(Number).filter(Boolean) : [];
+  if (affected.length) return affected;
+  return inferSectionsFromText(String((row || {}).content || ''));
+}
+
+function inferSectionsFromText(text) {
+  const found = new Set();
+  const source = String(text || '');
+  source.replace(/第\s*0*(\d+)\s*(?:至|到|-|—|~)\s*0*(\d+)\s*节/gu, (_, a, b) => {
+    const start = Number(a);
+    const end = Number(b);
+    if (Number.isInteger(start) && Number.isInteger(end)) {
+      for (let n = Math.min(start, end); n <= Math.max(start, end); n += 1) found.add(n);
+    }
+    return _;
+  });
+  source.replace(/第\s*0*(\d+)\s*节/gu, (_, n) => {
+    const value = Number(n);
+    if (Number.isInteger(value) && value > 0) found.add(value);
+    return _;
+  });
+  return [...found].sort((a, b) => a - b);
+}
+
+function sectionApplies(sections, sectionIndex) {
+  const normalized = Array.isArray(sections) ? sections.map(Number).filter(Boolean) : [];
+  return !normalized.length || normalized.includes(Number(sectionIndex));
 }
 
 function assemblePacket({ root, assets, sectionIndex, stageId, tokenBudget }) {
@@ -454,18 +607,18 @@ function assemblePacket({ root, assets, sectionIndex, stageId, tokenBudget }) {
         });
         continue;
       }
-      entries.push({ ...asset, content: payload, estimated_tokens: payloadTokens, truncated: false });
+      entries.push(withArtifactIdentity(asset, payload, payloadTokens, false));
       used += payloadTokens;
       continue;
     }
     if (payloadTokens <= remaining) {
-      entries.push({ ...asset, content: payload, estimated_tokens: payloadTokens, truncated: false });
+      entries.push(withArtifactIdentity(asset, payload, payloadTokens, false));
       used += payloadTokens;
       continue;
     }
     if (remaining > 0) {
       const compacted = compactToTokens(payload, remaining);
-      entries.push({ ...asset, content: compacted, estimated_tokens: estimateTokens(compacted), truncated: true });
+      entries.push(withArtifactIdentity(asset, compacted, estimateTokens(compacted), true));
       used += estimateTokens(compacted);
       omitted.push({ id: asset.id, reason: 'budget_truncated' });
       continue;
@@ -473,12 +626,195 @@ function assemblePacket({ root, assets, sectionIndex, stageId, tokenBudget }) {
     omitted.push({ id: asset.id, reason: 'budget_exceeded' });
   }
 
+  // Cross-asset dedup (P0.7). The same accepted-plan requirement text is carried
+  // by BOTH the inline `accepted_plan` asset and the memory snapshot's
+  // `canon_constraints` (short-memory-snapshot.js#taskAcceptedPlanningConstraints
+  // copies task.accepted_plan.requirements into canon_constraints). When both are
+  // in the packet the prose context would show the identical fact twice. We keep
+  // the authoritative copy in `accepted_plan` and collapse the duplicate inside
+  // the memory snapshot, annotating it with a pointer back to the plan so the
+  // evidence trail stays queryable. We only ever match by normalized substring
+  // overlap — no fuzzy / semantic similarity — to avoid silently dropping facts
+  // that merely look alike.
+  const dedup = crossAssetDeduplication(entries);
+  for (const edit of dedup.edits) {
+    const entry = entries[edit.entryIndex];
+    if (!entry) continue;
+    entry.content = edit.content;
+    entry.estimated_tokens = estimateTokens(edit.content);
+    entry.truncated = true;
+    used += edit.tokenDelta;
+  }
+
+  const includedAssets = uniqueAssetLabels(entries);
+  const omittedAssets = uniqueAssetLabels((omitted || []).map(item => ({ kind: assetKindFromId(item.id) })));
+
   return {
     entries,
     omitted,
     blocked_required: blockedRequired,
-    used_tokens: used,
+    used_tokens: Math.max(0, used),
     digest: sha256(entries.map((entry) => `${entry.id}:${sha256(entry.content)}`).join('|')),
+    deduplicated_items: dedup.deduplicated_items,
+    included_assets: includedAssets,
+    omitted_assets: omittedAssets,
+  };
+}
+
+// crossAssetDeduplication
+//
+// "Same fact" detection is deliberately conservative: a memory snapshot
+// canon_constraint is treated as a duplicate of an accepted-plan requirement
+// when, after normalizing both (strip punctuation/whitespace/case), one is a
+// substring of the other. This catches the exact projection that
+// short-memory-snapshot.js performs (requirement.text -> canon_constraint.content
+// verbatim) without risking semantic false-positives. We only dedup canon_constraints
+// against the inline accepted_plan asset; facts/promises/style rules are distinct
+// semantic units and stay verbatim.
+function crossAssetDeduplication(entries) {
+  const planEntry = entries.find(entry => entry && entry.kind === 'accepted_plan');
+  const memoryEntry = entries.find(entry => entry && entry.kind === 'memory_snapshot');
+  const edits = [];
+  if (!planEntry || !memoryEntry) {
+    return { edits, deduplicated_items: 0 };
+  }
+  const requirementTexts = extractAcceptedPlanRequirementText(planEntry.content)
+    .map(text => ({ raw: text, normalized: normalizeForDedup(text) }))
+    .filter(item => item.normalized.length >= MIN_DEDUP_SUBSTRING_LEN);
+  if (!requirementTexts.length) {
+    return { edits, deduplicated_items: 0 };
+  }
+  const editedMemoryContent = collapseDuplicateMemoryConstraints(memoryEntry.content, requirementTexts);
+  if (!editedMemoryContent || editedMemoryContent.collapsedCount <= 0) {
+    return { edits, deduplicated_items: 0 };
+  }
+  const beforeTokens = memoryEntry.estimated_tokens || estimateTokens(memoryEntry.content);
+  const afterTokens = estimateTokens(editedMemoryContent.text);
+  edits.push({
+    entryIndex: entries.indexOf(memoryEntry),
+    content: editedMemoryContent.text,
+    tokenDelta: afterTokens - beforeTokens,
+  });
+  return { edits, deduplicated_items: editedMemoryContent.collapsedCount };
+}
+
+const MIN_DEDUP_SUBSTRING_LEN = 6;
+
+function extractAcceptedPlanRequirementText(planContent) {
+  let plan;
+  try {
+    plan = JSON.parse(String(planContent || ''));
+  } catch (_) {
+    return [];
+  }
+  if (!plan || typeof plan !== 'object') return [];
+  const requirements = Array.isArray(plan.requirements) ? plan.requirements : [];
+  return requirements
+    .map(row => String((row && (row.text || row.content)) || '').trim())
+    .filter(Boolean);
+}
+
+function collapseDuplicateMemoryConstraints(memoryContent, requirementTexts) {
+  let snapshot;
+  try {
+    snapshot = JSON.parse(String(memoryContent || ''));
+  } catch (_) {
+    return null;
+  }
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  const constraints = Array.isArray(snapshot.canon_constraints) ? snapshot.canon_constraints : [];
+  if (!constraints.length) return null;
+  let collapsedCount = 0;
+  const rewritten = constraints.map(constraint => {
+    if (!constraint || typeof constraint !== 'object') return constraint;
+    const content = String(constraint.content || '').trim();
+    if (!content) return constraint;
+    const normalizedContent = normalizeForDedup(content);
+    const match = requirementTexts.find(item => item.normalized.length >= MIN_DEDUP_SUBSTRING_LEN && (
+      normalizedContent.includes(item.normalized) || item.normalized.includes(normalizedContent)
+    ));
+    if (!match) return constraint;
+    collapsedCount += 1;
+    // Do NOT re-emit the raw requirement text here — that would re-introduce the
+    // duplicate the dedup is removing. Keep the constraint id + evidence so the
+    // cross-reference is still queryable, and point back to accepted_plan.
+    return {
+      ...constraint,
+      content: '见 accepted_plan（本条已与已接受规划去重，证据来源保留）',
+      deduplicated_against: 'accepted_plan',
+    };
+  });
+  if (collapsedCount === 0) return null;
+  const text = JSON.stringify({ ...snapshot, canon_constraints: rewritten }, null, 2);
+  return { text, collapsedCount };
+}
+
+function normalizeForDedup(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s\u3000]+/g, '')
+    .replace(/[，。、；：！？“”「」『』（）()【】《》<>,.;:!?'"`~\-_=/\\|*+#@&]/g, '');
+}
+
+function uniqueAssetLabels(entries) {
+  const labels = [];
+  const seen = new Set();
+  for (const entry of entries || []) {
+    if (!entry || !entry.kind) continue;
+    const label = ASSET_KIND_LABELS[entry.kind] || entry.kind;
+    if (!seen.has(label)) {
+      seen.add(label);
+      labels.push(label);
+    }
+  }
+  return labels;
+}
+
+// assetKindFromId recovers an asset kind label for an omitted entry. assemblePacket
+// records omitted items as {id, reason}; the id is the asset's `id` field, whose
+// prefix maps deterministically to the asset kind. This is a best-effort recovery
+// for the budget receipt — when the id shape is unfamiliar we fall back to the id
+// itself so the receipt stays honest about what we could not classify.
+function assetKindFromId(id) {
+  const raw = String(id || '');
+  const entry = Object.values(ASSET_KIND_LABELS).find(label => raw.includes(label));
+  if (entry) return entry;
+  if (/写作Brief|repair_constraints/i.test(raw)) return 'brief';
+  if (/memory|记忆快照/i.test(raw)) return 'memory_snapshot';
+  if (/accepted_plan|accepted-plan/i.test(raw)) return 'accepted_plan';
+  if (/anchor/i.test(raw)) return 'accepted_anchor';
+  if (/素材卡|设定|小节大纲|outline/i.test(raw)) return 'plan_summary';
+  if (/风格卡|voice/i.test(raw)) return 'voice_card';
+  return raw || 'unknown';
+}
+
+const ASSET_KIND_LABELS = {
+  accepted_plan: 'accepted_plan',
+  accepted_revision_obligations: 'accepted_revision_obligations',
+  accepted_anchor: 'accepted_anchor',
+  brief: 'brief',
+  repair_constraints: 'brief',
+  continuity_tail: 'continuity_tail',
+  current_draft: 'current_draft',
+  current_draft_expression_focus: 'current_draft',
+  gate_findings: 'gate_findings',
+  memory_snapshot: 'memory_snapshot',
+  outline_contract: 'outline_contract',
+  plan_summary: 'plan_summary',
+  plan_overview: 'plan_overview',
+  pending_feedback: 'pending_feedback',
+  voice_card: 'voice_card',
+};
+
+function withArtifactIdentity(asset, content, estimatedTokens, truncated) {
+  const contentDigest = `sha256:${sha256(content)}`;
+  return {
+    ...asset,
+    artifact_id: `artifact:${sha256(`${asset.kind}\n${asset.path}\n${contentDigest}`)}`,
+    content_digest: contentDigest,
+    content,
+    estimated_tokens: estimatedTokens,
+    truncated,
   };
 }
 
@@ -542,6 +878,8 @@ function extractPayload(asset, fileText, sectionIndex, stageId) {
     }
     case 'current_draft':
       return text.trim();
+    case 'current_draft_expression_focus':
+      return extractDraftFocus(text, String(asset.feedbackText || ''));
     case 'accepted_anchor': {
       try {
         const anchor = JSON.parse(text);
@@ -670,6 +1008,46 @@ function isWholeStoryFeedback(task) {
   return /(?:全篇|整篇|全文|通篇|结局|终局)/u.test(`${String(pending.scope_snapshot || '')}\n${String(pending.text || '')}`);
 }
 
+function isExpressionOnlyRepairStage(task, stageId) {
+  if (stageId !== 'section_repair_loop') return false;
+  const pending = (task || {}).pending_feedback || {};
+  if (!String(pending.text || '').trim()) return false;
+  const impact = (task || {}).short_feedback_impact || {};
+  const matchesImpact = String(impact.feedback_id || '') === String(pending.feedback_id || '');
+  if (matchesImpact && String(impact.impact_level || '') === 'expression_only') return true;
+  const direct = String(pending.impact_level_hint || pending.impact_hint || '').trim();
+  if (direct === 'expression_only') return true;
+  const items = Array.isArray(pending.items) ? pending.items : [];
+  return items.length > 0 && items.every(item => String((item || {}).impact_level_hint || '') === 'expression_only');
+}
+
+function extractDraftFocus(text, feedbackText) {
+  const source = String(text || '').trim();
+  if (!source) return '';
+  const quote = extractFeedbackQuote(feedbackText);
+  if (!quote) return source;
+  const index = source.indexOf(quote);
+  if (index < 0) return source;
+  const start = Math.max(0, source.lastIndexOf('\n', Math.max(0, index - 900)) + 1);
+  const after = source.indexOf('\n', Math.min(source.length, index + quote.length + 900));
+  const end = after >= 0 ? after : Math.min(source.length, index + quote.length + 900);
+  return [
+    '# 当前草稿局部片段',
+    `- 反馈命中原句：${quote}`,
+    '- 只允许修订这一句及其前后必要衔接；不得改写整节结构。',
+    '',
+    source.slice(start, end).trim(),
+  ].join('\n');
+}
+
+function extractFeedbackQuote(feedbackText) {
+  const value = String(feedbackText || '');
+  const quoted = value.match(/[“「『"]([^”」』"]{6,160})[”」』"]/u);
+  if (quoted) return quoted[1].trim();
+  const bare = value.replace(/^\[意见\s*\d+\]\s*/u, '').split(/[。！？!?]/u)[0].trim();
+  return bare.length >= 6 && bare.length <= 160 ? bare : '';
+}
+
 function extractOutlineSection(source, sectionIndex) {
   const lines = String(source || '').split(/\r?\n/);
   const wanted = Number(sectionIndex || 0);
@@ -706,7 +1084,7 @@ function safePathSegment(value) {
   return String(value || 'attempt-pending').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 96) || 'attempt-pending';
 }
 
-function renderMarkdown({ workflowId, sectionIndex, stageId, assets, tokenBudget, usedTokens, omitted, identity }) {
+function renderMarkdown({ workflowId, sectionIndex, stageId, assets, tokenBudget, usedTokens, omitted, identity, modelProfile }) {
   const lines = [];
   lines.push(`# 短篇当前小节最小上下文包 (workflow=${workflowId}, stage=${stageId}, section=${sectionIndex})`);
   lines.push('');
@@ -719,6 +1097,14 @@ function renderMarkdown({ workflowId, sectionIndex, stageId, assets, tokenBudget
   lines.push('');
   lines.push(`> 预算：${tokenBudget} tokens（已用 ${usedTokens}）。${advisory}`);
   lines.push('');
+  if (modelProfile && modelProfile.family) {
+    lines.push('## 当前模型运行约束');
+    lines.push(`- 模型族：${modelProfile.family}`);
+    for (const directive of (Array.isArray(modelProfile.prompt_directives) ? modelProfile.prompt_directives : [])) {
+      lines.push(`- ${directive}`);
+    }
+    lines.push('');
+  }
   lines.push('## 允许资产（最小集）');
   for (const asset of assets) {
     lines.push(`### ${asset.id}（${asset.kind}${asset.truncated ? ', 已按预算截断' : ''}）`);
@@ -738,7 +1124,7 @@ function renderMarkdown({ workflowId, sectionIndex, stageId, assets, tokenBudget
 }
 
 function shortProjectIdentity(root, projectState, sectionIndex) {
-  const lock = readJsonFile(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
+  const lock = readJsonFile(shortStateFile(root, 'section-title-lock.json')) || {};
   const item = (Array.isArray(lock.sections) ? lock.sections : []).find((entry) => Number((entry || {}).section_index) === sectionIndex);
   return {
     project_title: String(projectState.working_title || projectState.book_title || projectState.title || '').trim(),
@@ -750,27 +1136,33 @@ function readJsonFile(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
 }
 
-function currentDraftAsset(root, sectionIndex) {
+function currentDraftAsset(root, sectionIndex, options = {}) {
   const padded = String(sectionIndex).padStart(3, '0');
   const candidates = [`草稿_第${padded}节_候选.md`, `正文_第${padded}节.md`];
   for (const candidate of candidates) {
     const file = safeResolve(root, candidate);
     if (file && fs.existsSync(file) && fs.statSync(file).isFile()) {
-      return { id: candidate, path: candidate, kind: 'current_draft', required: true };
+      return {
+        id: candidate,
+        path: candidate,
+        kind: String(options.kind || 'current_draft'),
+        required: true,
+        feedbackText: String(options.feedbackText || ''),
+      };
     }
   }
-  return { id: candidates[0], path: candidates[0], kind: 'current_draft', required: true };
+  return {
+    id: candidates[0],
+    path: candidates[0],
+    kind: String(options.kind || 'current_draft'),
+    required: true,
+    feedbackText: String(options.feedbackText || ''),
+  };
 }
 
 function readProjectState(root) {
-  try {
-    const file = path.join(root, '追踪/private-short-extension/project-state.json');
-    if (!fs.existsSync(file)) return {};
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return parsed && !parsed.__error ? parsed : {};
-  } catch {
-    return {};
-  }
+  const parsed = readShortProjectState(root);
+  return parsed && !parsed.__error ? parsed : {};
 }
 
 function safeResolve(root, relativePath) {

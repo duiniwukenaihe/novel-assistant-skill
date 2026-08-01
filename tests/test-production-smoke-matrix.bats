@@ -18,8 +18,8 @@ teardown() {
 
     grep -q '"status": "pass"' "$TMP_DIR/matrix.json"
     grep -q '"caseCount": 22' "$TMP_DIR/matrix.json"
-    grep -q '"workflowTemplateCount": 14' "$TMP_DIR/matrix.json"
-    grep -q '"workflowBundleTemplateCount": 14' "$TMP_DIR/matrix.json"
+    grep -q '"workflowTemplateCount": 15' "$TMP_DIR/matrix.json"
+    grep -q '"workflowBundleTemplateCount": 15' "$TMP_DIR/matrix.json"
     grep -q '"workflowTemplateDrift": false' "$TMP_DIR/matrix.json"
     for id in short_write long_write review analyze deslop setup update_check story_memory_context long_scan short_scan short_analyze cover; do
         grep -q "\"id\": \"$id\"" "$TMP_DIR/matrix.json"
@@ -161,9 +161,8 @@ NODE
 }
 
 @test "production smoke matrix is documented and bundled" {
-    grep -q "生产验收矩阵" "$README"
-    grep -q "production-smoke-matrix.js" "$README"
-    grep -q "短篇、长篇、审阅、拆文、去 AI、setup、更新检查" "$README"
+    grep -q "production-smoke-matrix.js" "$REPO/docs/production-readiness.md"
+    grep -q "production-smoke-matrix.js" "$REPO/docs/scripts-map.md"
     test -x "$SCRIPT"
     test -x "$BUNDLE_NOVEL/scripts/production-smoke-matrix.js"
     test -x "$BUNDLE_NOVEL/scripts/token-cost-ledger.js"

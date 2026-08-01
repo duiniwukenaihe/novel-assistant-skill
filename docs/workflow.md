@@ -2,6 +2,10 @@
 
 `story-workflow` is the internal workflow brain behind `/novel-assistant`. Users see one continuous command, while the workflow layer routes, remembers, resumes, and verifies multi-step writing tasks.
 
+The README author lifecycle is the visible contract. Internal stages may preserve audit evidence, retries, quality checks, and transactional writes, but they must be grouped under that lifecycle and auto-continue inside the same author phase. An internal stage name is not a reason to create another menu.
+
+The task overview must separate the author phase from the concrete execution point. During section or chapter loops, it shows the current unit and total when available; internal stage names remain implementation details.
+
 ## Responsibilities
 
 - Keep `/novel-assistant` as the only user-facing entry.
@@ -210,6 +214,8 @@ Free-form feedback is welcome at every visible stage. Local prose feedback retur
 Expansion first shows impact, shift, snapshot, and synchronization scope. Cross-volume work creates a handoff pack before the next volume opens and audits the first chapter afterward. Supported legacy projects always preview lifecycle migration first; migration writes metadata and an archival snapshot only after confirmation, never rewrites creative assets.
 
 Production smoke covers new-book layering, existing-book recovery, volume review, feedback rollback, structural expansion, cross-volume handoff, and legacy migration. It also verifies that source internal skills and bundled copies remain byte-identical. Real model trial writing and local installation on Claude Code, Codex, and ZCode are release-candidate checks performed outside deterministic repository tests.
+
+旧版短篇若使用 `正文/正文.md`、`大纲/小节大纲.md` 或 `追踪/private-short-extension/briefs/`，启动时必须识别为 `legacy_short_recovery`，先展示只读迁移预览。只有作者明确确认后，系统才建立根目录规范副本、正式 `short_write` 任务和项目状态；旧文件保留，路径内容冲突时停止迁移，不得覆盖或误入长篇生命周期。迁移接受 `第 N 节：标题`、`第 N 节｜标题`、`节 N｜标题`，以及“逐节蓝图”下的编号标题；若大纲无法识别连续小节，必须在任何写入前停止，旧大纲首行标题优先作为迁移后的作品名。若旧 `current-task.json` 仍包含完整任务状态，则原文件先归档，最后阶段、用户反馈、质量结论、历史完成项和下一步候选写入继任任务的 `legacy_resume`；新协议先只读重验，不继承旧门禁的通过结论。
 
 ## Output Health Gate
 

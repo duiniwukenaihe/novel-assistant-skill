@@ -19,7 +19,7 @@ teardown() {
 const path = require('path');
 const { planReviewRoles } = require(path.join(process.argv[2], 'scripts/lib/review-role-policy.js'));
 
-const available = ['story-explorer', 'character-designer', 'narrative-writer', 'consistency-checker'];
+const available = ['story-explorer', 'character-designer', 'narrative-writer', 'consistency-checker', 'professional-reader'];
 const roleNames = (plan) => plan.roles.map((role) => role.subagent_type);
 
 const lean = planReviewRoles({
@@ -39,11 +39,30 @@ const prose = planReviewRoles({
 });
 if (!roleNames(prose).includes('narrative-writer')) throw new Error(JSON.stringify(prose));
 
+const fullStory = planReviewRoles({
+  requiredDimensions: ['plot', 'canon'], evidenceSignals: [], availableAgents: available, budgetPolicy: {}, reviewTargetKind: 'short_story',
+});
+if (!roleNames(fullStory).includes('professional-reader')) throw new Error(JSON.stringify(fullStory));
+if (!fullStory.roles.find(role => role.subagent_type === 'professional-reader').dimensions.includes('reader_experience')) throw new Error(JSON.stringify(fullStory));
+
 const conflict = planReviewRoles({
   requiredDimensions: ['plot', 'canon', 'prose'], evidenceSignals: ['high_conflict'], availableAgents: available, budgetPolicy: {},
 });
 if (JSON.stringify(roleNames(conflict)) !== JSON.stringify(['story-explorer', 'narrative-writer', 'consistency-checker'])) throw new Error(JSON.stringify(conflict));
 if (conflict.retryPolicy !== 'missing_dimension_once') throw new Error(conflict.retryPolicy);
+NODE
+}
+
+@test "review agent dispatch adds one reader pass for full story scopes" {
+    node "$SCRIPT" --scope "全篇" --batch "全篇" --target-kind short_story --dimensions plot,canon --agents-available story-explorer,consistency-checker,professional-reader --json > "$TMP_DIR/out-reader-plan.json"
+
+    node - "$TMP_DIR/out-reader-plan.json" <<'NODE'
+const fs=require('fs');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const names=out.execution_plan.agents.map(item=>item.subagent_type);
+if(out.review_target_kind!=='short_story') throw new Error(JSON.stringify(out));
+if(names.filter(name=>name==='professional-reader').length!==1) throw new Error(JSON.stringify(out.execution_plan));
+if(!out.execution_plan.agents.find(item=>item.subagent_type==='professional-reader').dimensions.includes('reader_experience')) throw new Error(JSON.stringify(out.execution_plan));
 NODE
 }
 

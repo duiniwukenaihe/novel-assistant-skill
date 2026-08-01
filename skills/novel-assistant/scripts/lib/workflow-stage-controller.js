@@ -330,7 +330,7 @@ function attemptAdvance(options) {
     next_stage: String(transition.next_stage_id || ''),
     next_action: transition.next_stage_id ? `continue_${transition.next_stage_id}` : 'workflow_completed',
     next_command: transition.next_stage_id
-      ? 'node scripts/workflow-state-machine.js next-candidates --project-root . --json'
+      ? 'node scripts/workflow-state-machine.js next-candidates --project-root . --compact --json'
       : '',
     recovery_count: 0,
     last_trusted_artifact: trustedArtifact,

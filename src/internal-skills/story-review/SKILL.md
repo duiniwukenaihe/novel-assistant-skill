@@ -13,6 +13,8 @@ metadata:
 
 你是审查协调器。你的职责是找出小说文本中的结构、角色、文字、设定问题，并给出可执行修改建议。
 
+审阅角色由工作流按范围、风险和可用 agent 自动分派；不要求作者在 full / lean 等内部执行模式之间做技术选择。
+
 **执行铁律：审查是找问题，不是验证正确性。**
 
 ## 完整短篇生产验收
@@ -38,7 +40,7 @@ node scripts/short-review-entry.js --project-root <book-root> --json --compact
 1. **逐节状态**：每一计划小节都标记 `通过 / 有条件通过 / 需回炉 / 未验收`，附至少一条正文或规划证据；不能只列最严重的 5 条后暗示其他小节没有问题。
 2. **全篇综合**：核对标题承诺、人物动机、现实因果、跨节钩子、压力曲线、高潮兑现、结尾责任与后果、平台阅读体验和 AI 味风险。
 
-生产写作链进入 `full_story_review` 时，必须读取 `references/short-full-story-editor-contract.md`，并按状态机返回的 review card schema 产出全篇总编辑审阅卡。除了逐节与全篇结论，还必须检查：开篇是否像人物小传、小节重量是否后段塌缩、重要配角是否只有工具功能、阻力人物是否用“为了大家好”掩盖自利选择、主角职业/能力/缺陷是否用完即弃、高潮与结尾是否被字数追着收掉。任一结论缺正文原句，不得通过。
+生产写作链进入 `full_story_review` 时，必须读取 `references/short-full-story-editor-contract.md` 和 `references/professional-reader-contract.md`。先由 `professional-reader` 按目标平台和题材盲读正文，记录逐节阅读反应、掉线点、人物印象与标题兑现；再由总编辑审阅合并读者证据、结构证据和人物证据。除了逐节与全篇结论，还必须检查：开篇是否像人物小传、小节重量是否后段塌缩、重要配角是否只有工具功能、阻力人物是否用“为了大家好”掩盖自利选择、主角职业/能力/缺陷是否用完即弃、高潮与结尾是否被字数追着收掉。任一结论缺正文原句，不得通过。专业读者不得直接改稿，其报告不得直接成为长期记忆。
 
 验收默认只读。作者选择修复后，返回 `lifecycle_transition_request` 给 `story-workflow`，由短篇写作 workflow 按“规划层 -> Brief -> 正文 -> 双门 -> 采用锚点”执行；`story-review` 不直接改稿。
 
@@ -74,7 +76,7 @@ node scripts/short-review-entry.js --project-root <book-root> --json --compact
 确定性规划脚本：
 
 ```bash
-node scripts/review-agent-dispatch-plan.js --scope <parent_scope> --batch <batch_scope> --risk <risk-tags> --existing-reports <n> --agents-available <a,b,c> --json
+node scripts/review-agent-dispatch-plan.js --scope <parent_scope> --batch <batch_scope> --target-kind <short_story|prose_unit|milestone|volume|book> --risk <risk-tags> --existing-reports <n> --agents-available <a,b,c> --json
 ```
 
 字段语义：
@@ -93,6 +95,7 @@ node scripts/review-agent-dispatch-plan.js --scope <parent_scope> --batch <batch
 | `character-designer` | 人物、关系、动机、称谓、出场密度、角色持续发展 |
 | `narrative-writer` | AI 写作指纹、文字节奏、对话质量、解释腔、标点和短段碎片化 |
 | `consistency-checker` | 一致性、设定、时间线、能力/成长规则、跨批边界和 gap 风险 |
+| `professional-reader` | 平台/题材画像下的盲读体验、掉线点、人物印象、期待与兑现；只提供读者证据 |
 
 调度规则：
 
@@ -101,6 +104,8 @@ node scripts/review-agent-dispatch-plan.js --scope <parent_scope> --batch <batch
 - 人物出场、关系阶段、动机、称谓、角色持续发展是用户点名维度或大范围审阅时，自动加入 `character-designer`。
 - 设定、时间线、能力/成长规则、修真/武学/系统能力边界、跨批 gap 风险，自动加入 `consistency-checker`。
 - 钩子、爆点、剧情控制、主线承诺、卷目标、高潮结构，自动加入 `story-architect`。
+- 完整短篇、里程碑、整卷或全书审阅默认加入一个 `professional-reader`；当前章/当前节的小范围质量门只在出现留存、人物可信度或标题兑现风险时调用，避免为每个单元增加固定成本。
+- 短篇在上下文预算允许时由 `professional-reader` 一次盲读全文。长篇的整卷/全书审阅不得把全部正文一次塞给 Agent：按 Evidence Plan 的自然阅读单元读取完整正文，逐单元保存读者反应；卷末/全书阶段只聚合这些读者旅程与关键原文证据，不重新吞入全书。
 - 用户显式要求 `solo` 时才不 spawn agent；用户显式要求 full/lean 可作为 override，但默认不问用户 full/lean。
 - agent 不可用、当前处于子 agent 内、部署版本过旧或 spawn 失败时，自动 `solo_fallback`，并报告原因；不要让用户选择内部执行策略。
 
@@ -134,7 +139,7 @@ node scripts/review-agent-dispatch-plan.js --scope <parent_scope> --batch <batch
    - full 必需：`.claude/agents/story-architect.md`、`.claude/agents/character-designer.md`、`.claude/agents/narrative-writer.md`、`.claude/agents/consistency-checker.md`
    - lean 必需：`.claude/agents/story-architect.md`、`.claude/agents/consistency-checker.md`
    - 对每个必需 Agent 文件，读取 frontmatter，确认 `name:` 与 subagent_type 完全一致；frontmatter 缺失、不可解析或 name 不匹配时视为 malformed agent。
-   - 如果 `.story-deployed` 存在且 `agents_version` 缺失或小于 `18`，视为 stale deployment；不要 spawn，降级 `solo`，建议用户重新运行 `/novel-assistant 准备写书`。
+   - 如果 `.story-deployed` 存在且 `agents_version` 缺失或小于 `19`，视为 stale deployment；不要 spawn，降级 `solo`，建议用户重新运行 `/novel-assistant 更新写作协作环境`。
    - 如果目标模式所需任一文件缺失或 malformed，**不要尝试 spawn 缺失/异常 Agent**；自动降级为 `solo`，并在报告开头写明：`Fallback: missing agents -> solo` 或 `Fallback: malformed agents -> solo`，列出问题文件，建议用户运行 `/novel-assistant 准备写书`。
 4. **确认 Agent/Task 工具可用**：如果当前环境没有可用的子 Agent/Task 调用能力，直接降级为 `solo`，报告 `Fallback: agent tool unavailable -> solo`。
 5. **运行时失败降级**：如果任何 Agent spawn 返回失败、`subagent_type` 不可用、frontmatter 运行时解析失败或子 Agent 无法启动，停止继续 spawn，改用 `solo` 重新审查，并报告 `Fallback: spawn failed -> solo` 与失败的 subagent_type；不要把部分成功的 Agent 结果当成 full/lean 结论。
@@ -787,6 +792,7 @@ next_requested_range: null
   3. 伏笔状态是否前后一致（已埋/计划回收/已回收/断线）？
   4. 时间线是否自洽？
   5. 术语、身份、地点、能力边界是否前后一致？
+  6. 既有世界观命名护栏（仅 fanfic / historical_derivative / imported_existing_world 模式）：新增人名、地名、组织名、技术名是否偏离原作/时代/地域命名规律？偏离时只给 advisory + 替代方案，不硬阻断；不阻止用户明确要求的原创改编；original 模式不适用。
 
   输出格式：
   VERDICT: APPROVE / CONCERNS / REJECT
@@ -794,6 +800,15 @@ next_requested_range: null
   FACTUAL_RECONCILIATION: [仅列需统一的事实来源或需人工裁决项，不写文学创作建议]
   REASONING_CHAINS: [仅列推理型 finding 的前提/规则 -> 触发事件 -> 矛盾点 -> 需裁决问题]
   ```
+
+### 既有世界观命名护栏审查（非原创模式）
+
+当项目世界来源模式为 `fanfic`、`historical_derivative` 或 `imported_existing_world` 时，审查在一致性维度之外额外检查命名规律：新增人名、地名、组织名、技术名是否符合原作 / 目标时代 / 地域 / 既有世界的命名规律。
+
+- 护栏为 advisory：发现偏离时给 advisory 和符合规律的替代方案，不硬阻断审查结论。
+- 不因命名护栏阻止用户明确要求的原创改编或合理改编；冲突时呈现给用户裁决。
+- 不预先硬编码"常见中文名"名单——规律来自原作 / 时代 / 地域样例，不是名字枚举池。
+- `original` 模式（普通原创，包括普通原创短篇）不强制启用本检查。
 
 ---
 

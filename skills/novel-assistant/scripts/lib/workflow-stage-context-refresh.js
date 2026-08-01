@@ -50,7 +50,6 @@ function refreshCurrentStageContext(projectRoot, workflowId) {
       current.resume_hint = `${String(current.resume_hint || '').trim()} 逐字运行 execution_command；不得追加 2>&1、head、管道、重定向或自行拼接菜单哈希。`.trim();
       draft.stage_execution = current;
       draft.status = 'running';
-      draft.pending_action = null;
       return draft;
     }, { owner: 'workflow-stage-context-refresh' });
     return {

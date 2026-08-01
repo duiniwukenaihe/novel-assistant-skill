@@ -125,12 +125,20 @@ run_guard() {
 }
 
 @test "global skill bundle enumeration is denied before Claude asks for approval" {
-  run_guard 'ls /Users/test/.claude/skills/novel-assistant/'
+  run_guard 'ls <local-user-path>/.claude/skills/novel-assistant/'
 
   [ "$status" -eq 0 ]
   [[ "$output" == *'"permissionDecision":"deny"'* ]]
   [[ "$output" == *"已由宿主加载"* ]]
-  [[ "$output" == *"workflow-entry-guard"* ]]
+  [[ "$output" == *"execution_command"* ]]
+}
+
+@test "credential-bearing host settings cannot be read by the writing workflow" {
+  run_guard 'cat <local-user-path>/.claude/settings.json 2>&1 | head -50'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"permissionDecision":"deny"'* ]]
+  [[ "$output" == *"凭据"* ]]
 }
 
 @test "short accept stage allows a bounded read-only diagnostic without a console error" {
@@ -153,6 +161,18 @@ run_guard() {
   run_guard 'node "/tmp/book/scripts/short-section-repair-finalize.js" --project-root "/tmp/book" --workflow-id "wf-short" --apply --json'
   [ "$status" -eq 0 ]
   [[ "$output" == *'"permissionDecision":"allow"'* ]]
+}
+
+@test "short startup and private source workflow commands are safe managed commands" {
+  for command in \
+    'node "/tmp/skill/scripts/short-startup-entry.js" --project-root "/tmp/book" --json 2>&1' \
+    'node "/tmp/skill/scripts/short-startup-scan-finalize.js" --project-root "/tmp/book" --workflow-id "wf-short" --json' \
+    'node "/tmp/skill/scripts/hot-source-capture.js" --project-root "/tmp/book" --workflow-id "wf-short" --json' \
+    'node "/tmp/skill/scripts/short-info-source-finalize.js" --project-root "/tmp/book" --workflow-id "wf-short" --json'; do
+    run_guard "$command"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"permissionDecision":"allow"'* ]]
+  done
 }
 
 @test "repair stage lets a managed stale command return a structured recovery state" {

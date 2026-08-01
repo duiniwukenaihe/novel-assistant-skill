@@ -36,21 +36,26 @@ const assertionsByScenario={
   'review-repair-staged-gate':['staged_candidate','canonical_unchanged','transaction_required'],
   'chapter-commit-conflict':['concurrent_change','accept_blocked','canonical_unchanged'],
 };
-const assertions=(assertionsByScenario[scenario]||['unknown']).map(name=>({name,status:'pass',evidence:[{path:'artifacts/evidence.txt',sha256:'0'.repeat(64)}]}));
 const complete=usageSource==='host';
+const runDir=require('path').dirname(file);
+const assertionNames=assertionsByScenario[scenario]||['unknown'];
 const summary={
   status,
   paidExecution: paid==='true',
-  scenario:{id:scenario,assertions:assertions.map(a=>a.name)},
+  scenario:{id:scenario,assertions:assertionNames},
   hosts,
   release_evidence:{bundleId,sourceCommit:'test-commit',hostVersions:{claude:'test',codex:'test',zcode:'test'}},
   budget:{actualUsd:complete?0.6:null,actualUsdStatus:complete?'host_reported':'blocked_cost_unavailable',durationMs:1234},
-  results:hosts.map(host=>({
-    host,
-    status,
-    assertions,
-    usage:{complete,source:usageSource,costSource:complete?'host':'unavailable',actualUsd:complete?0.2:null,inputTokens:100,outputTokens:10,durationMs:100},
-  })),
+  results:hosts.map(host=>{
+    const evidencePath=`evidence/${host}/artifacts/evidence.txt`;
+    const contents=`${scenario}:${host}\n`;
+    const target=require('path').join(runDir,evidencePath);
+    fs.mkdirSync(require('path').dirname(target),{recursive:true});
+    fs.writeFileSync(target,contents);
+    const digest=require('crypto').createHash('sha256').update(contents).digest('hex');
+    const assertions=assertionNames.map(name=>({name,status:'pass',evidence:[{path:evidencePath,sha256:digest}]}));
+    return {host,status,assertions,usage:{complete,source:usageSource,costSource:complete?'host':'unavailable',actualUsd:complete?0.2:null,inputTokens:100,outputTokens:10,durationMs:100}};
+  }),
 };
 fs.writeFileSync(file,JSON.stringify(summary,null,2));
 NODE
@@ -91,6 +96,14 @@ write_all_reports() {
     run node "$GATE" --repo-root "$FIXTURE" --json
     [ "$status" -eq 1 ]
     [[ "$output" == *'usage_not_host_reported'* ]]
+}
+
+@test "release gate blocks missing or overwritten host evidence" {
+    write_all_reports
+    printf 'overwritten\n' > "$FIXTURE/reports/behavior-eval/paid-route-single-entry/evidence/claude/artifacts/evidence.txt"
+    run node "$GATE" --repo-root "$FIXTURE" --json
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'assertion_evidence_hash_mismatch:claude'* ]]
 }
 
 @test "release gate accepts complete host usage without cost telemetry" {

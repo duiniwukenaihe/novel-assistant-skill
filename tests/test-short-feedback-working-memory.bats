@@ -178,7 +178,89 @@ NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
-@test "an upgraded task recovers title changes that an older impact audit missed" {
+@test "explicit impact_level from caller overrides keyword fallback and is audited as model_explicit" {
+  run node - "$REPO/scripts/lib/short-feedback-working-memory.js" "$BOOK" <<'NODE'
+const fs=require('fs'),path=require('path');
+const api=require(process.argv[2]);const root=process.argv[3];
+const task={workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/workflow/tasks/wf-short',current_stage:'feedback_apply_patch',scope:'第2节'};
+// "这俩人对话太干" 本会被正则判为 expression_only，但调用方模型已识别为人物动机问题（planning）。
+api.enqueueShortFeedback(root,task,'这俩人对话太干，看不出谁在求谁。',{
+  explicitImpactLevel:'planning',
+  classificationReason:'模型识别为人物动机冲突，非表达问题',
+  receivedAt:'2026-07-22T01:00:00.000Z',
+});
+const pending=task.pending_feedback;
+if(pending.impact_level_hint!=='planning') throw new Error('expected planning, got '+pending.impact_level_hint);
+const item=pending.items[0];
+if(item.impact_level_hint!=='planning') throw new Error('item impact '+item.impact_level_hint);
+if(item.inference_source!=='model_explicit') throw new Error('item source '+item.inference_source);
+if(item.classification_reason!=='模型识别为人物动机冲突，非表达问题') throw new Error('reason '+item.classification_reason);
+const rows=fs.readFileSync(path.join(root,pending.feedback_inbox_path),'utf8').trim().split('\n').map(JSON.parse);
+if(rows[0].impact_level_hint!=='planning') throw new Error('inbox impact '+rows[0].impact_level_hint);
+if(rows[0].inference_source!=='model_explicit') throw new Error('inbox source '+rows[0].inference_source);
+if(rows[0].classification_reason!=='模型识别为人物动机冲突，非表达问题') throw new Error('inbox reason '+rows[0].classification_reason);
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "keyword fallback records inference_source and classification_reason when no explicit level is given" {
+  run node - "$REPO/scripts/lib/short-feedback-working-memory.js" "$BOOK" <<'NODE'
+const fs=require('fs'),path=require('path');
+const api=require(process.argv[2]);const root=process.argv[3];
+const task={workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/workflow/tasks/wf-short',current_stage:'feedback_apply_patch',scope:'第3节'};
+api.enqueueShortFeedback(root,task,'第3节把这句对白改得自然一点。',{receivedAt:'2026-07-22T01:00:00.000Z'});
+const item=task.pending_feedback.items[0];
+if(item.impact_level_hint!=='current_brief') throw new Error('expected current_brief fallback, got '+item.impact_level_hint);
+if(item.inference_source!=='keyword_fallback') throw new Error('expected keyword_fallback, got '+item.inference_source);
+const rows=fs.readFileSync(path.join(root,task.pending_feedback.feedback_inbox_path),'utf8').trim().split('\n').map(JSON.parse);
+if(rows[0].inference_source!=='keyword_fallback') throw new Error('inbox source '+rows[0].inference_source);
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "low confidence expression_only feedback touching character motive triggers reclassify advisory" {
+  run node - "$REPO/scripts/lib/short-feedback-working-memory.js" "$BOOK" <<'NODE'
+const fs=require('fs'),path=require('path');
+const api=require(process.argv[2]);const root=process.argv[3];
+const task={workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/workflow/tasks/wf-short',current_stage:'feedback_apply_patch',scope:'第3节'};
+// 不带显式级别；文本含"成长"（advisory 关键词）但又不命中 planning 正则（无结局/主线/动机等词），落入 expression_only。
+api.enqueueShortFeedback(root,task,'这段主角成长写得不够，需要再补一笔。',{receivedAt:'2026-07-22T01:00:00.000Z'});
+const item=task.pending_feedback.items[0];
+if(item.impact_level_hint!=='expression_only') throw new Error('expected expression_only, got '+item.impact_level_hint);
+if(item.inference_source!=='keyword_fallback') throw new Error('expected keyword_fallback, got '+item.inference_source);
+if(item.reclassify_advisory!==true) throw new Error('expected reclassify_advisory=true, got '+JSON.stringify(item.reclassify_advisory));
+const rows=fs.readFileSync(path.join(root,task.pending_feedback.feedback_inbox_path),'utf8').trim().split('\n').map(JSON.parse);
+if(rows[0].reclassify_advisory!==true) throw new Error('inbox advisory '+rows[0].reclassify_advisory);
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "explicit impact level takes precedence over minimumImpactLevel promotion target" {
+  run node - "$REPO/scripts/lib/short-feedback-working-memory.js" "$BOOK" <<'NODE'
+const api=require(process.argv[2]);const root=process.argv[3];
+const task={workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/workflow/tasks/wf-short',scope:'第2节'};
+// 调用方显式声明 planning，即便有 minimumImpactLevel 也不应再改写来源标注。
+api.enqueueShortFeedback(root,task,'对话太干。',{explicitImpactLevel:'planning',minimumImpactLevel:'current_brief'});
+const item=task.pending_feedback.items[0];
+if(item.impact_level_hint!=='planning') throw new Error('got '+item.impact_level_hint);
+if(item.inference_source!=='model_explicit') throw new Error('got '+item.inference_source);
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "invalid explicit impact level falls back to keyword inference without crashing" {
+  run node - "$REPO/scripts/lib/short-feedback-working-memory.js" "$BOOK" <<'NODE'
+const api=require(process.argv[2]);const root=process.argv[3];
+const task={workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/workflow/tasks/wf-short',scope:'第3节'};
+api.enqueueShortFeedback(root,task,'第3节把这句对白改得自然一点。',{explicitImpactLevel:'bogus_level'});
+const item=task.pending_feedback.items[0];
+if(item.impact_level_hint!=='current_brief') throw new Error('expected fallback current_brief, got '+item.impact_level_hint);
+if(item.inference_source!=='keyword_fallback') throw new Error('expected keyword_fallback, got '+item.inference_source);
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "an upgraded task recovers title changes without reopening accepted prose" {
   mkdir -p "$BOOK/追踪/private-short-extension"
   cat > "$BOOK/追踪/private-short-extension/section-title-lock.json" <<'JSON'
 {"status":"confirmed","sections":[{"section_index":1,"title":"第一节"},{"section_index":2,"title":"新标题"},{"section_index":3,"title":"第三节"}]}
@@ -191,8 +273,9 @@ const api=require(process.argv[2]);
 const root=process.argv[3];
 const task={workflow_type:'private_short_startup',scope:'第1节',feedback_revision_queue:{queue_id:'revision.old',status:'running',affected_sections:[1],current_section_index:1,completed_sections:[],items:[{section_index:1,status:'pending',brief_status:'invalidated',prose_status:'pending_recheck'}]}};
 const out=api.reconcileShortRevisionQueueWithTitleLock(root,task);
-if(out.status!=='feedback_revision_queue_expanded') throw new Error(JSON.stringify(out));
-if(task.feedback_revision_queue.affected_sections.join(',')!=='1,2') throw new Error(JSON.stringify(task.feedback_revision_queue));
+if(out.status!=='title_lock_metadata_sync_required') throw new Error(JSON.stringify(out));
+if(out.title_sync_sections.join(',')!=='2') throw new Error(JSON.stringify(out));
+if(task.feedback_revision_queue.affected_sections.join(',')!=='1') throw new Error(JSON.stringify(task.feedback_revision_queue));
 NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }

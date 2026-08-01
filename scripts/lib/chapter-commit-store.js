@@ -545,10 +545,30 @@ function failure(status, message) {
   return error;
 }
 
+function rollbackPreparedTransaction(projectRoot, transactionRef, reason = '') {
+  const root = path.resolve(projectRoot);
+  const transactionFile = transactionPath(root, transactionRef);
+  const transaction = readJson(transactionFile);
+  if (transaction.status === 'rolled_back') {
+    return { status: 'rolled_back', transaction_id: transaction.transaction_id, reused: true };
+  }
+  if (transaction.status !== 'prepared') {
+    throw failure('blocked_transaction_state', `transaction is ${transaction.status || 'unknown'}, expected prepared`);
+  }
+  atomicWriteJson(transactionFile, {
+    ...transaction,
+    status: 'rolled_back',
+    rollback_reason: String(reason || 'prepared transaction was not accepted'),
+    rolled_back_at: new Date().toISOString(),
+  });
+  return { status: 'rolled_back', transaction_id: transaction.transaction_id, reused: false };
+}
+
 module.exports = {
   acceptTransaction,
   inspectChapter,
   listAcceptedCommitArtifacts,
   prepareTransaction,
   replayProjection,
+  rollbackPreparedTransaction,
 };

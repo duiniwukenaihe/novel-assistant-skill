@@ -11,8 +11,9 @@ const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-bind
 const { inferShortSectionIndex } = require('./lib/short-workflow-state');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { renderPendingActionText } = require('./lib/workflow-action-renderer');
-const { checkShortMemoryStage } = require('./lib/short-memory-stage-policy');
-const { refreshCurrentStageContext } = require('./lib/workflow-stage-context-refresh');
+const { ensureCurrentShortMemoryStage } = require('./lib/short-memory-stage-recovery');
+const { readShortProjectState } = require('./lib/short-project-state');
+const { resolveShortReaderMilestone } = require('./lib/short-reader-milestone-policy');
 const {
   buildShortSectionOutlineContract,
   validateBriefOutlineCoverage,
@@ -20,18 +21,18 @@ const {
 } = require('./lib/short-section-outline-contract');
 
 const CHECKS = Object.freeze([
-  'role_lock',
-  'causal_chain',
-  'title_promise',
+  'causal_progression',
   'protagonist_agency',
-  'human_emotion',
-  'hook_payoff',
-  'story_attraction',
-  'continuity',
-  'drift_control',
-  'outline_fidelity',
-  'section_function_completion',
+  'emotional_tension',
+  'reader_pull',
 ]);
+
+const LEGACY_CHECK_GROUPS = Object.freeze({
+  causal_progression: ['causal_chain', 'section_function_completion'],
+  protagonist_agency: ['role_lock', 'protagonist_agency'],
+  emotional_tension: ['human_emotion'],
+  reader_pull: ['title_promise', 'hook_payoff', 'story_attraction'],
+});
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -40,7 +41,7 @@ function main() {
   const workflowId = String(args.workflowId || focusedWorkflowId(root));
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 2, args.json);
-  const task = authority.task;
+  let task = authority.task;
   if (!['short_write', 'private_short_startup', 'short_startup'].includes(String(task.workflow_type || ''))) {
     return finish({ status: 'blocked_not_short_write', workflow_id: workflowId }, 2, args.json);
   }
@@ -48,30 +49,15 @@ function main() {
   if (!['quality_gate', 'story_value_gate'].includes(stageId)) {
     return finish({ status: 'stage_action_not_applicable', expected: 'quality_gate', actual: stageId, instruction: '重新读取当前任务的 execution_command；不要重试旧阶段命令。' }, 0, args.json);
   }
-  const execution = task.stage_execution || {};
+  let execution = task.stage_execution || {};
   if (String(execution.status || '') !== 'running' || String(execution.stage_id || '') !== stageId) {
     return finish({ status: 'stage_execution_not_ready', workflow_id: workflowId, instruction: '先由工作流启动故事质量门，再运行本命令。' }, 0, args.json);
   }
-  const projectState = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
+  const projectState = readShortProjectState(root) || {};
   const sectionIndex = inferShortSectionIndex({ projectState, stageId, scope: String(task.scope || '') });
   if (!sectionIndex) return finish({ status: 'blocked_short_section_identity_missing', instruction: '当前任务没有可靠的小节身份；先由 workflow 恢复小节范围，不得默认审查第1节。' }, 0, args.json);
-  const memoryGate = checkShortMemoryStage({ projectRoot: root, task, execution, sectionIndex, stageId });
+  const memoryGate = ensureCurrentShortMemoryStage({ projectRoot: root, workflowId, task, execution, sectionIndex, stageId });
   if (memoryGate.blocking) {
-    if (memoryGate.status === 'short_memory_context_refresh_required'
-        && Number(execution.context_refresh_count || 0) < 1) {
-      const refreshed = refreshCurrentStageContext(root, workflowId);
-      if (refreshed.status === 'stage_context_refreshed') {
-        return finish({
-          status: 'short_memory_context_refreshed',
-          section_index: sectionIndex,
-          memory_status: memoryGate.memory_status,
-          context_refresh_count: refreshed.context_refresh_count,
-          next_action: 'rerun_same_command',
-          execution_command: refreshed.execution_command,
-          instruction: '当前节上下文已自动刷新。直接逐字运行 execution_command；不要让用户选择，不要追加管道、重定向或其他参数。',
-        }, 0, args.json);
-      }
-    }
     return finish({
       status: memoryGate.status,
       section_index: sectionIndex,
@@ -81,6 +67,8 @@ function main() {
       instruction: memoryGate.instruction,
     }, 0, args.json);
   }
+  task = memoryGate.task;
+  execution = memoryGate.execution;
   const draft = resolveDraft(root, task, sectionIndex, args.draft);
   const brief = path.join(root, `写作Brief_第${String(sectionIndex).padStart(3, '0')}节.md`);
   if (!draft || !fs.existsSync(brief)) {
@@ -90,6 +78,7 @@ function main() {
   if (outlineContract.status !== 'current') {
     return finish(recoverableStageResult(task, 'short_outline_contract_required', '先回到小节大纲补足当前节合同，不得用正文临场补剧情。', { section_index: sectionIndex, finding: outlineContract.code || 'outline_contract_missing' }), 0, args.json);
   }
+  const readerMilestone = resolveShortReaderMilestone({ sectionIndex, outlineContract, task });
   const briefText = fs.readFileSync(brief, 'utf8');
   const briefCoverage = validateBriefOutlineCoverage(briefText, outlineContract);
   if (briefCoverage.status !== 'pass') {
@@ -106,7 +95,7 @@ function main() {
     outlineContract,
   });
   if (evidenceRead.repaired) atomicWriteJson(evidenceFile, evidenceRead.value);
-  const evidenceIssue = validateQualityEvidence(review, { workflowId, sectionIndex, draft, outlineContract });
+  const evidenceIssue = validateQualityEvidence(review, { workflowId, sectionIndex, draft, outlineContract, readerMilestone });
   if (evidenceIssue) {
     return finish(recoverableStageResult(task, 'quality_evidence_required', '按 evidence_schema 补当前质量证据卡后重跑同一命令；不要改正文或读取工作流源码。', {
       section_index: sectionIndex,
@@ -117,10 +106,14 @@ function main() {
         sectionIndex,
         draft,
         outlineContract,
+        readerMilestone,
       }),
     }), 0, args.json);
   }
   const failed = new Set(review.checks.filter((item) => item.status === 'revise').map((item) => item.id));
+  if (readerMilestone.required && String(((review || {}).reader_milestone || {}).status || '') === 'revise') {
+    failed.add('professional_reader_milestone');
+  }
   const decision = failed.size ? 'revise' : 'pass';
   if (args.decision && args.decision !== decision) return finish({ status: 'quality_decision_conflict', decision: args.decision, evidence_decision: decision, failed: [...failed] }, 0, args.json);
   const passed = decision === 'pass';
@@ -154,6 +147,7 @@ function main() {
       evidence_file: evidenceRel,
       outline_contract_digest: outlineContract.contract_digest,
       outline_coverage: review.outline_coverage,
+      reader_milestone: readerMilestone.required ? review.reader_milestone : null,
     }],
     verification_result: passed ? 'pass' : 'revise',
     quality_gate_result: passed ? 'pass' : 'revise',
@@ -182,7 +176,7 @@ function main() {
   if (!args.apply) return finish({ status: 'packet_ready', decision, section_index: sectionIndex, result_packet: packetRel }, 0, args.json);
   const applied = spawnSync(process.execPath, [
     path.join(__dirname, 'workflow-state-machine.js'),
-    'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json',
+    'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json',
   ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(applied);
   const applyResult = outcome.result;
@@ -217,7 +211,7 @@ function main() {
   }, outcome.exitCode, args.json);
 }
 
-function validateQualityEvidence(review, { workflowId, sectionIndex, draft, outlineContract }) {
+function validateQualityEvidence(review, { workflowId, sectionIndex, draft, outlineContract, readerMilestone }) {
   const findings = [];
   if (String(review.workflow_id || '') !== workflowId) findings.push({ code: 'workflow_id_mismatch' });
   if (Number(review.section_index || 0) !== sectionIndex) findings.push({ code: 'section_index_mismatch' });
@@ -258,6 +252,20 @@ function validateQualityEvidence(review, { workflowId, sectionIndex, draft, outl
     findings.push({ code: 'acceptance_open_hook_missing' });
   }
   if (String(review.summary || '').trim().length < 12) findings.push({ code: 'quality_summary_underfilled' });
+  if (readerMilestone && readerMilestone.required) {
+    const reader = review.reader_milestone && typeof review.reader_milestone === 'object'
+      ? review.reader_milestone
+      : {};
+    if (String(reader.reviewer || '') !== 'professional-reader') findings.push({ code: 'reader_milestone_reviewer_missing' });
+    if (String(reader.kind || '') !== String(readerMilestone.kind || '')) findings.push({ code: 'reader_milestone_kind_mismatch' });
+    if (!['pass', 'revise'].includes(String(reader.status || ''))) findings.push({ code: 'reader_milestone_status_missing' });
+    if (!['yes', 'maybe', 'no'].includes(String(reader.would_continue || ''))) findings.push({ code: 'reader_milestone_continue_verdict_missing' });
+    if (String(reader.strongest_pull || '').trim().length < 4) findings.push({ code: 'reader_milestone_pull_missing' });
+    if (String(reader.biggest_resistance || '').trim().length < 4) findings.push({ code: 'reader_milestone_resistance_missing' });
+    const readerQuote = normalizeQuote(reader.evidence_quote || '');
+    if (readerQuote.length < 6 || !normalizedDraft.includes(readerQuote)) findings.push({ code: 'reader_milestone_quote_not_found' });
+    if (String(reader.status || '') === 'revise' && String(reader.repair_direction || '').trim().length < 6) findings.push({ code: 'reader_milestone_repair_missing' });
+  }
   return findings.length ? findings : null;
 }
 
@@ -276,6 +284,7 @@ function normalizeQualityEvidence(value, { workflowId, sectionIndex, draft, outl
     checks,
     outline_coverage: outlineCoverage,
     acceptance_metadata: acceptanceMetadata,
+    reader_milestone: normalizeReaderMilestone(source.reader_milestone),
     summary: String(
       source.summary
       || ((source.quality_summary || {}).summary)
@@ -286,16 +295,35 @@ function normalizeQualityEvidence(value, { workflowId, sectionIndex, draft, outl
 }
 
 function normalizeQualityChecks(source) {
+  let rows = [];
   if (Array.isArray(source.checks) && source.checks.length) {
-    return source.checks.map(normalizeQualityCheck).filter((item) => item.id);
+    rows = source.checks.map(normalizeQualityCheck).filter((item) => item.id);
+  } else if (Array.isArray(source.quality_dimensions) && source.quality_dimensions.length) {
+    rows = source.quality_dimensions.map(normalizeQualityCheck).filter((item) => item.id);
+  } else {
+    const statuses = source.quality_status && typeof source.quality_status === 'object' && !Array.isArray(source.quality_status)
+      ? source.quality_status
+      : {};
+    rows = Object.entries(statuses).map(([id, item]) => normalizeQualityCheck({ id, ...(item || {}) }));
   }
-  if (Array.isArray(source.quality_dimensions) && source.quality_dimensions.length) {
-    return source.quality_dimensions.map(normalizeQualityCheck).filter((item) => item.id);
-  }
-  const statuses = source.quality_status && typeof source.quality_status === 'object' && !Array.isArray(source.quality_status)
-    ? source.quality_status
-    : {};
-  return Object.entries(statuses).map(([id, item]) => normalizeQualityCheck({ id, ...(item || {}) }));
+  const ids = new Set(rows.map(item => item.id));
+  if (CHECKS.every(id => ids.has(id))) return rows.filter(item => CHECKS.includes(item.id));
+  return collapseLegacyChecks(rows);
+}
+
+function collapseLegacyChecks(rows) {
+  const byId = new Map(rows.map(item => [item.id, item]));
+  return CHECKS.flatMap(id => {
+    const members = (LEGACY_CHECK_GROUPS[id] || []).map(member => byId.get(member)).filter(Boolean);
+    if (!members.length) return [];
+    const revised = members.some(item => item.status === 'revise');
+    return [{
+      id,
+      status: revised ? 'revise' : 'pass',
+      evidence: uniqueText(members.map(item => item.evidence)).join('；'),
+      evidence_quote: String((members.find(item => item.evidence_quote) || {}).evidence_quote || ''),
+    }];
+  });
 }
 
 function normalizeQualityCheck(value) {
@@ -350,8 +378,8 @@ function normalizeAcceptanceInput(source) {
   };
 }
 
-function buildQualityEvidenceSchema({ workflowId, sectionIndex, draft, outlineContract }) {
-  return {
+function buildQualityEvidenceSchema({ workflowId, sectionIndex, draft, outlineContract, readerMilestone }) {
+  const schema = {
     schemaVersion: '1.0.0',
     workflow_id: workflowId,
     section_index: sectionIndex,
@@ -376,6 +404,33 @@ function buildQualityEvidenceSchema({ workflowId, sectionIndex, draft, outlineCo
       character_state: { 角色名: '本节结束时的人物状态' },
       open_hook: outlineContract.section_role === 'ending' ? '' : '带入下一节的未闭合问题',
     },
+  };
+  if (readerMilestone && readerMilestone.required) {
+    schema.reader_milestone = {
+      reviewer: 'professional-reader',
+      kind: readerMilestone.kind,
+      status: 'pass|revise',
+      would_continue: 'yes|maybe|no',
+      strongest_pull: '读者最想继续追看的具体原因',
+      biggest_resistance: '最可能掉线的具体阻力',
+      evidence_quote: '正文中的可核验原句',
+      repair_direction: 'status=revise 时填写最小修复方向',
+    };
+  }
+  return schema;
+}
+
+function normalizeReaderMilestone(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    reviewer: String(input.reviewer || ''),
+    kind: String(input.kind || ''),
+    status: String(input.status || input.verdict || ''),
+    would_continue: String(input.would_continue || input.continue_verdict || ''),
+    strongest_pull: String(input.strongest_pull || ''),
+    biggest_resistance: String(input.biggest_resistance || ''),
+    evidence_quote: String(input.evidence_quote || input.quote || ''),
+    repair_direction: String(input.repair_direction || ''),
   };
 }
 
@@ -502,4 +557,14 @@ function usage(message) {
   process.exit(2);
 }
 
-process.exitCode = main();
+function uniqueText(values) {
+  return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
+}
+
+if (require.main === module) process.exitCode = main();
+
+module.exports = {
+  buildQualityEvidenceSchema,
+  normalizeQualityChecks,
+  validateQualityEvidence,
+};

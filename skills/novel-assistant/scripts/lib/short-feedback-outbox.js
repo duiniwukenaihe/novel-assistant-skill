@@ -5,8 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { appendIntegrationEvent } = require('./integration-outbox');
 const { readShortProjectState } = require('./short-project-state');
-
-const SHORT_WORKFLOWS = new Set(['short_write', 'short_startup', 'private_short_startup']);
+const { SHORT_WORKFLOW_TYPES: SHORT_WORKFLOWS } = require('./short-workflow-types');
 
 function recordAcceptedShortFeedback(projectRoot, task = {}, result = {}) {
   const stageId = String(result.stage_id || '');

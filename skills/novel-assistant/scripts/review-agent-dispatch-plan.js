@@ -10,15 +10,20 @@ const batch = args.batch || scope;
 const availableAgents = new Set(args.agentsAvailable);
 const riskTags = args.risk.split(',').map((item) => item.trim()).filter(Boolean);
 const existingReports = Number(args.existingReports || 0);
+const reviewTargetKind = String(args.reviewTargetKind || '');
+const requiredDimensions = Array.from(new Set(args.requiredDimensions.concat(
+  ['short_story', 'milestone', 'volume', 'book'].includes(reviewTargetKind) ? ['reader_experience'] : [],
+)));
 
 if (!scope) die('--scope is required');
 
 const persistedPlan = args.dispatchPlan ? readDispatchPlan(args.dispatchPlan) : null;
 const selectedPlan = persistedPlan || planReviewRoles({
-  requiredDimensions: args.requiredDimensions,
+  requiredDimensions,
   evidenceSignals: riskTags,
   availableAgents: Array.from(availableAgents),
   budgetPolicy: {},
+  reviewTargetKind,
 });
 const executionPlan = {
   mode: selectedPlan.mode,
@@ -36,6 +41,7 @@ const result = {
   parent_scope: scope,
   batch_scope: batch,
   chapter_span: chapterSpan(scope),
+  review_target_kind: reviewTargetKind || 'unspecified',
   user_decision_required: false,
   existing_reports_policy: existingReports > 0 ? 'use_as_evidence_then_verify' : 'none',
   execution_plan: executionPlan,
@@ -63,6 +69,7 @@ function parseArgs(argv) {
     existingReports: 0,
     agentsAvailable: [],
     dispatchPlan: '',
+    reviewTargetKind: '',
     json: false,
   };
   for (let i = 2; i < argv.length; i += 1) {
@@ -74,9 +81,10 @@ function parseArgs(argv) {
     else if (arg === '--existing-reports') out.existingReports = Number(argv[++i] || 0);
     else if (arg === '--agents-available') out.agentsAvailable = String(argv[++i] || '').split(',').map((item) => item.trim()).filter(Boolean);
     else if (arg === '--dispatch-plan') out.dispatchPlan = argv[++i] || '';
+    else if (arg === '--target-kind') out.reviewTargetKind = argv[++i] || '';
     else if (arg === '--json') out.json = true;
     else if (arg === '--help' || arg === '-h') {
-      console.log('Usage: node review-agent-dispatch-plan.js --scope <range> [--batch <range>] [--risk tags] [--dimensions a,b] [--dispatch-plan file] [--existing-reports n] [--agents-available a,b,c] [--json]');
+      console.log('Usage: node review-agent-dispatch-plan.js --scope <range> [--batch <range>] [--target-kind short_story|prose_unit|milestone|volume|book] [--risk tags] [--dimensions a,b] [--dispatch-plan file] [--existing-reports n] [--agents-available a,b,c] [--json]');
       process.exit(0);
     } else {
       die(`unknown argument: ${arg}`);

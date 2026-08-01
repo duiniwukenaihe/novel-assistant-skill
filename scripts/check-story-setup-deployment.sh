@@ -78,7 +78,7 @@ write_sentinel() {
   local root="$1"
   cat > "$root/.story-deployed" <<'SENTINEL'
 deployed_at: 2026-05-24T00:00:00Z
-agents_version: 18
+agents_version: 19
 setup_skill_version: 1.4.5
 novel_assistant_bundle_id: test-bundle
 novel_assistant_source_commit: test-commit
@@ -358,7 +358,7 @@ setup_git_repo "$bad_sentinel_root"
 copy_hooks "$bad_sentinel_root"
 cat > "$bad_sentinel_root/.story-deployed" <<'SENTINEL'
 deployed_at: 2026-05-24T00:00:00Z
-agents_version: 18
+agents_version: 19
 setup_skill_version: 1.4.5
 resolver_strategy: global-skill-with-project-agent-references
 references_dir: .claude/agent-references/novel-assistant
@@ -380,7 +380,7 @@ resolver_strategy: global-skill-with-project-agent-references
 references_dir: .claude/agent-references/novel-assistant
 SENTINEL
 stale_v14_out="$(run_from_nested "$stale_v14_root" session-start.sh 2>&1 || true)"
-echo "$stale_v14_out" | grep -q '低于 v18' || fail "session-start did not warn for agents_version 14 stale v18 deployment"
+echo "$stale_v14_out" | grep -q '低于 v19' || fail "session-start did not warn for agents_version 14 stale v19 deployment"
 echo "  OK TS5 sentinel diagnostics"
 
 # TS6 — Short project non-mutation
@@ -473,9 +473,9 @@ echo "  OK TS9 settings JSON"
 # TS10 — Runtime contracts plus semantic upgrade-guide topics
 node "$REPO_ROOT/scripts/public-release-audit.js" --repo-root "$REPO_ROOT" --check-upgrade-guide --json >/dev/null \
   || fail "upgrade guide is missing a required maintenance topic"
-assert_grep 'AGENTS_VERSION.*-lt 18|AGENTS_VERSION" -lt 18' "$HOOKS_DIR/session-start.sh" "session-start must warn for agents_version 17 under v18 deployment"
-assert_grep 'agents_version.*< 18|版本 < 18' "$SKILL_DIR/SKILL.md" "story-setup redeploy branch must treat agents_version 17 as stale"
-assert_grep 'agents_version.*小于 `18`|小于 .18' "$REPO_ROOT/src/internal-skills/story-review/SKILL.md" "story-review must treat agents_version 17 as stale"
+assert_grep 'AGENTS_VERSION.*-lt 19|AGENTS_VERSION" -lt 19' "$HOOKS_DIR/session-start.sh" "session-start must warn for agents_version 18 under v19 deployment"
+assert_grep 'agents_version.*< 19|版本 < 19' "$SKILL_DIR/SKILL.md" "story-setup redeploy branch must treat agents_version 18 as stale"
+assert_grep 'agents_version.*小于 `19`|小于 .19' "$REPO_ROOT/src/internal-skills/story-review/SKILL.md" "story-review must treat agents_version 18 as stale"
 assert_grep 'check-degeneration\.js' "$SKILL_FILE" "story-setup must deploy check-degeneration runtime script"
 assert_file "$SKILL_DIR/references/templates/agents/style-learner.md"
 assert_file "$SKILL_DIR/references/opencode/agents/style-learner.md"

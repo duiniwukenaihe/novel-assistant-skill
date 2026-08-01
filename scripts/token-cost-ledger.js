@@ -151,6 +151,9 @@ function normalizeEvent(args) {
   const inputFiles = requiredNonNegative(args, 'inputFiles');
   const inputChars = requiredNonNegative(args, 'inputChars');
   const outputChars = requiredNonNegative(args, 'outputChars');
+  const rawOutputChars = requiredNonNegative(args, 'rawOutputChars');
+  const compactedOutputChars = requiredNonNegative(args, 'compactedOutputChars');
+  const toolOutputCompressionRatio = requiredNonNegative(args, 'toolOutputCompressionRatio');
   const toolCalls = requiredNonNegative(args, 'toolCalls');
   const retryCount = requiredNonNegative(args, 'retryCount');
   const failureCount = requiredNonNegative(args, 'failureCount');
@@ -191,6 +194,11 @@ function normalizeEvent(args) {
     input_files: inputFiles,
     input_chars: inputChars,
     output_chars: outputChars,
+    raw_output_chars: rawOutputChars,
+    compacted_output_chars: compactedOutputChars,
+    tool_output_compression_ratio: toolOutputCompressionRatio,
+    stable_prefix_digest: String(args.stablePrefixDigest || ''),
+    dynamic_context_digest: String(args.dynamicContextDigest || ''),
     tool_calls: toolCalls,
     retry_count: retryCount,
     failure_count: failureCount,

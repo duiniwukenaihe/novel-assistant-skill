@@ -6,7 +6,7 @@ This reference turns provider/model choice into workflow data instead of tribal 
 
 `novel-assistant` runs inside host tools such as Claude Code / Codex / OpenCode. 宿主工具负责 provider 配置、登录态、API key、base URL、模型选择和计费；skill 不保存 API key，不要求用户把供应商密钥写进书目项目，也不接管宿主的模型登录方式。
 
-The profile here is not a provider manager. It is a runtime capability note used by workflow:
+The profile here is not a provider manager. `scripts/lib/model-risk-policy.js` compiles the current provider/model name into runtime safeguards stored at `task.runtime_guard.model_profile`:
 
 - what kind of model the host currently gives us;
 - what task class it is suitable for;
@@ -80,6 +80,8 @@ Rules:
 3. If a task is final arbitration, whole-book consistency, or high-impact rewrite planning, use `deep_reasoning` or the user-selected high-quality model.
 4. If provider safety errors such as `output new_sensitive` appear, do not retry the same prompt unchanged; route to `blocked_provider_sensitive`.
 5. If output health fails twice for the same provider/model/task, write a learned risk note and suggest switching model_class or shrinking scope.
+6. `model_profile` must affect the current stage packet: optional context budget, retry budget and concise model-specific directives. It may not bypass the same outline, story, memory or write gates used by other models.
+7. The host can declare identity with `NOVEL_ASSISTANT_PROVIDER` and `NOVEL_ASSISTANT_MODEL`, or pass `--provider` / `--model` when creating a workflow. Only names and risk policy are stored; credentials, endpoints and prices are never written into the book project.
 
 ## User-Facing Guidance
 

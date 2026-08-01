@@ -5,6 +5,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const {
   acquireProjectLock,
   appendJsonl: appendJsonlRecord,
@@ -62,6 +63,8 @@ const {
   buildReplanActions,
 } = require('./lib/lifecycle-impact');
 const { normalizeExecutionBoundary } = require('./lib/workflow-execution-boundary');
+const { classifyTaskComplexity } = require('./lib/task-complexity-policy');
+const { resolveModelRiskPolicy } = require('./lib/model-risk-policy');
 const {
   BASE_TEMPLATES,
   LONG_WRITE_RESULT_FIELDS,
@@ -75,6 +78,17 @@ const { buildShortSectionOutlineContract } = require('./lib/short-section-outlin
 const { buildLongStageContextPacket } = require('./lib/long-stage-context-packet');
 const { markTaskOverviewPresented } = require('./lib/workflow-task-overview-state');
 const { buildShortRevisionRequirementView } = require('./lib/short-revision-requirement-view');
+const { readShortProjectState, resolveShortStateRelative, shortStateFile } = require('./lib/short-project-state');
+const { resolvePrivateModule } = require('./lib/private-runtime-resolver');
+const {
+  cardIdentity,
+  cardTitle,
+  childProjectRoot,
+  recordPromotions,
+  rejectCard,
+  rejectedCardIds,
+  writeProjectSeed,
+} = require('./lib/short-card-incubator');
 const {
   buildInitialReviewPlan,
   buildReviewAdvanceSummary,
@@ -94,6 +108,7 @@ const {
   buildShortDraftPendingAction,
   buildShortRevisionQueueProgress,
   buildShortRevisionTaskOverview,
+  buildShortSettingCandidatePendingAction,
   buildWorkflowTaskOverview,
   buildShortSectionDecisionPendingAction,
   decoratePendingAction,
@@ -134,6 +149,7 @@ const { resolveExecutionMemoryPolicy } = require('./lib/workflow-memory-policy')
 const { StoryMemoryRepository } = require('./lib/story-memory-repository');
 const { recordAcceptedShortFeedback } = require('./lib/short-feedback-outbox');
 const { acceptShortPlanningDecision, projectAcceptedShortPlanningFeedback } = require('./lib/short-planning-memory');
+const { projectShortReaderPromise } = require('./lib/short-reader-promise');
 const {
   initializeShortFeedbackRevisionQueue,
   activeShortFeedbackRevision,
@@ -141,13 +157,48 @@ const {
   acceptShortFeedbackRevisionSection,
   reconcileShortRevisionQueueWithTitleLock,
 } = require('./lib/short-feedback-revision-queue');
-const { discardShortFeedbackItem, enqueueShortFeedback, recordShortFeedbackReclassification, resolveShortFeedback } = require('./lib/short-feedback-working-memory');
+const { discardShortFeedbackItem, enqueueShortFeedback, inferFeedbackImpact, recordShortFeedbackReclassification, resolveShortFeedback } = require('./lib/short-feedback-working-memory');
 const { validateEditorialReviewCard, attachEvidenceRuntime } = require('./lib/short-story-editorial-review');
-
-const SCHEMA_VERSION = '1.0.0';
+const {
+  projectWorkflowCharacterContract,
+  validateWorkflowCharacterContract,
+} = require('./lib/workflow-character-contract');
+const { SHORT_WORKFLOW_TYPES, isShortWorkflowType } = require('./lib/short-workflow-types');
+const {
+  SCHEMA_VERSION,
+  blocked,
+  blockedTaskTemplate,
+  readJson,
+  writeJson,
+  compactActivatedResult,
+  compactPendingActionForConsole,
+  compactSubtaskForConsole,
+  compactApplyResult,
+  compactTaskOverviewResult,
+  compactNextCandidatesResult,
+  compactVisibleResponseForConsole,
+  compactExecutionForConsole,
+  compactMenuOptionForConsole,
+  compactWorkflowCommand,
+} = require('./lib/state-machine-shared');
+const SHORT_WORKFLOW_CONTRACT_VERSION = 3;
+const SHORT_WHOLE_STORY_STAGES = new Set([
+  'startup_scan', 'startup_menu', 'freshness_window', 'info_source_pool', 'short_review',
+  'info_source_selection', 'material_learning', 'project_seed', 'short_setting', 'platform_genre_lock',
+  'rhythm_pattern_selection', 'section_outline', 'section_plan_lock',
+  'short_structure_impact_audit', 'hook_retention_gate',
+  'full_story_assembly', 'full_story_review', 'short_deslop', 'final_check',
+]);
+const SHORT_SECTION_STAGES = new Set([
+  'first_section_brief', 'section_brief', 'next_section_brief',
+  'draft_first_section', 'draft_section', 'draft_next_section',
+  'section_machine_gate', 'section_repair_loop', 'quality_gate', 'story_value_gate',
+  'section_candidate_compare', 'section_accept_anchor', 'feedback_apply_patch',
+]);
 const REVIEW_EVIDENCE_PROTOCOL_VERSION = '2.0.0';
 const WORKFLOW_SESSION_LEASE_MS = 20 * 60 * 1000;
 const SHORT_EXECUTABLE_STAGE_CONTRACTS = new Set([
+  'startup_scan', 'info_source_pool', 'material_learning',
   'section_plan_lock', 'short_structure_impact_audit', 'hook_retention_gate', 'hook_value_gate',
   'first_section_brief', 'section_brief', 'next_section_brief',
   'draft_first_section', 'draft_section', 'draft_next_section',
@@ -164,7 +215,7 @@ const USAGE = `Usage: node scripts/workflow-state-machine.js <${PUBLIC_COMMANDS.
 
 Commands:
   templates [--private-registry-root <dir>] [--no-private-registry] --json
-  create --workflow-type <type> --project-root <book-dir> [--scope <scope>] [--user-goal <goal>] [--host-context-chars <chars>] [--runtime-context-chars <chars>] [--private-registry-root <dir>] --json
+  create --workflow-type <type> --project-root <book-dir> [--scope <scope>] [--user-goal <goal>] [--provider <provider>] [--model <model>] [--host-context-chars <chars>] [--runtime-context-chars <chars>] [--private-registry-root <dir>] --json
   inspect --project-root <book-dir> [--private-registry-root <dir>] --json
   task-overview --project-root <book-dir> [--private-registry-root <dir>] --json
   resolve-action --project-root <book-dir> --input <number-or-text> [--bind-current | --pending-action-id <id> --visible-choice-hash <hash> --state-version <version> --book-root <book-dir>] [--private-registry-root <dir>] --json
@@ -182,7 +233,7 @@ Commands:
   discard-short-feedback-item --project-root <book-dir> --workflow-id <id> --feedback-id <id> --confirm [--json]
   reclassify-short-feedback-item --project-root <book-dir> --workflow-id <id> --feedback-id <id> [--plan-id <id>] --confirm [--json]
   migrate-short-lean-workflow --project-root <book-dir> --workflow-id <id> [--confirm] [--json]
-  reconcile-runtime --project-root <book-dir> --workflow-id <id> --session-id <id> [--takeover --confirm] [--json]`;
+  reconcile-runtime --project-root <book-dir> --workflow-id <id> --session-id <id> [--provider <provider>] [--model <model>] [--takeover --confirm] [--json]`;
 
 let ACTIVE_TEMPLATES = null;
 let ACTIVE_REGISTRIES = [];
@@ -204,7 +255,7 @@ function parseArgs(argv) {
   const rawCommand = argv[2] || '';
   const implicitCommand = !rawCommand || rawCommand.startsWith('--');
   const command = implicitCommand ? 'next-candidates' : rawCommand;
-  const args = { command, json: false, compact: false, write: false, bindCurrent: false, projectRoot: '', workflowId: '', migrationSource: '', confirmMigration: false, takeover: false, sessionId: '', workflowType: '', scope: '', userGoal: '', reason: '', input: '', result: '', feedbackId: '', planId: '', hostContextChars: '', runtimeContextChars: '', privateRegistryRoot: '', noPrivateRegistry: false, pendingActionId: '', visibleChoiceHash: '', stateVersion: '', bookRoot: '' };
+  const args = { command, json: false, compact: false, write: false, bindCurrent: false, projectRoot: '', workflowId: '', migrationSource: '', confirmMigration: false, takeover: false, sessionId: '', workflowType: '', scope: '', userGoal: '', reason: '', input: '', result: '', feedbackId: '', planId: '', provider: '', model: '', hostContextChars: '', runtimeContextChars: '', privateRegistryRoot: '', noPrivateRegistry: false, pendingActionId: '', visibleChoiceHash: '', stateVersion: '', bookRoot: '' };
   for (let i = implicitCommand ? 2 : 3; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--json') args.json = true;
@@ -229,6 +280,8 @@ function parseArgs(argv) {
     else if (arg === '--result') args.result = argv[++i] || '';
     else if (arg === '--feedback-id') args.feedbackId = argv[++i] || '';
     else if (arg === '--plan-id') args.planId = argv[++i] || '';
+    else if (arg === '--provider') args.provider = argv[++i] || '';
+    else if (arg === '--model') args.model = argv[++i] || '';
     else if (arg === '--host-context-chars') args.hostContextChars = argv[++i] || '';
     else if (arg === '--runtime-context-chars') args.runtimeContextChars = argv[++i] || '';
     else if (arg === '--private-registry-root') args.privateRegistryRoot = argv[++i] || '';
@@ -261,16 +314,6 @@ function resolvedTemplateForTask(task) {
     templates: ACTIVE_TEMPLATES || BASE_TEMPLATES,
     registries: ACTIVE_REGISTRIES,
   });
-}
-
-function blockedTaskTemplate(registryCheck) {
-  return blocked(registryCheck.status, [{
-    field: 'workflow_registry',
-    message: '任务绑定的工作流模板不可用，禁止回落到其他公有或私有模块。',
-    workflow_type: registryCheck.workflow_type,
-    owner_module: registryCheck.owner_module,
-    expected_profile: ((registryCheck.registry || {}).profile) || 'public',
-  }]);
 }
 
 function fail(message) {
@@ -318,15 +361,6 @@ function archivedDir(root) {
   return path.join(workflowDir(root), 'archived');
 }
 
-function readJson(file) {
-  try {
-    if (!fs.existsSync(file)) return null;
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (error) {
-    return { __error: error.message };
-  }
-}
-
 function readText(file) {
   try {
     return fs.readFileSync(file, 'utf8');
@@ -362,10 +396,6 @@ function persistTaskSnapshot(root, task, focus = false) {
   atomicWriteJson(path.join(taskDir(root, task.workflow_id), 'task.json'), task);
   const focused = readFocusedTask(root);
   if (focus || (focused.pointer && String(focused.pointer.workflow_id || '') === String(task.workflow_id || ''))) writeFocusPointer(root, task);
-}
-
-function writeJson(file, data) {
-  atomicWriteJson(file, data);
 }
 
 function rel(root, file) {
@@ -860,9 +890,16 @@ function buildNewTask(args, tpl, extra) {
   const remaining = tpl.stages.map((item) => item.stage_id);
   const now = new Date().toISOString();
   const workflowId = createWorkflowId(args.workflowType, now);
+  const initialScope = isShortWorkflowType(args.workflowType)
+    && SHORT_WHOLE_STORY_STAGES.has(String(first.stage_id || ''))
+    ? '全篇'
+    : (args.scope || '');
   const task = {
     workflow_id: workflowId,
     result_contract_version: 2,
+    workflow_contract_version: isShortWorkflowType(args.workflowType)
+      ? SHORT_WORKFLOW_CONTRACT_VERSION
+      : 1,
     workflow_type: args.workflowType,
     workflow_profile: tpl.private_overlay ? 'private' : 'public',
     workflow_owner: String((tpl.private_overlay || {}).module || primaryOwner.owner_module || ''),
@@ -873,7 +910,7 @@ function buildNewTask(args, tpl, extra) {
       : null,
     book_root: '.',
     user_goal: args.userGoal || args.scope || args.workflowType,
-    scope: args.scope || '',
+    scope: initialScope,
     completion_policy: tpl.default_completion_policy,
     current_stage: first.stage_id,
     current_step: first.stage_id,
@@ -883,7 +920,7 @@ function buildNewTask(args, tpl, extra) {
       started_at: now,
       updated_at: now,
       user_goal: args.userGoal || args.scope || args.workflowType,
-      scope: args.scope || '',
+      scope: initialScope,
       previous_workflow_id: extra.previousWorkflowID || '',
       switch_reason: extra.reason || '',
     },
@@ -895,10 +932,10 @@ function buildNewTask(args, tpl, extra) {
       last_transition: 'created',
       next_stop_reason: first.requires_user_confirm ? 'requires_user_confirm' : 'ready',
     },
-    unit_lifecycle: buildUnitLifecycleState(tpl, first, args.scope || ''),
+    unit_lifecycle: buildUnitLifecycleState(tpl, first, initialScope),
     host_execution_mode: 'cooperative_interactive',
     execution_boundary: normalizeExecutionBoundary({ host_execution_mode: 'cooperative_interactive' }),
-    runtime_guard: buildRuntimeGuard(args, workflowId, now),
+    runtime_guard: buildRuntimeGuard(args, workflowId, now, first),
     pending_action: buildPendingAction(tpl, first),
     canonical_write_set: canonicalWriteSetForTemplate(tpl),
   };
@@ -929,28 +966,41 @@ function canonicalWriteSetForTemplate(tpl) {
     .filter(isCanonicalTarget))).sort();
 }
 
-function buildRuntimeGuard(args, workflowId, now) {
+function buildRuntimeGuard(args, workflowId, now, firstStage = {}) {
   const root = path.resolve(args.projectRoot);
   const scopeRange = parseNumericScope(args.scope || '');
   const unitCount = scopeRange ? scopeRange.end - scopeRange.start + 1 : 1;
   const workflowType = String(args.workflowType || 'workflow');
   const estimatedUnitWindow = ['review_repair', 'short_review'].includes(workflowType) ? Math.min(12, unitCount) : workflowType === 'long_analyze' ? Math.min(30, unitCount) : 1;
-  const agentCount = ['review_repair', 'short_review'].includes(workflowType) ? 2 : ['long_analyze', 'long_write'].includes(workflowType) ? 2 : 1;
   const hostContextChars = positiveContextChars(args.hostContextChars);
   const runtimeContextChars = positiveContextChars(args.runtimeContextChars);
+  const complexityPolicy = classifyTaskComplexity({
+    workflowType,
+    stageId: firstStage.stage_id || '',
+    inputFiles: Math.max(1, unitCount),
+    inputChars: Math.max(4000, unitCount * 3500),
+    unitCount,
+    riskLevel: firstStage.risk_level || (['review_repair', 'short_review', 'long_analyze', 'long_write'].includes(workflowType) ? 'medium' : 'low'),
+  });
+  const modelProfile = resolveModelRiskPolicy({ provider: args.provider, model: args.model });
   const tokenEstimate = {
     input_files: Math.max(1, unitCount),
     input_chars_estimate: Math.max(4000, unitCount * 3500),
     output_chars_budget: Math.max(2000, Math.min(24000, estimatedUnitWindow * 800)),
-    agent_count: agentCount,
+    agent_count: complexityPolicy.recommended_agent_count,
     batch_size: estimatedUnitWindow,
     estimated_unit_window: estimatedUnitWindow,
     risk_level: ['review_repair', 'short_review', 'long_analyze', 'long_write'].includes(workflowType) ? 'medium' : 'low',
+    task_complexity: complexityPolicy.size_class,
+    model_class: complexityPolicy.model_class,
+    model_context_multiplier: modelProfile.context_budget_multiplier,
   };
   if (hostContextChars) tokenEstimate.host_context_chars = hostContextChars;
   if (runtimeContextChars) tokenEstimate.context_chars_budget = runtimeContextChars;
   return {
     token_estimate: tokenEstimate,
+    complexity_policy: complexityPolicy,
+    model_profile: modelProfile,
     adaptive_budget_policy: {
       mode: 'scope_and_batch_dynamic',
       visible_reply_budget: 'summary_only',
@@ -975,12 +1025,7 @@ function buildRuntimeGuard(args, workflowId, now) {
       script: 'scripts/output-pollution-check.js',
       policy: 'block_polluted_output_and_preserve_last_trusted_artifact',
     },
-    max_retry_budget: {
-      same_failure: 1,
-      same_tool_error: 1,
-      provider_error: 1,
-      on_exhausted: 'pause_at_checkpoint',
-    },
+    max_retry_budget: modelProfile.retry_budget,
     token_cost_governance: {
       cost_ledger_path: '追踪/workflow/token-cost-ledger.jsonl',
       cost_summary_path: '追踪/workflow/token-cost-summary.json',
@@ -1113,11 +1158,41 @@ function activateTask(args) {
     activated.stage_execution = null;
     activated.pending_action = buildPendingAction(activatedTemplate, resumedStage);
   }
-  const overviewBeforeActivation = workflowTaskOverview(activated, root);
+  if (activated.stage_execution
+      && ['completed', 'paused'].includes(String(activated.stage_execution.status || ''))
+      && String(activated.stage_execution.stage_id || '') !== String(activated.current_stage || '')) {
+    activated.stage_execution = null;
+  }
+  let overviewBeforeActivation = workflowTaskOverview(activated, root);
+  const hasDetailedRevisionOverview = Boolean(activated.feedback_revision_queue
+    && String(activated.feedback_revision_queue.status || '') === 'running');
+  if (!hasDetailedRevisionOverview
+      && activated.stage_execution
+      && activated.stage_execution.status === 'paused') {
+    overviewBeforeActivation = null;
+  }
   if (!overviewBeforeActivation && activated.stage_execution && activated.stage_execution.status === 'paused' && activated.stage_execution.stop_reason === 'focus_switched') {
     activated.stage_execution = { ...activated.stage_execution, status: 'running', resumed_at: now };
     delete activated.stage_execution.stopped_at;
     delete activated.stage_execution.stop_reason;
+  }
+  if (!overviewBeforeActivation && activated.stage_execution && activated.stage_execution.status === 'paused') {
+    const pausedStage = String(activated.stage_execution.stage_id || activated.current_stage || '');
+    const stageDisplay = runningStageDisplayName(pausedStage);
+    const resumeLabel = pausedStage === 'feedback_impact_sync'
+      ? '继续分析反馈影响（推荐）'
+      : `${stageDisplay.startsWith('继续') ? stageDisplay : `继续${stageDisplay}`}（推荐）`;
+    activated.pending_action = decoratePendingAction({
+      id: `pa-resume-${pausedStage || 'current-stage'}`,
+      question: '当前任务已恢复，请选择下一步。',
+      options: [
+        { action_id: 'resume_paused_stage', target_stage: pausedStage, label: resumeLabel, risk_level: 'low' },
+        { action_id: 'inspect_current_state', label: '查看当前进度与依据', risk_level: 'low' },
+        { action_id: 'pause', label: '暂停并保存断点', risk_level: 'low' },
+        { action_id: 'free_text', label: '输入其他要求', risk_level: 'low' },
+      ],
+      free_text_enabled: true,
+    });
   }
   if (activated.pending_action && typeof activated.pending_action === 'object') {
     activated.pending_action = { ...activated.pending_action, state_version: activated.state_version, book_root: '.' };
@@ -1127,7 +1202,7 @@ function activateTask(args) {
   bindTaskFamily(root, activated);
   // Entering a multi-subtask task only reveals its overview. Execution starts
   // after the user explicitly opens the current subtask.
-  const autoStart = overviewBeforeActivation
+  const autoStart = overviewBeforeActivation || activated.pending_action
     ? { started: false, stageExecution: null }
     : maybeAutoStartInternalStage(root, activated);
   persistTaskSnapshot(root, activated, true);
@@ -1196,7 +1271,7 @@ function restoreIncompleteWorkflow(args) {
   persistTaskSnapshot(root, task);
   appendTaskJournal(root, 'workflow_integrity_restored', task);
   appendHistory(root, 'workflow_integrity_restored', { workflow_id: task.workflow_id, workflow_type: task.workflow_type, resume_stage: resumeStage, missing_stages: missing });
-  return { schemaVersion: SCHEMA_VERSION, status: 'workflow_integrity_restored', workflow_id: task.workflow_id, missing_stages: missing, resume_stage: resumeStage, activation_command: `node scripts/workflow-state-machine.js activate --project-root ${shellQuote(root)} --workflow-id ${shellQuote(task.workflow_id)} --json` };
+  return { schemaVersion: SCHEMA_VERSION, status: 'workflow_integrity_restored', workflow_id: task.workflow_id, missing_stages: missing, resume_stage: resumeStage, activation_command: `node scripts/workflow-state-machine.js activate --project-root ${shellQuote(root)} --workflow-id ${shellQuote(task.workflow_id)} --compact --json` };
 }
 
 function resetUnmanagedReviewRepair(args) {
@@ -1311,14 +1386,56 @@ function shortPacketPassed(packet) {
   return /^(pass|passed|accepted|approved|ok|completed)$/.test(String(packet.verification_result || packet.machine_gate_result || packet.quality_gate_result || '').toLowerCase());
 }
 
+function needsInfoSourceSelection(root, task) {
+  if (String((task || {}).current_stage || '') !== 'material_learning') return false;
+  if (task.info_source_selection && String(task.info_source_selection.status || '') === 'selected') return false;
+  const cards = readJsonlRecords(path.join(root, '追踪/private-short-extension/cards/info-source-cards.jsonl'));
+  const selectable = cards.filter(card => ['write', 'backup'].includes(String(card.verdict || '')))
+    .filter(card => !['discarded', 'used'].includes(String(card.pool_status || '')));
+  const hasExplicitSelection = selectable.some(card => String(card.pool_status || '') === 'selected');
+  const topicCards = readJsonlRecords(path.join(root, '追踪/private-short-extension/cards/topic-cards.jsonl'));
+  return selectable.length > 0 && !hasExplicitSelection && topicCards.length === 0;
+}
+
 function assessShortLeanMigration(root, task) {
   if (!isShortWritingWorkflow(task)) return { status: 'blocked_not_short_workflow', eligible: false };
+  const currentStage = String(task.current_stage || '');
+  if (currentStage === 'info_source_selection'
+      && String(((task.pending_action || {}).id) || '').includes('undefined')) {
+    return {
+      status: 'eligible_info_source_selection_pending_action_rebuild',
+      eligible: true,
+      current_stage: currentStage,
+      target_stage: currentStage,
+      protocol_from: Number(task.workflow_contract_version || 0),
+      protocol_to: SHORT_WORKFLOW_CONTRACT_VERSION,
+      creative_assets_modified: false,
+    };
+  }
+  if (needsInfoSourceSelection(root, task)) {
+    return {
+      status: 'eligible_info_source_selection_restore',
+      eligible: true,
+      current_stage: currentStage,
+      target_stage: 'info_source_selection',
+      protocol_from: Number(task.workflow_contract_version || 0),
+      protocol_to: SHORT_WORKFLOW_CONTRACT_VERSION,
+      creative_assets_modified: false,
+    };
+  }
+  const expectedScope = shortStageWorkUnitScope(root, task, currentStage, task.scope || '');
+  const protocolCurrent = Number(task.workflow_contract_version || 0) >= SHORT_WORKFLOW_CONTRACT_VERSION;
+  const executionScopeCurrent = !task.stage_execution
+    || String((task.stage_execution || {}).work_unit_scope || '') === expectedScope;
+  const taskScopeCurrent = !SHORT_WHOLE_STORY_STAGES.has(currentStage) || String(task.scope || '') === '全篇';
+  if (protocolCurrent && executionScopeCurrent && taskScopeCurrent) {
+    return { status: 'short_workflow_protocol_current', eligible: false, current_stage: currentStage, expected_scope: expectedScope };
+  }
   const machinePacket = shortResultPacket(root, task, 'section_machine_gate');
   const qualityPacket = shortResultPacket(root, task, 'quality_gate');
   const comparePacket = shortResultPacket(root, task, 'section_candidate_compare');
   const candidateCount = Number((comparePacket || {}).candidate_count || (qualityPacket || {}).candidate_count || 0)
     || (String((comparePacket || {}).comparison_result || '').includes('single_candidate') ? 1 : 1);
-  const currentStage = String(task.current_stage || '');
   if (currentStage === 'section_candidate_compare') {
     if (!shortPacketPassed(machinePacket) || !shortPacketPassed(qualityPacket)) {
       return { status: 'blocked_short_quality_not_passed', eligible: false, current_stage: currentStage, candidate_count: candidateCount };
@@ -1329,7 +1446,16 @@ function assessShortLeanMigration(root, task) {
   if (currentStage === 'next_section_brief') {
     return { status: 'eligible_resume_next_brief', eligible: true, current_stage: currentStage, target_stage: 'next_section_brief', candidate_count: 1 };
   }
-  return { status: 'eligible_identity_refresh', eligible: true, current_stage: currentStage, target_stage: currentStage, candidate_count: candidateCount };
+  return {
+    status: 'eligible_identity_refresh',
+    eligible: true,
+    current_stage: currentStage,
+    target_stage: currentStage,
+    candidate_count: candidateCount,
+    expected_scope: expectedScope,
+    protocol_from: Number(task.workflow_contract_version || 0),
+    protocol_to: SHORT_WORKFLOW_CONTRACT_VERSION,
+  };
 }
 
 function migrateShortLeanWorkflow(args) {
@@ -1344,9 +1470,12 @@ function migrateShortLeanWorkflow(args) {
   }
 
   const previousType = task.workflow_type;
+  const previousExecution = task.stage_execution && typeof task.stage_execution === 'object'
+    ? JSON.parse(JSON.stringify(task.stage_execution))
+    : null;
   task.workflow_type = 'short_write';
-  task.workflow_profile = 'private';
-  task.workflow_owner = 'private-short-extension';
+  task.workflow_profile = String(task.workflow_profile || '') === 'private' ? 'private' : 'public';
+  task.workflow_contract_version = SHORT_WORKFLOW_CONTRACT_VERSION;
   task.short_lean_migration = {
     status: 'completed',
     previous_workflow_type: previousType,
@@ -1354,29 +1483,57 @@ function migrateShortLeanWorkflow(args) {
     reason: assessment.status,
     creative_assets_modified: false,
   };
-  const tpl = templates().short_write;
+  const registryCheck = resolvedTemplateForTask(task);
+  const tpl = registryCheck && registryCheck.status === 'ok' ? registryCheck.template : templates().short_write;
+  task.workflow_owner = String(((tpl.private_overlay || {}).module) || task.workflow_owner || 'story-short-write');
   const ordered = (tpl.stages || []).map((stage) => stage.stage_id);
   const targetStage = assessment.target_stage || task.current_stage;
+  const targetStageDef = findStage(tpl, targetStage) || {};
   task.current_stage = targetStage;
   task.current_step = targetStage;
   task.status = 'running';
+  if (SHORT_WHOLE_STORY_STAGES.has(targetStage)) {
+    task.scope = '全篇';
+    task.lifecycle = { ...(task.lifecycle || {}), scope: '全篇' };
+  }
   task.machine = normalizeMachine(task, tpl);
   task.machine.completed_stages = (task.machine.completed_stages || []).filter((stage) => ordered.includes(stage) && stage !== targetStage);
   const targetIndex = Math.max(0, ordered.indexOf(targetStage));
   task.machine.remaining_stages = ordered.slice(targetIndex).filter((stage) => !task.machine.completed_stages.includes(stage));
   task.machine.last_transition = 'short_lean_workflow_migrated';
   task.machine.next_stop_reason = 'ready_for_current_stage';
-  task.stage_execution = task.stage_execution && task.stage_execution.status === 'running'
-    ? { ...task.stage_execution, status: 'paused', stopped_at: new Date().toISOString(), stop_reason: 'short_lean_workflow_migrated' }
-    : task.stage_execution;
+  task.stage_execution = null;
+  task.unit_lifecycle = buildUnitLifecycleState(
+    tpl,
+    targetStageDef,
+    shortStageWorkUnitScope(root, task, targetStage, task.scope || ''),
+  );
+  task.memory_migration = {
+    status: 'refresh_on_resume',
+    previous_packet: String((((previousExecution || {}).memory_context || {}).packet_json) || ''),
+    previous_revision: String((((((previousExecution || {}).memory_context || {}).memory_contract) || {}).memory_revision) || ''),
+    reason: 'short_workflow_protocol_upgrade',
+    migrated_at: new Date().toISOString(),
+  };
+  task.migration_history = Array.isArray(task.migration_history) ? task.migration_history : [];
+  task.migration_history.push({
+    kind: 'short_workflow_protocol_upgrade',
+    protocol_from: Number(assessment.protocol_from || 0),
+    protocol_to: SHORT_WORKFLOW_CONTRACT_VERSION,
+    stage_id: targetStage,
+    preserved_planning_target: String((previousExecution || {}).planning_target || ''),
+    preserved_stage_attempt_id: String((previousExecution || {}).stage_attempt_id || ''),
+    migrated_at: new Date().toISOString(),
+  });
   task.pending_action = targetStage === 'section_accept_anchor'
     ? buildShortSectionDecisionPendingAction(tpl, task)
-    : buildPendingAction(tpl, findStage(tpl, targetStage));
-  const autoStart = maybeAutoStartInternalStage(root, task, tpl);
+    : targetStage === 'info_source_selection'
+      ? buildShortInfoSourceSelectionPendingAction(task)
+    : buildPendingAction(tpl, targetStageDef);
   writeTaskState(root, task);
   if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
 
-  const projectStateFile = path.join(root, '追踪/private-short-extension/project-state.json');
+  const projectStateFile = shortStateFile(root, 'project-state.json', { forWrite: true });
   const projectState = readJson(projectStateFile);
   if (projectState && !projectState.__error) {
     projectState.workflow_type = 'short_write';
@@ -1387,13 +1544,16 @@ function migrateShortLeanWorkflow(args) {
   appendHistory(root, 'short_lean_workflow_migrated', { workflow_id: task.workflow_id, previous_workflow_type: previousType, current_stage: task.current_stage });
   return {
     schemaVersion: SCHEMA_VERSION,
-    status: autoStart.started ? 'short_lean_workflow_migrated_stage_started' : 'short_lean_workflow_migrated',
+    status: 'short_lean_workflow_migrated',
     workflow_id: task.workflow_id,
     previous_workflow_type: previousType,
     workflow_type: task.workflow_type,
     current_stage: task.current_stage,
     creative_assets_modified: false,
-    stage_execution: autoStart.stageExecution || null,
+    stage_execution: null,
+    workflow_contract_version: task.workflow_contract_version,
+    restored_scope: shortStageWorkUnitScope(root, task, targetStage, task.scope || ''),
+    memory_status: task.memory_migration.status,
   };
 }
 
@@ -1719,7 +1879,7 @@ function taskOverview(args) {
       schemaVersion: SCHEMA_VERSION,
       status: 'task_overview_not_required',
       workflow_id: String(task.workflow_id || ''),
-      execution_command: 'node scripts/workflow-state-machine.js next-candidates --project-root . --json',
+      execution_command: 'node scripts/workflow-state-machine.js next-candidates --project-root . --compact --json',
     };
   }
   markTaskOverviewPresented(task);
@@ -1873,11 +2033,12 @@ function reconcileRuntime(args) {
   task.machine.next_stop_reason = 'ready_for_current_stage';
   task.status = ['paused', 'paused_after_batch'].includes(String(task.status || '').toLowerCase()) ? 'paused' : 'running';
   task.lifecycle = { ...(task.lifecycle || {}), status: task.status === 'paused' ? 'paused' : 'active', updated_at: nowText, completed_at: '' };
+  const reconciledScope = shortStageWorkUnitScope(root, task, stageDef.stage_id, task.scope || '');
   task.unit_lifecycle = {
     ...(task.unit_lifecycle || {}),
-    ...buildUnitLifecycleState(tpl, stageDef, task.scope || ''),
+    ...buildUnitLifecycleState(tpl, stageDef, reconciledScope),
     status: 'running',
-    current_scope: task.scope || '',
+    current_scope: reconciledScope,
     current_stage: stageDef.stage_id,
     current_role: currentUnitRole(contract, stageDef.stage_id),
     completed_roles: completedRoles,
@@ -1885,6 +2046,7 @@ function reconcileRuntime(args) {
     updated_at: nowText,
   };
   task.runtime_guard = task.runtime_guard || {};
+  refreshRuntimeModelProfile(task, args, nowText);
   task.runtime_guard.session_lease = {
     holder_id: requestedSession,
     workflow_id: task.workflow_id,
@@ -1916,7 +2078,14 @@ function reconcileRuntime(args) {
     project_root: '.',
   };
   if (task.stage_execution && task.stage_execution.status === 'completed') {
-    task.stage_execution = { ...task.stage_execution, status: 'paused', stopped_at: nowText, stop_reason: 'runtime_reconciled' };
+    if (String(task.stage_execution.stage_id || '') === String(task.current_stage || '')) {
+      task.stage_execution = { ...task.stage_execution, status: 'paused', stopped_at: nowText, stop_reason: 'runtime_reconciled' };
+    } else {
+      task.stage_execution = null;
+    }
+  }
+  if (task.stage_execution && task.stage_execution.status === 'running') {
+    task.stage_execution = bindStageCompletionContract(task.stage_execution);
   }
   const shortDraftStop = isShortWritingWorkflow(task)
     && ['draft_first_section', 'draft_section', 'draft_next_section'].includes(String(task.current_stage || ''))
@@ -1950,6 +2119,23 @@ function reconcileRuntime(args) {
     session_claim_status: familySession ? familySession.status : 'legacy_lease',
     session_lease: task.runtime_guard.session_lease,
   };
+}
+
+function refreshRuntimeModelProfile(task, args, nowText) {
+  const provider = String(args.provider || process.env.NOVEL_ASSISTANT_PROVIDER || process.env.NOVEL_ASSISTANT_HOST || '').trim();
+  const model = String(args.model || process.env.NOVEL_ASSISTANT_MODEL || process.env.ANTHROPIC_MODEL || process.env.CODEX_MODEL || process.env.ZCODE_MODEL || '').trim();
+  if (!provider && !model) return false;
+  const previous = (((task || {}).runtime_guard || {}).model_profile) || {};
+  const current = resolveModelRiskPolicy({ provider, model });
+  task.runtime_guard.model_profile = current;
+  task.runtime_guard.max_retry_budget = current.retry_budget;
+  task.runtime_guard.model_profile_previous_family = String(previous.family || '');
+  task.runtime_guard.model_profile_changed_at = nowText;
+  if (task.runtime_guard.token_estimate) {
+    task.runtime_guard.token_estimate.model_context_multiplier = current.context_budget_multiplier;
+  }
+  return String(previous.family || '') !== String(current.family || '')
+    || String(previous.model || '') !== String(current.model || '');
 }
 
 function workflowSessionTakeoverMenu(task, requestedSession, familySession, stale) {
@@ -1994,7 +2180,8 @@ function refreshShortTitleLock(args) {
     return blocked('blocked_short_title_lock_stage_not_running', '当前写作提要阶段尚未启动或已经结束。');
   }
   const sectionIndex = shortSectionIndex(root, task, stageId) || 1;
-  const lock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
+  const lock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
+  const projectState = readShortProjectState(root) || {};
   if (String(lock.workflow_id || '') !== String(task.workflow_id || '')
       || String(lock.project_id || '') !== String(projectState.project_id || '')
       || Number(lock.plan_revision || 0) !== Number(projectState.plan_revision || 0)) {
@@ -2051,7 +2238,24 @@ function resumePendingShortFeedback(args) {
   let impact = task.short_feedback_impact || {};
   let impactMatchesPending = String(impact.feedback_id || '') === String(pending.feedback_id || '');
   if (!impactMatchesPending) {
-    task.short_feedback_impact = recoverShortFeedbackImpact(root, task, pending);
+    const hintedImpact = pendingFeedbackImpactLevel(pending);
+    task.short_feedback_impact = hintedImpact === 'expression_only'
+      ? {
+        status: 'ok',
+        feedback_id: String(pending.feedback_id || ''),
+        impact_level: 'expression_only',
+        next_stage_id: 'section_repair_loop',
+        changed_assets: [],
+        invalidates_brief: false,
+        invalidates_draft: true,
+        requires_structure_audit: false,
+        downstream_revalidation: false,
+        requires_reacceptance: true,
+        feedback: String(pending.text || ''),
+        recovered_from_pending_hint: true,
+        recovered_at: new Date().toISOString(),
+      }
+      : recoverShortFeedbackImpact(root, task, pending);
     impact = task.short_feedback_impact || {};
     impactMatchesPending = String(impact.feedback_id || '') === String(pending.feedback_id || '');
   }
@@ -2376,12 +2580,15 @@ function reopenShortTaskForFeedback(task, now = new Date().toISOString()) {
 function refreshActiveShortStageGuidance(root, task) {
   if (!isShortWritingWorkflow(task)) return { applied: false, reason: 'not_short_workflow' };
   const execution = task.stage_execution || {};
-  if (String(execution.status || '') !== 'running' || String(execution.stage_id || '') !== String(task.current_stage || '')) {
+  const stageId = String(task.current_stage || '');
+  if (String(execution.status || '') !== 'running' || String(execution.stage_id || '') !== stageId) {
     return { applied: false, reason: 'stage_not_running' };
   }
-  const sectionIndex = shortSectionIndex(root, task, task.current_stage) || 1;
-  task.scope = `第${sectionIndex}节`;
-  execution.expected_result_packet = expectedResultPacketPath(task, task.current_stage, root);
+  const sectionScoped = SHORT_SECTION_STAGES.has(stageId);
+  const sectionIndex = sectionScoped ? (shortSectionIndex(root, task, stageId) || 1) : 0;
+  task.scope = shortStageWorkUnitScope(root, task, stageId, task.scope || '');
+  execution.work_unit_scope = task.scope;
+  execution.expected_result_packet = expectedResultPacketPath(task, stageId, root);
   if (task.runtime_guard && task.runtime_guard.checkpoint_policy) {
     task.runtime_guard.checkpoint_policy.expected_result_packet = execution.expected_result_packet;
   }
@@ -2390,10 +2597,16 @@ function refreshActiveShortStageGuidance(root, task) {
   delete execution.quality_command;
   delete execution.resume_hint;
   delete execution.acceptance_metadata;
-  attachShortStageExecutionGuidance(root, task, task.current_stage);
+  attachShortStageExecutionGuidance(root, task, stageId);
+  attachStageMemoryGuidance(root, task, stageId);
+  const contract = validateStartedStageExecutionContract(task, stageId);
+  if (contract.status === 'missing') {
+    execution.status = 'contract_blocked';
+    execution.context_packet_warning = contract.reason;
+  }
   return {
     applied: true,
-    stage_id: task.current_stage,
+    stage_id: stageId,
     section_index: sectionIndex,
     execution_command: String(execution.execution_command || ''),
     context_packet: String(((execution.stage_context_packet || {}).packet_md) || ''),
@@ -2403,7 +2616,7 @@ function refreshActiveShortStageGuidance(root, task) {
 function reconcileShortProjectProgress(root, task, tpl) {
   const result = { applied: false, reason: 'not_applicable' };
   if (!isShortWritingWorkflow(task) || !tpl || !Array.isArray(tpl.stages)) return result;
-  const stateFile = resolveSafeProjectFile(root, '追踪/private-short-extension/project-state.json');
+  const stateFile = shortStateFile(root, 'project-state.json');
   const state = stateFile && fs.existsSync(stateFile) ? readJson(stateFile) : null;
   if (!state || state.__error || !Array.isArray(state.accepted_sections)) return { ...result, reason: 'project_state_missing' };
   const revisionQueue = activeShortFeedbackRevision(task);
@@ -2454,7 +2667,7 @@ function reconcileShortProjectProgress(root, task, tpl) {
     return { ...result, reason: 'accepted_section_sequence_incomplete' };
   }
   for (const item of accepted) {
-    const expectedAnchor = `追踪/private-short-extension/section-${String(item.section_index).padStart(3, '0')}-anchor.json`;
+    const expectedAnchor = resolveShortStateRelative(root, `section-${String(item.section_index).padStart(3, '0')}-anchor.json`);
     const anchorPath = item.anchor_path || expectedAnchor;
     const anchorFile = resolveSafeProjectFile(root, anchorPath);
     const anchor = anchorFile && fs.existsSync(anchorFile) ? readJson(anchorFile) : null;
@@ -2463,7 +2676,7 @@ function reconcileShortProjectProgress(root, task, tpl) {
     }
   }
 
-  const titleLock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
+  const titleLock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
   const outlineText = readText(path.join(root, '小节大纲.md'));
   const plan = resolvePlannedSectionCount({ projectState: state, titleLock, outlineText });
   if (plan.status === 'missing') {
@@ -2510,7 +2723,7 @@ function reconcileShortProjectProgress(root, task, tpl) {
         target_stage: targetStage,
         accepted_section_count: accepted.length,
         planned_section_count: plan.count,
-        latest_trusted_artifact: `追踪/private-short-extension/section-${String(plan.count).padStart(3, '0')}-anchor.json`,
+        latest_trusted_artifact: resolveShortStateRelative(root, `section-${String(plan.count).padStart(3, '0')}-anchor.json`),
         reconciled_at: new Date().toISOString(),
       };
       task.recommended_next = [{
@@ -2547,7 +2760,7 @@ function reconcileShortProjectProgress(root, task, tpl) {
     projectRoot: root,
     briefPath: nextBrief,
     sectionIndex: nextSection,
-    acceptedAnchorPath: nextSection > 1 ? `追踪/private-short-extension/section-${String(nextSection - 1).padStart(3, '0')}-anchor.json` : '',
+    acceptedAnchorPath: nextSection > 1 ? resolveShortStateRelative(root, `section-${String(nextSection - 1).padStart(3, '0')}-anchor.json`) : '',
   });
   const hasTrustedCurrentBrief = isTrustedShortResumePacket(briefPacket, task, briefStage, nextSection)
     && nextBriefFreshness.status === 'current';
@@ -2571,7 +2784,7 @@ function reconcileShortProjectProgress(root, task, tpl) {
       target_stage: targetStage,
       accepted_section_count: accepted.length,
       next_section_index: nextSection,
-      latest_trusted_artifact: `追踪/private-short-extension/section-${String(accepted.length).padStart(3, '0')}-anchor.json`,
+      latest_trusted_artifact: resolveShortStateRelative(root, `section-${String(accepted.length).padStart(3, '0')}-anchor.json`),
       reconciled_at: new Date().toISOString(),
     };
     return { applied: true, ...task.short_project_resume };
@@ -2623,6 +2836,539 @@ function orderedStage(tpl, stageId) {
   return Boolean(tpl && Array.isArray(tpl.stages) && tpl.stages.some((item) => String((item || {}).stage_id || '') === stageId));
 }
 
+function projectSeedAllTopicCards(root, task) {
+  if (String((task || {}).current_stage || '') !== 'project_seed') return [];
+  const file = path.join(root, '追踪/private-short-extension/cards/topic-cards.jsonl');
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return [];
+  try {
+    const rejected = rejectedCardIds(root);
+    return fs.readFileSync(file, 'utf8')
+      .split(/\r?\n/u)
+      .filter(line => line.trim())
+      .map(line => JSON.parse(line))
+      .filter(card => card && typeof card === 'object')
+      .filter(card => !rejected.has(cardIdentity(card)))
+      .slice(0, 20)
+      .map((card, index) => ({ ...card, display_no: index + 1 }));
+  } catch (_) {
+    return [];
+  }
+}
+
+function infoSourceSelectionCards(root, task) {
+  if (String((task || {}).current_stage || '') !== 'info_source_selection') return [];
+  const file = path.join(root, '追踪/private-short-extension/cards/info-source-cards.jsonl');
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return [];
+  const cards = readJsonlRecords(file)
+    .filter(card => ['write', 'backup'].includes(String(card.verdict || '')))
+    .filter(card => !['discarded', 'used'].includes(String(card.pool_status || '')));
+  cards.sort((left, right) => {
+    const byScore = infoSourceMaterialScore(right) - infoSourceMaterialScore(left);
+    if (byScore !== 0) return byScore;
+    const verdictRank = value => String(value.verdict || '') === 'write' ? 0 : 1;
+    const byVerdict = verdictRank(left) - verdictRank(right);
+    if (byVerdict !== 0) return byVerdict;
+    return String(left.info_id || '').localeCompare(String(right.info_id || ''), 'zh-Hans-CN');
+  });
+  return cards.slice(0, 12).map((card, index) => ({ ...card, display_no: index + 1 }));
+}
+
+function readJsonlRecords(file) {
+  try {
+    return fs.readFileSync(file, 'utf8')
+      .split(/\r?\n/u)
+      .filter(line => line.trim())
+      .map(line => JSON.parse(line))
+      .filter(record => record && typeof record === 'object');
+  } catch (_) {
+    return [];
+  }
+}
+
+function parseInfoSourceCardSelection(root, task, input) {
+  const cards = infoSourceSelectionCards(root, task);
+  if (!cards.length) return { status: 'not_applicable', cards: [] };
+  const text = String(input || '').trim();
+  if (!text || /^(?:看|查看|详情|保存退出|保存并退出|暂停|稍后再选)$/u.test(text)) return { status: 'not_selected', cards: [] };
+  const explicit = /^\d+(?:\s*(?:[+、，,]|和|及|与|\s)\s*\d+)*$/u.test(text);
+  const natural = /(?:选|选择|倾向|喜欢|采用|要|用|资讯|素材|第\s*\d+\s*张)/u.test(text);
+  if (!explicit && !natural) return { status: 'not_selected', cards: [] };
+  const numbers = [...text.matchAll(/(\d+)/gu)].map(match => Number(match[1])).filter(number => Number.isInteger(number) && number > 0);
+  const unique = [...new Set(numbers)];
+  if (!unique.length) return { status: 'not_selected', cards: [] };
+  const selected = unique.map(number => cards.find(card => card.display_no === number)).filter(Boolean);
+  if (selected.length !== unique.length) return { status: 'invalid', cards: [], requested: unique, available: cards.length };
+  return { status: 'selected', cards: selected };
+}
+
+function parseInfoSourceCardCommand(root, task, input) {
+  const text = String(input || '').trim();
+  if (!text) return { status: 'not_applicable' };
+  if (/^(?:保存退出|保存并退出|暂停|稍后再选)$/u.test(text)) return { status: 'pause' };
+  const cards = infoSourceSelectionCards(root, task);
+  if (!cards.length) return { status: 'not_applicable' };
+  const detail = text.match(/^(?:看|查看)\s*(?:第\s*)?(\d+)\s*(?:张|个)?(?:详情|卡片|资讯|素材)?$/u);
+  return detail ? cardCommandResult('inspect', cards, Number(detail[1])) : { status: 'not_applicable' };
+}
+
+function infoSourceSelectionResponse(root, task, intro = '') {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'info_source_selection_required',
+    workflow_id: String((task || {}).workflow_id || ''),
+    visible_response: pendingActionVisibleResponse(task, root, intro),
+  };
+}
+
+function infoSourceCardDetailResponse(root, task, card) {
+  const routes = (Array.isArray(card.route_fit) ? card.route_fit : [])
+    .map(item => typeof item === 'string'
+      ? item
+      : `${String((item || {}).route_name || '未命名方向')}：${String((item || {}).reason || '')}`)
+    .filter(Boolean);
+  const value = card.discussion_value && typeof card.discussion_value === 'object' ? card.discussion_value : {};
+  const score = infoSourceMaterialScore(card);
+  const text = [
+    `资讯卡 ${card.display_no}：${String(card.title || '未命名资讯')}`,
+    `写作价值：${score > 0 ? `${score.toFixed(1)} 分` : '待评估'}｜${infoSourceRecommendationLabel(card)}`,
+    `冲突：${String(card.human_conflict || '待补充')}`,
+    `可小说化：${String(value.fiction_entry || '待补充')}`,
+    routes.length ? `适合方向：${routes.join('；')}` : '',
+    '',
+    `回复 ${card.display_no} 选择；也可以多选或继续查看其他卡。`,
+  ].filter(Boolean).join('\n');
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'info_source_card_detail',
+    workflow_id: String(task.workflow_id || ''),
+    card,
+    visible_response: { render_mode: 'card_detail', status: 'workflow_choice_required', cards: [card], text },
+  };
+}
+
+function infoSourceMaterialScore(card) {
+  const scorecard = card && card.scorecard && typeof card.scorecard === 'object' ? card.scorecard : {};
+  const value = Number((card || {}).material_score || scorecard.material_score || 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function infoSourceRecommendationLabel(card) {
+  const score = infoSourceMaterialScore(card);
+  if (String((card || {}).verdict || '') === 'write' && score >= 8) return '推荐';
+  if (score >= 6.5) return '可组合';
+  return '备选';
+}
+
+function infoSourcePrimaryRoute(card) {
+  const route = (Array.isArray((card || {}).route_fit) ? card.route_fit : [])[0];
+  if (typeof route === 'string') return route;
+  return String((route || {}).route_name || '待补充');
+}
+
+function pauseInfoSourceSelection(root, task) {
+  const now = new Date().toISOString();
+  task.status = 'paused';
+  task.lifecycle = { ...(task.lifecycle || {}), status: 'paused', paused_at: now, updated_at: now };
+  task.updated_at = now;
+  writeTaskState(root, task, { writeMarkdown: false });
+  appendHistory(root, 'info_source_selection_paused', { workflow_id: task.workflow_id || '', workflow_type: task.workflow_type || '' });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'info_source_selection_paused',
+    workflow_id: String(task.workflow_id || ''),
+    text: '资讯卡池和选择断点已保存。下次进入当前任务时继续选择。',
+  };
+}
+
+function promoteInfoSourceSelection(root, task, taskTemplate, cards, sourceInput) {
+  const privateRoot = resolvePrivateModule('private-short-extension', [path.join('scripts', 'card_pipeline.py')]);
+  if (!privateRoot) return blocked('blocked_private_info_pool_runtime_missing', '私有资讯卡池运行时不可用，不能把推荐卡默认推进到脑洞阶段。');
+  const ids = cards.map(card => String(card.info_id || '')).filter(Boolean);
+  const run = spawnSync(process.env.PYTHON || 'python3', [
+    path.join(privateRoot, 'scripts', 'card_pipeline.py'), 'info-pool', 'select',
+    '--workspace', root, '--info-ids', ids.join(','),
+  ], { cwd: root, encoding: 'utf8', maxBuffer: 1024 * 1024 });
+  let result = null;
+  try { result = JSON.parse(String(run.stdout || '').trim()); } catch (_) { result = null; }
+  if (run.status !== 0 || !result || result.status !== 'ok' || !Array.isArray(result.selected)) {
+    return blocked('blocked_info_source_selection_write_failed', [{
+      field: 'info_source_selection',
+      message: String((result && (result.error || result.detail)) || run.stderr || '资讯卡选择未写入。').trim(),
+    }]);
+  }
+  const now = new Date().toISOString();
+  task.info_source_selection = {
+    status: 'selected',
+    info_ids: ids,
+    display_numbers: cards.map(card => Number(card.display_no)),
+    titles: cards.map(card => String(card.title || '')),
+    selected_at: now,
+    source_input: String(sourceInput || ''),
+  };
+  const packetRel = `${task.task_dir}/result-packets/info_source_selection.result.json`;
+  const packet = {
+    workflow_id: String(task.workflow_id || ''),
+    workflow_type: String(task.workflow_type || 'short_write'),
+    stage_id: 'info_source_selection',
+    step_id: 'info_source_selection',
+    owner_module: String(task.workflow_owner || 'private-short-extension'),
+    step_status: 'completed',
+    outputs: ['追踪/private-short-extension/cards/info-source-cards.jsonl'],
+    changed_files: ['追踪/private-short-extension/cards/info-source-cards.jsonl'],
+    created_files: [],
+    evidence: [{ selected_info_ids: ids, source_input: String(sourceInput || '') }],
+    verification_result: 'pass',
+    blocking_findings: [],
+    output_health_result: 'pass',
+    checkpoint_state: { current_stage: 'info_source_selection', completed_range: '已选择资讯素材', remaining_range: '生成素材、爆点与脑洞卡', resume_from: 'material_learning' },
+    handoff_summary: `已选择 ${ids.length} 张资讯卡，下一步生成素材、爆点与脑洞卡。`,
+    result_packet_path: packetRel,
+  };
+  atomicWriteJson(path.join(root, packetRel), packet);
+  task.stage_execution = { status: 'running', stage_id: 'info_source_selection', step_id: 'info_source_selection', started_at: now };
+  const advanced = advanceTask(task, packet, root, taskTemplate);
+  writeTaskState(root, advanced);
+  if (advanced.task_family_id) ensureTaskFamily(root, advanced, { write: true, projectLockHeld: true });
+  appendHistory(root, 'info_source_cards_selected', { workflow_id: advanced.workflow_id || '', workflow_type: advanced.workflow_type || '', stage_id: 'info_source_selection' });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'info_source_cards_selected',
+    workflow_id: String(advanced.workflow_id || ''),
+    selected_info_ids: ids,
+    current_stage: String(advanced.current_stage || ''),
+    visible_response: pendingActionVisibleResponse(advanced, root, `已选择 ${ids.length} 张资讯卡。`),
+  };
+}
+
+function projectSeedTopicCards(root, task) {
+  return projectSeedAllTopicCards(root, task)
+    .filter(card => String(card.quality_status || '') === 'story_value_passed');
+}
+
+function parseProjectSeedCardSelection(root, task, input) {
+  const cards = projectSeedTopicCards(root, task);
+  if (!cards.length) return { status: 'not_applicable', cards: [] };
+  const text = String(input || '').trim();
+  if (!text) return { status: 'not_selected', cards: [] };
+  if (/^(?:看|查看|详情|删除|移除|换一批|重新生成|保存退出|暂停)/u.test(text)) return { status: 'not_selected', cards: [] };
+  const explicitCardSyntax = /^(?:A\s*)?\d+(?:\s*(?:[+、，,]|和|及|与|\s)\s*(?:A\s*)?\d+)*$/iu.test(text);
+  const naturalCardSyntax = /(?:选|选择|倾向|喜欢|采用|要|用|卡片|脑洞卡|第\s*\d+\s*张)/u.test(text);
+  if (!explicitCardSyntax && !naturalCardSyntax) return { status: 'not_selected', cards: [] };
+  const numbers = [...text.matchAll(/(?:A\s*)?(\d+)/giu)]
+    .map(match => Number(match[1]))
+    .filter(number => Number.isInteger(number) && number > 0);
+  const unique = [...new Set(numbers)];
+  if (!unique.length) return { status: 'not_selected', cards: [] };
+  const selected = unique.map(number => cards.find(card => card.display_no === number)).filter(Boolean);
+  if (selected.length !== unique.length) return { status: 'invalid', cards: [], requested: unique, available: cards.length };
+  return { status: 'selected', cards: selected };
+}
+
+function parseProjectSeedCardCommand(root, task, input) {
+  const text = String(input || '').trim();
+  if (!text) return { status: 'not_applicable' };
+  if (/^(?:换一批|再来一批|重新生成(?:脑洞)?卡|重做卡池)$/u.test(text)) return { status: 'regenerate' };
+  if (/^(?:保存退出|保存并退出|暂停|稍后再选)$/u.test(text)) return { status: 'pause' };
+  const cards = projectSeedTopicCards(root, task);
+  if (!cards.length) return { status: 'not_applicable' };
+  const detail = text.match(/^(?:看|查看)\s*(?:第\s*)?(\d+)\s*(?:张|个)?(?:详情|卡片|脑洞卡)?$/u);
+  if (detail) return cardCommandResult('inspect', cards, Number(detail[1]));
+  const remove = text.match(/^(?:删除|移除|不要)\s*(?:第\s*)?(\d+)\s*(?:张|个)?(?:卡片|脑洞卡)?$/u);
+  if (remove) return cardCommandResult('reject', cards, Number(remove[1]));
+  return { status: 'not_applicable' };
+}
+
+function cardCommandResult(status, cards, number) {
+  const card = cards.find(item => Number(item.display_no) === number);
+  return card ? { status, card, number } : { status: 'invalid', number, available: cards.length };
+}
+
+function projectSeedSelectionResponse(root, task, intro = '') {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'project_seed_selection_required',
+    workflow_id: String((task || {}).workflow_id || ''),
+    visible_response: pendingActionVisibleResponse(task, root, intro),
+  };
+}
+
+function projectSeedCardDetailResponse(root, task, card) {
+  const beats = Array.isArray(card.escalation_beats) ? card.escalation_beats : [];
+  const text = [
+    `脑洞卡 ${card.display_no}：${cardTitle(card)}`,
+    `平台：${String(card.target_platform || '待确认')}`,
+    `题材：${String(card.genre_lane || '待确认')}`,
+    `核心爽点：${String(card.core_payoff || card.story_promise || '待补充')}`,
+    `开场：${String(card.opening_scene || '待补充')}`,
+    `承诺：${String(card.story_promise || '待补充')}`,
+    `不可逆选择：${String(card.irreversible_choice || '待补充')}`,
+    beats.length ? `三级升级：${beats.map((beat, index) => `${index + 1}) ${String(beat)}`).join('；')}` : '',
+    `第一反转：${String(card.first_reversal || '待补充')}`,
+    `终局兑现：${String(card.final_payoff || '待补充')}`,
+    `适合人群：${String(card.target_reader || '待确认')}`,
+    `风险：${String(card.risk_notes || '待检查')}`,
+    `开写建议：${String(card.opening_advice || card.opening_scene || '待补充')}`,
+    '',
+    `回复 ${card.display_no} 选择这张卡；也可以继续查看、删除或多选其他卡。`,
+  ].filter(Boolean).join('\n');
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'project_seed_card_detail',
+    workflow_id: String(task.workflow_id || ''),
+    card,
+    visible_response: { render_mode: 'card_detail', status: 'workflow_choice_required', cards: [card], text },
+  };
+}
+
+function pauseProjectSeedSelection(root, task) {
+  const now = new Date().toISOString();
+  task.status = 'paused';
+  task.lifecycle = { ...(task.lifecycle || {}), status: 'paused', paused_at: now, updated_at: now };
+  task.updated_at = now;
+  writeTaskState(root, task, { writeMarkdown: false });
+  appendHistory(root, 'project_seed_selection_paused', { workflow_id: task.workflow_id || '', workflow_type: task.workflow_type || '' });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'project_seed_selection_paused',
+    workflow_id: String(task.workflow_id || ''),
+    text: '脑洞卡池和选择断点已保存。下次进入当前任务时继续选卡。',
+  };
+}
+
+function restartShortMaterialLearning(root, task, taskTemplate, input) {
+  const target = 'material_learning';
+  if (!findStage(taskTemplate, target)) return blocked('blocked_short_material_stage_missing', '短篇工作流缺少脑洞卡生成阶段。');
+  const ordered = taskTemplate.stages.map(stage => String(stage.stage_id || ''));
+  const targetIndex = ordered.indexOf(target);
+  const completed = Array.isArray((task.machine || {}).completed_stages) ? task.machine.completed_stages : [];
+  const now = new Date().toISOString();
+  task.machine = normalizeMachine(task, taskTemplate);
+  task.machine.completed_stages = ordered.slice(0, targetIndex).filter(stageId => completed.includes(stageId));
+  task.machine.remaining_stages = ordered.slice(targetIndex);
+  task.machine.last_transition = 'short_card_pool_regeneration_requested';
+  task.machine.next_stop_reason = 'ready_for_current_stage';
+  task.current_stage = target;
+  task.current_step = target;
+  task.stage_execution = null;
+  task.pending_action = buildPendingAction(taskTemplate, findStage(taskTemplate, target));
+  task.status = 'running';
+  task.lifecycle = { ...(task.lifecycle || {}), status: 'active', updated_at: now };
+  task.unit_lifecycle = {
+    ...(task.unit_lifecycle || {}),
+    status: 'active',
+    current_stage: target,
+    current_role: currentUnitRole(taskTemplate.unit_lifecycle_contract || {}, target),
+    updated_at: now,
+  };
+  task.card_pool_revision = { status: 'requested', reason: String(input || ''), requested_at: now };
+  task.updated_at = now;
+  writeTaskState(root, task, { writeMarkdown: false });
+  appendHistory(root, 'short_card_pool_regeneration_requested', { workflow_id: task.workflow_id || '', reason: String(input || '') });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'short_card_pool_regeneration_requested',
+    workflow_id: String(task.workflow_id || ''),
+    current_stage: target,
+    visible_response: pendingActionVisibleResponse(task, root, '已保留旧卡池为历史。本轮只重新生成脑洞卡，不重新抓取资讯。'),
+  };
+}
+
+function promoteProjectSeedSelection(root, task, taskTemplate, cards, sourceInput) {
+  const now = new Date().toISOString();
+  const selection = {
+    status: 'selected',
+    topic_ids: cards.map(cardIdentity),
+    display_numbers: cards.map(card => Number(card.display_no)),
+    titles: cards.map(cardTitle),
+    selected_at: now,
+    source_input: String(sourceInput || ''),
+  };
+  task.short_card_selection = selection;
+  if (cards.length === 1) {
+    const card = cards[0];
+    const seeded = writeProjectSeed(root, {
+      card,
+      workflowId: task.workflow_id,
+      sourceWorkflowId: task.workflow_id,
+      sourceProjectRoot: '.',
+      selectedAt: now,
+    });
+    const advanced = advanceSeededShortTask(root, task, taskTemplate, seeded, card, now);
+    recordPromotions(root, {
+      workflowId: task.workflow_id,
+      promotions: [promotionRecord(card, root, advanced.workflow_id, seeded.project_state.project_id, now)],
+      status: 'promoted_single',
+    });
+    writeTaskState(root, advanced);
+    if (advanced.task_family_id) ensureTaskFamily(root, advanced, { write: true, projectLockHeld: true });
+    appendHistory(root, 'short_project_seeded', { workflow_id: advanced.workflow_id, workflow_type: advanced.workflow_type, stage_id: 'project_seed' });
+    const visible = pendingActionVisibleResponse(advanced, root, `已选择“${cardTitle(card)}”，素材卡已按原卡快照建立。`);
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'short_project_seeded',
+      workflow_id: advanced.workflow_id,
+      project_id: seeded.project_state.project_id,
+      project_title: seeded.project_state.project_title,
+      project_root: root,
+      current_stage: advanced.current_stage,
+      pending_action: refreshedVisibleMenu(advanced, root),
+      next_candidates: visible.options || [],
+      visible_response: visible,
+    };
+  }
+
+  const occupied = new Set();
+  const createdProjects = cards.map(card => createSeededChildProject(root, task, taskTemplate, card, now, occupied));
+  recordPromotions(root, {
+    workflowId: task.workflow_id,
+    promotions: createdProjects.map(project => promotionRecord(project.card, project.project_root, project.workflow_id, project.project_id, now)),
+    status: 'promoted_batch',
+  });
+  completeIncubatorBatchTask(root, task, createdProjects, now);
+  const focus = createdProjects[0];
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'short_projects_seeded',
+    workflow_id: String(task.workflow_id || ''),
+    created_projects: createdProjects.map(({ card, ...project }) => project),
+    recommended_focus: focus ? focus.project_root : '',
+    execution_workdir: focus ? focus.project_root : root,
+    execution_command: focus ? runtimeNodeCommand('workflow-state-machine.js', ['next-candidates', '--project-root', focus.project_root, '--json']) : '',
+    visible_response: {
+      render_mode: 'created_project_list',
+      status: 'short_projects_seeded',
+      projects: createdProjects.map(({ card, ...project }) => project),
+      text: [
+        `已创建 ${createdProjects.length} 个彼此隔离的短篇项目。`,
+        ...createdProjects.map((project, index) => `${index + 1}. ${project.project_title}\n   ${project.project_root}`),
+        '',
+        `推荐先进入 1：${focus ? focus.project_title : ''}，其他项目已保存，不会互相覆盖。`,
+      ].join('\n').trim(),
+    },
+  };
+}
+
+function advanceSeededShortTask(root, task, taskTemplate, seeded, card, now) {
+  const packetRel = `${task.task_dir}/result-packets/project_seed.result.json`;
+  const packet = {
+    workflow_id: String(task.workflow_id || ''),
+    workflow_type: String(task.workflow_type || 'short_write'),
+    stage_id: 'project_seed',
+    step_id: 'project_seed',
+    owner_module: String(task.workflow_owner || 'private-short-extension'),
+    step_status: 'completed',
+    outputs: ['素材卡.md'],
+    changed_files: ['素材卡.md', resolveShortStateRelative(root, 'project-state.json', { forWrite: true })],
+    created_files: ['素材卡.md'],
+    evidence: [{ card_id: cardIdentity(card), card_digest: seeded.snapshot.card_digest, project_id: seeded.project_state.project_id }],
+    verification_result: 'pass',
+    blocking_findings: [],
+    output_health_result: 'pass',
+    checkpoint_state: { current_stage: 'project_seed', completed_range: '已选择脑洞并建立项目素材快照', remaining_range: '进入生成设定', resume_from: 'short_setting' },
+    next_recommendation: '生成设定',
+    handoff_summary: '脑洞卡已确定性提升为独立短篇项目。',
+    result_packet_path: packetRel,
+  };
+  atomicWriteJson(path.join(root, packetRel), packet);
+  task.stage_execution = { status: 'running', stage_id: 'project_seed', step_id: 'project_seed', started_at: now };
+  return advanceTask(task, packet, root, taskTemplate);
+}
+
+function createSeededChildProject(incubatorRoot, parentTask, taskTemplate, card, now, occupied) {
+  const projectRoot = childProjectRoot(incubatorRoot, card, occupied);
+  fs.mkdirSync(projectRoot, { recursive: true });
+  const existingState = readShortProjectState(projectRoot);
+  const existingTask = existingState ? readFocusedAuthority(projectRoot) : null;
+  if (existingState
+      && String(((existingState.selected_material || {}).card_id) || '') === cardIdentity(card)
+      && existingTask
+      && !existingTask.__error
+      && String(existingTask.workflow_id || '') === String(existingState.active_write_workflow_id || '')) {
+    return {
+      card,
+      card_id: cardIdentity(card),
+      project_id: String(existingState.project_id || ''),
+      project_title: String(existingState.project_title || cardTitle(card)),
+      project_root: projectRoot,
+      workflow_id: String(existingTask.workflow_id || ''),
+      current_stage: String(existingTask.current_stage || 'short_setting'),
+      reused: true,
+    };
+  }
+  const created = createTask({
+    projectRoot,
+    workflowType: 'short_write',
+    userGoal: `创作短篇《${cardTitle(card)}》`,
+    scope: '全篇',
+  });
+  if (String(created.status || '') !== 'created' || !(created.task || {}).workflow_id) {
+    throw new Error(`unable to create child short workflow: ${JSON.stringify(created)}`);
+  }
+  const childTask = readFocusedAuthority(projectRoot);
+  if (!childTask || childTask.__error) throw new Error(`unable to read child short workflow: ${JSON.stringify(childTask)}`);
+  childTask.short_card_selection = {
+    status: 'selected',
+    topic_ids: [cardIdentity(card)],
+    display_numbers: [Number(card.display_no)],
+    titles: [cardTitle(card)],
+    selected_at: now,
+    source_input: `batch:${String(parentTask.workflow_id || '')}`,
+  };
+  const ordered = taskTemplate.stages.map(stage => String(stage.stage_id || ''));
+  const seedIndex = ordered.indexOf('project_seed');
+  childTask.machine.completed_stages = ordered.slice(0, seedIndex);
+  childTask.machine.remaining_stages = ordered.slice(seedIndex);
+  childTask.current_stage = 'project_seed';
+  childTask.current_step = 'project_seed';
+  childTask.status = 'running';
+  const seeded = writeProjectSeed(projectRoot, {
+    card,
+    workflowId: childTask.workflow_id,
+    sourceWorkflowId: parentTask.workflow_id,
+    sourceProjectRoot: path.relative(projectRoot, incubatorRoot) || '.',
+    selectedAt: now,
+  });
+  const advanced = advanceSeededShortTask(projectRoot, childTask, taskTemplate, seeded, card, now);
+  writeTaskState(projectRoot, advanced);
+  if (advanced.task_family_id) ensureTaskFamily(projectRoot, advanced, { write: true, projectLockHeld: true });
+  return {
+    card,
+    card_id: cardIdentity(card),
+    project_id: seeded.project_state.project_id,
+    project_title: seeded.project_state.project_title,
+    project_root: projectRoot,
+    workflow_id: advanced.workflow_id,
+    current_stage: advanced.current_stage,
+  };
+}
+
+function completeIncubatorBatchTask(root, task, createdProjects, now) {
+  task.status = 'completed';
+  task.lifecycle = { ...(task.lifecycle || {}), status: 'completed', completed_at: now, updated_at: now };
+  task.machine = task.machine || {};
+  task.machine.completed_stages = [...new Set([...(task.machine.completed_stages || []), 'project_seed'])];
+  task.machine.remaining_stages = [];
+  task.machine.last_transition = 'batch_projects_created';
+  task.machine.next_stop_reason = 'completed';
+  task.stage_execution = null;
+  task.pending_action = null;
+  task.seeded_projects = createdProjects.map(({ card, ...project }) => project);
+  task.updated_at = now;
+  writeTaskState(root, task, { writeMarkdown: false });
+  appendHistory(root, 'short_projects_seeded', { workflow_id: task.workflow_id || '', workflow_type: task.workflow_type || '', stage_id: 'project_seed' });
+}
+
+function promotionRecord(card, projectRoot, workflowId, projectId, promotedAt) {
+  return {
+    card_id: cardIdentity(card),
+    project_id: String(projectId || ''),
+    project_title: cardTitle(card),
+    project_root: String(projectRoot || ''),
+    workflow_id: String(workflowId || ''),
+    promoted_at: promotedAt,
+  };
+}
+
 function resolveShortEvidenceResume(root, task, sectionIndex, ordered, draftStage) {
   const resultDir = resolveSafeProjectFile(root, `${task.task_dir}/result-packets`);
   const candidates = [
@@ -2656,6 +3402,164 @@ function isTrustedShortResumePacket(packet, task, stageId, sectionIndex) {
   return verdicts.some((value) => /^(pass|passed|accepted|approved|ok)$/i.test(String(value || '')));
 }
 
+function shortSettingCandidateView(root, task, options = {}) {
+  const candidate = task.short_setting_candidate && typeof task.short_setting_candidate === 'object'
+    ? task.short_setting_candidate
+    : {};
+  const relative = String(candidate.path || '');
+  const file = resolveSafeProjectFile(root, relative);
+  const source = file && fs.existsSync(file) && fs.statSync(file).isFile()
+    ? fs.readFileSync(file, 'utf8').trim()
+    : '';
+  const limit = Math.max(600, Number(options.previewLimit || 1800));
+  return {
+    status: source ? String(candidate.status || 'ready') : 'missing',
+    path: relative,
+    sha256: String(candidate.sha256 || ''),
+    revision: Number(candidate.revision || 0),
+    preview: source.slice(0, limit),
+    preview_truncated: source.length > limit,
+  };
+}
+
+function shortSettingCandidateInspection(root, task) {
+  const candidate = shortSettingCandidateView(root, task, { previewLimit: 6000 });
+  const menu = refreshedVisibleMenu(task, root);
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: candidate.status === 'missing' ? 'short_setting_candidate_missing' : 'short_setting_candidate_inspected',
+    workflow_id: String(task.workflow_id || ''),
+    candidate,
+    pending_action: menu,
+    visible_response: {
+      render_mode: 'short_setting_candidate',
+      status: candidate.status,
+      text: `${candidate.preview || '设定候选文件缺失，请重新生成当前候选。'}\n\n${renderPendingActionText(menu)}`,
+    },
+  };
+}
+
+function isShortSettingRevisionInputPending(task) {
+  return isShortWritingWorkflow(task)
+    && String(task.current_stage || '') === 'short_setting'
+    && String((((task || {}).short_setting_candidate || {}).status) || '') === 'awaiting_revision_input';
+}
+
+function restartShortSettingCandidateRevision(root, task, taskTemplate, input) {
+  const feedback = String(input || '').trim();
+  if (!feedback) return shortSettingCandidateInspection(root, task);
+  const now = new Date().toISOString();
+  task.short_setting_candidate = {
+    ...(task.short_setting_candidate || {}),
+    status: 'revision_running',
+    author_decision: 'revision_requested',
+    feedback,
+    feedback_received_at: now,
+  };
+  task.pending_action = null;
+  task.stage_execution = null;
+  const start = maybeStartStageExecution(root, task, {
+    action_id: 'revise_short_setting_candidate',
+    selected_number: 0,
+    target_stage: 'short_setting',
+    risk_level: 'medium',
+    requires_user_confirm: false,
+    selection_id: '',
+    selection_expires_at: '',
+    visible_choice_hash: '',
+    execution_contract: { completion_boundary: 'candidate_ready' },
+  }, now, null);
+  writeTaskState(root, task);
+  appendHistory(root, 'short_setting_candidate_revision_started', {
+    workflow_id: String(task.workflow_id || ''),
+    feedback,
+  });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'short_setting_candidate_revision_started',
+    workflow_id: String(task.workflow_id || ''),
+    feedback,
+    stage_execution: start.stageExecution || task.stage_execution,
+    instruction: '按 stage_execution.resume_hint 只修订设定候选；完成后运行 execution_command，再次等待作者确认。',
+  };
+}
+
+function ensureShortSettingAuthorDecisionMigration(root, task, taskTemplate) {
+  if (!isShortWritingWorkflow(task)) return false;
+  if (String((((task || {}).short_setting_author_decision || {}).status) || '') === 'confirmed') return false;
+  if (String(task.current_stage || '') === 'short_setting'
+      && String((((task || {}).short_setting_candidate || {}).status) || '').startsWith('awaiting_')) {
+    const expected = buildShortSettingCandidatePendingAction(task);
+    const currentOptions = Array.isArray(((task || {}).pending_action || {}).options) ? task.pending_action.options : [];
+    const expectedOptions = Array.isArray(expected.options) ? expected.options : [];
+    const currentShape = currentOptions.map(option => [option.action_id, option.label, option.recommended === true]);
+    const expectedShape = expectedOptions.map(option => [option.action_id, option.label, option.recommended === true]);
+    if (JSON.stringify(currentShape) !== JSON.stringify(expectedShape)) {
+      task.pending_action = expected;
+      writeTaskState(root, task);
+    }
+    return false;
+  }
+  const completed = new Set(Array.isArray(((task || {}).machine || {}).completed_stages)
+    ? task.machine.completed_stages
+    : []);
+  if (!completed.has('short_setting')) return false;
+  const settingFile = path.join(root, '设定.md');
+  const outlineFile = path.join(root, '小节大纲.md');
+  const proseFile = path.join(root, '正文.md');
+  const hasContent = (file) => fs.existsSync(file) && fs.statSync(file).isFile() && fs.readFileSync(file, 'utf8').trim().length > 0;
+  if (!hasContent(settingFile) || hasContent(outlineFile) || hasContent(proseFile)) return false;
+
+  const stagedRel = shortPlanningWorkspacePath(task, 'short_setting', 'author-decision-migration', '设定.md');
+  const source = fs.readFileSync(settingFile, 'utf8');
+  atomicWriteText(path.join(root, stagedRel), source);
+  const digest = `sha256:${crypto.createHash('sha256').update(source, 'utf8').digest('hex')}`;
+  const now = new Date().toISOString();
+  const previousStage = String(task.current_stage || '');
+  task.short_setting_candidate = {
+    status: 'awaiting_author_confirmation',
+    path: stagedRel,
+    sha256: digest,
+    revision: 1,
+    generated_at: now,
+    author_decision: 'pending',
+    migrated_from_unconfirmed_canonical: true,
+  };
+  task.short_setting_author_decision = {
+    status: 'required',
+    migrated_at: now,
+    previous_stage: previousStage,
+  };
+  task.current_stage = 'short_setting';
+  task.current_step = 'short_setting';
+  task.status = 'running';
+  task.stage_execution = {
+    ...(task.stage_execution || {}),
+    status: 'awaiting_author_confirmation',
+    stage_id: 'short_setting',
+    step_id: 'short_setting',
+    candidate_path: stagedRel,
+    candidate_sha256: digest,
+    stopped_at: now,
+    stop_reason: 'legacy_setting_requires_author_confirmation',
+    execution_command: '',
+  };
+  task.machine = normalizeMachine(task, taskTemplate);
+  task.machine.completed_stages = task.machine.completed_stages.filter(stageId => stageId !== 'short_setting');
+  task.machine.remaining_stages = ['short_setting', ...task.machine.remaining_stages.filter(stageId => stageId !== 'short_setting')];
+  task.machine.last_transition = 'short_setting_author_decision_migrated';
+  task.machine.next_stop_reason = 'short_setting_author_confirmation_required';
+  task.machine.allowed_actions = ['confirm_setting', 'revise_setting', 'inspect', 'pause'];
+  task.pending_action = buildShortSettingCandidatePendingAction(task);
+  writeTaskState(root, task);
+  appendHistory(root, 'short_setting_author_decision_migrated', {
+    workflow_id: String(task.workflow_id || ''),
+    previous_stage: previousStage,
+    candidate_path: stagedRel,
+  });
+  return true;
+}
+
 function resolveAction(args) {
   const root = path.resolve(args.projectRoot);
   const task = readFocusedAuthority(root);
@@ -2671,6 +3575,16 @@ function resolveAction(args) {
   const registryCheck = resolvedTemplateForTask(task);
   if (registryCheck.status !== 'ok') return blockedTaskTemplate(registryCheck);
   const taskTemplate = registryCheck.template;
+  if (ensureShortSettingAuthorDecisionMigration(root, task, taskTemplate)) {
+    const visibleResponse = pendingActionVisibleResponse(task, root, '检测到旧流程中的人物与剧情设定尚未经过作者确认，已退回确认门。');
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'short_setting_author_confirmation_required',
+      workflow_id: String(task.workflow_id || ''),
+      pending_action: refreshedVisibleMenu(task, root),
+      visible_response: visibleResponse,
+    };
+  }
   const storedPending = task.pending_action && typeof task.pending_action === 'object' ? task.pending_action : {};
   const storedVisibleChoiceHash = String(storedPending.visible_choice_hash || '');
   const pending = task.pending_action && typeof task.pending_action === 'object'
@@ -2680,7 +3594,51 @@ function resolveAction(args) {
     pending.compatible_previous_visible_choice_hash = storedVisibleChoiceHash;
   }
   task.pending_action = pending;
-  let selectedNumber = Number(args.input);
+  const rawInput = String(args.input || '').trim();
+  const infoCardCommand = parseInfoSourceCardCommand(root, task, rawInput);
+  const infoCardSelection = parseInfoSourceCardSelection(root, task, rawInput);
+  const infoCardPoolActive = infoSourceSelectionCards(root, task).length > 0;
+  if (infoCardPoolActive && infoCardCommand.status === 'inspect') {
+    return infoSourceCardDetailResponse(root, task, infoCardCommand.card);
+  }
+  if (infoCardPoolActive && infoCardCommand.status === 'pause') {
+    return pauseInfoSourceSelection(root, task);
+  }
+  if (infoCardPoolActive && infoCardCommand.status === 'invalid') {
+    return infoSourceSelectionResponse(root, task, `未找到第 ${infoCardCommand.number} 张资讯卡；当前共有 ${infoCardCommand.available} 张。`);
+  }
+  if (infoCardSelection.status === 'invalid') {
+    return infoSourceSelectionResponse(root, task, `未找到第 ${infoCardSelection.requested.join('、')} 张资讯卡；当前共有 ${infoCardSelection.available} 张。`);
+  }
+  if (infoCardSelection.status === 'selected') {
+    return promoteInfoSourceSelection(root, task, taskTemplate, infoCardSelection.cards, rawInput);
+  }
+  const cardCommand = parseProjectSeedCardCommand(root, task, rawInput);
+  const cardSelection = parseProjectSeedCardSelection(root, task, rawInput);
+  const cardPoolActive = projectSeedTopicCards(root, task).length > 0;
+  if (cardPoolActive && cardCommand.status === 'inspect') {
+    return projectSeedCardDetailResponse(root, task, cardCommand.card);
+  }
+  if (cardPoolActive && cardCommand.status === 'reject') {
+    rejectCard(root, cardCommand.card, task.workflow_id);
+    return projectSeedSelectionResponse(root, task, `已从当前卡池移除第 ${cardCommand.number} 张：${cardTitle(cardCommand.card)}。`);
+  }
+  if (cardPoolActive && cardCommand.status === 'regenerate') {
+    return restartShortMaterialLearning(root, task, taskTemplate, rawInput);
+  }
+  if (cardPoolActive && cardCommand.status === 'pause') {
+    return pauseProjectSeedSelection(root, task);
+  }
+  if (cardPoolActive && cardCommand.status === 'invalid') {
+    return projectSeedSelectionResponse(root, task, `未找到第 ${cardCommand.number} 张脑洞卡；当前共有 ${cardCommand.available} 张。`);
+  }
+  if (cardSelection.status === 'invalid') {
+    return projectSeedSelectionResponse(root, task, `未找到第 ${cardSelection.requested.join('、')} 张脑洞卡；当前共有 ${cardSelection.available} 张。`);
+  }
+  if (cardSelection.status === 'selected') {
+    return promoteProjectSeedSelection(root, task, taskTemplate, cardSelection.cards, rawInput);
+  }
+  let selectedNumber = Number(rawInput);
   if (args.bindCurrent && Number.isInteger(selectedNumber)) {
     const binding = visibleChoiceBinding(task, pending, root);
     args.pendingActionId = binding.pending_action_id;
@@ -2703,7 +3661,24 @@ function resolveAction(args) {
     }
   }
   if (!Number.isInteger(selectedNumber)) {
-    const classified = classifyFreeTextInput(task, args.input, pending);
+    if (isShortSettingRevisionInputPending(task)) {
+      return restartShortSettingCandidateRevision(root, task, taskTemplate, rawInput);
+    }
+    const taskRevisionInput = task.task_revision_input && typeof task.task_revision_input === 'object'
+      ? task.task_revision_input
+      : {};
+    const taskRevisionPending = String(taskRevisionInput.status || '') === 'awaiting_chat';
+    const classified = taskRevisionPending
+      ? {
+          classification: 'scope_change',
+          impact_level: 'planning_or_scope',
+          return_to: String(task.current_stage || ''),
+          source_kind: 'task_revision_requirement',
+        }
+      : classifyFreeTextInput(task, args.input, pending);
+    if (isShortWritingWorkflow(task) && classified.classification === 'restart_short_info_discovery') {
+      return restartShortInfoDiscovery(root, task, taskTemplate, args.input);
+    }
     if (isShortWritingWorkflow(task) && ['current_artifact_feedback', 'scope_change'].includes(classified.classification)) {
       const tpl = taskTemplate;
       const feedbackStage = findStage(tpl, 'feedback_impact_sync');
@@ -2733,8 +3708,18 @@ function resolveAction(args) {
         scopeMode: scopedRevisionInput ? 'current_section_only' : '',
         baseRequirementVersion: scopedRevisionInput ? String(revisionInput.requirement_version || '') : '',
         minimumImpactLevel: scopedRevisionInput ? 'current_brief' : '',
-        sourceKind: scopedRevisionInput ? 'user_revision_requirement' : 'user_message',
+        sourceKind: taskRevisionPending
+          ? 'task_revision_requirement'
+          : scopedRevisionInput ? 'user_revision_requirement' : 'user_message',
       });
+      if (taskRevisionPending) {
+        task.task_revision_input = {
+          ...taskRevisionInput,
+          status: 'feedback_received',
+          feedback_id: String(((queuedFeedback.pending_feedback || {}).feedback_id) || ''),
+          received_at: now,
+        };
+      }
       if (scopedRevisionInput) {
         task.revision_input_context = {
           ...revisionInput,
@@ -2851,6 +3836,30 @@ function resolveAction(args) {
   const option = (pending.options || []).find((item) => Number(item.number) === selectedNumber);
   if (!option) return blockedVisibleChoice(task, root, 'invalid_selection', `No pending action option for input: ${args.input}`);
   const semanticAction = String(option.action_id || option.action || '');
+  if (semanticAction === 'inspect_short_setting_candidate') {
+    return shortSettingCandidateInspection(root, task);
+  }
+  if (semanticAction === 'request_short_setting_revision_input') {
+    task.short_setting_candidate = {
+      ...(task.short_setting_candidate || {}),
+      status: 'awaiting_revision_input',
+      author_decision: 'revision_requested',
+      revision_requested_at: new Date().toISOString(),
+    };
+    writeTaskState(root, task, { writeMarkdown: false });
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'short_setting_revision_input_requested',
+      workflow_id: String(task.workflow_id || ''),
+      candidate: shortSettingCandidateView(root, task),
+      instruction: '请直接输入你要调整的人物、关系、核心冲突、反转或结局。系统只重做设定候选，确认前不会写入正式设定.md。',
+      visible_response: {
+        render_mode: 'free_text_revision',
+        status: 'short_setting_revision_input_requested',
+        text: `${shortSettingCandidateView(root, task).preview}\n\n请直接输入修改意见。`,
+      },
+    };
+  }
   if (semanticAction === 'inspect_current_state') {
     const menu = refreshedVisibleMenu(task, root);
     return {
@@ -2874,6 +3883,30 @@ function resolveAction(args) {
       instruction: '请直接输入你的意见或新要求；只有这一步需要文字。',
       pending_action: menu,
       visible_response: { text: '请直接输入你的意见或新要求；只有这一步需要文字。' },
+    };
+  }
+  if (semanticAction === 'request_task_revision_input') {
+    const overview = workflowTaskOverview(task, root);
+    task.task_revision_input = {
+      status: 'awaiting_chat',
+      workflow_id: String(task.workflow_id || ''),
+      current_stage: String(task.current_stage || ''),
+      current_scope: String(task.scope || ''),
+      requested_at: new Date().toISOString(),
+    };
+    writeTaskState(root, task, { writeMarkdown: false });
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'task_revision_input_requested',
+      workflow_id: String(task.workflow_id || ''),
+      current_stage: String(task.current_stage || ''),
+      current_scope: String(task.scope || ''),
+      instruction: '请直接输入要调整的任务范围、人物方向、剧情方向或当前阶段要求。系统先判断影响范围：只影响当前小节就只重做当前小节；影响设定或全篇规划时先回写上游，再重建受影响的后续 Brief。',
+      visible_response: {
+        render_mode: 'free_text_revision',
+        status: 'task_revision_input_requested',
+        text: `${String((overview || {}).text || '').trim()}\n\n请直接输入要调整的内容。系统会先判断影响范围，不会立即覆盖正文。`,
+      },
     };
   }
   if (semanticAction === 'replay_memory_projection') {
@@ -2931,11 +3964,25 @@ function resolveAction(args) {
     const symlinkValidation = validateLongformProjectTreeSymlinks(root);
     if (symlinkValidation) return symlinkValidation;
   }
-  const shortEntryValidation = validateShortProseStageEntry(root, task, option.target_stage || '');
-  if (shortEntryValidation) return shortEntryValidation;
   const selectedAt = new Date().toISOString();
   const selected = normalizeSelectedAction(option, selectedNumber, selectedAt, pending);
   selected.confirmation_input = String(args.input || '');
+  const shortEntryValidation = validateShortProseStageEntry(root, task, option.target_stage || '');
+  if (shortEntryValidation) {
+    task.last_selection = {
+      ...selected,
+      status: 'blocked_prerequisite',
+      blocked_status: String(shortEntryValidation.status || ''),
+    };
+    writeTaskState(root, task, { writeMarkdown: false });
+    return {
+      ...shortEntryValidation,
+      selection_status: 'remembered_pending_prerequisite',
+      action_id: selected.action_id,
+      action: selected,
+      execution_contract: selected.execution_contract || null,
+    };
+  }
   if (['accept_length_variance', 'revise_length_variance'].includes(selected.action_id)) {
     task.short_length_choice = {
       ...(task.short_length_choice || {}),
@@ -2944,6 +3991,14 @@ function resolveAction(args) {
     };
   }
   task.last_selection = selected;
+  if (selected.action_id === 'accept_short_setting_candidate') {
+    task.short_setting_candidate = {
+      ...(task.short_setting_candidate || {}),
+      status: 'confirmed_pending_commit',
+      author_decision: 'confirmed',
+      confirmed_at: selectedAt,
+    };
+  }
   task.pending_action = {
     ...pending,
     status: 'resolved',
@@ -2968,6 +4023,30 @@ function resolveAction(args) {
   const acceptedShortPlan = selected.target_stage === 'feedback_apply_patch'
     ? acceptShortPlanningDecision(root, task, selected)
     : { status: 'not_applicable', accepted_plan: null };
+  completeShortDecisionStage(task, selected, selectedAt, taskTemplate);
+  const decisionEntry = enterShortDecisionStage(task, selected, selectedAt, taskTemplate);
+  if (decisionEntry) {
+    writeTaskState(root, task);
+    appendHistory(root, 'short_decision_stage_entered', {
+      workflow_id: task.workflow_id || '',
+      from_stage: String(decisionEntry.from_stage || ''),
+      target_stage: String(decisionEntry.target_stage || ''),
+    });
+    const visibleResponse = pendingActionVisibleResponse(task, root);
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'workflow_choice_required',
+      selection_status: 'resolved',
+      selected_number: selectedNumber,
+      action: selected,
+      action_id: selected.action_id,
+      target_stage: selected.target_stage || '',
+      selection_locked: true,
+      pending_action: refreshedVisibleMenu(task, root),
+      next_candidates: visibleResponse.options || [],
+      visible_response: visibleResponse,
+    };
+  }
   const startResult = maybeStartStageExecution(root, task, selected, selectedAt, reviewPlanValidation);
   writeTaskState(root, task);
   appendHistory(root, 'resolved_action', {
@@ -3108,11 +4187,11 @@ function invalidateShortFeedbackAnalysis(task, now = new Date().toISOString()) {
 }
 
 function isShortWritingWorkflow(task) {
-  return ['short_write', 'short_startup', 'private_short_startup'].includes(String((task || {}).workflow_type || ''));
+  return isShortWorkflowType((task || {}).workflow_type);
 }
 
 function shortProjectState(root) {
-  const state = readJson(path.join(root, '追踪/private-short-extension/project-state.json'));
+  const state = readShortProjectState(root);
   return state && !state.__error ? state : {};
 }
 
@@ -3130,9 +4209,9 @@ function shortBriefPath(sectionIndex) {
   return `写作Brief_第${String(sectionIndex).padStart(3, '0')}节.md`;
 }
 
-function shortAcceptedAnchorPath(sectionIndex) {
+function shortAcceptedAnchorPath(root, sectionIndex) {
   if (sectionIndex <= 1) return '';
-  return `追踪/private-short-extension/section-${String(sectionIndex - 1).padStart(3, '0')}-anchor.json`;
+  return resolveShortStateRelative(root, `section-${String(sectionIndex - 1).padStart(3, '0')}-anchor.json`);
 }
 
 function validateShortProseStageEntry(root, task, targetStage) {
@@ -3142,7 +4221,7 @@ function validateShortProseStageEntry(root, task, targetStage) {
     projectRoot: root,
     briefPath: shortBriefPath(sectionIndex),
     sectionIndex,
-    acceptedAnchorPath: shortAcceptedAnchorPath(sectionIndex),
+    acceptedAnchorPath: shortAcceptedAnchorPath(root, sectionIndex),
   });
   if (check.status === 'pass') return null;
   return {
@@ -3162,7 +4241,7 @@ function recordShortBriefFreshness(root, task, result) {
     projectRoot: root,
     briefPath: shortBriefPath(sectionIndex),
     sectionIndex,
-    acceptedAnchorPath: shortAcceptedAnchorPath(sectionIndex),
+    acceptedAnchorPath: shortAcceptedAnchorPath(root, sectionIndex),
   });
 }
 
@@ -3203,7 +4282,7 @@ function validateShortFeedbackPatchResult(root, task, result, taskTemplate) {
         projectRoot: root,
         briefPath,
         sectionIndex,
-        acceptedAnchorPath: shortAcceptedAnchorPath(sectionIndex),
+        acceptedAnchorPath: shortAcceptedAnchorPath(root, sectionIndex),
       });
       if (freshness.status === 'current') {
         return blocked('blocked_feedback_brief_not_invalidated', [{
@@ -3295,6 +4374,22 @@ function pendingFeedbackSectionIndex(pending) {
   return match ? Number(match[1]) : 0;
 }
 
+function pendingFeedbackImpactLevel(pending) {
+  const allowed = ['expression_only', 'current_brief', 'planning', 'structure'];
+  const direct = String((pending || {}).impact_level_hint || (pending || {}).impact_hint || '').trim();
+  if (allowed.includes(direct)) return direct;
+  const items = Array.isArray((pending || {}).items) ? pending.items : [];
+  const order = new Map(allowed.map((item, index) => [item, index]));
+  let strongest = '';
+  for (const item of items) {
+    const value = String((item || {}).impact_level_hint || '').trim();
+    if (!allowed.includes(value)) continue;
+    if (!strongest || order.get(value) > order.get(strongest)) strongest = value;
+  }
+  if (strongest) return strongest;
+  return inferFeedbackImpact(String((pending || {}).text || ''), String((pending || {}).classification || '')).impact_level;
+}
+
 function isExpressionOnlyShortFeedback(text) {
   const value = String(text || '').trim();
   if (!value) return false;
@@ -3354,9 +4449,52 @@ function visibleChoiceBinding(task, pending, root) {
 
 function refreshedVisibleMenu(task, root) {
   const progress = shortRevisionQueueProgress(task, root);
-  const sourcePending = task.pending_action && typeof task.pending_action === 'object'
+  let sourcePending = task.pending_action && typeof task.pending_action === 'object'
     ? { ...task.pending_action, options: Array.isArray(task.pending_action.options) ? task.pending_action.options.map(option => ({ ...option })) : [] }
     : { options: [] };
+  const currentStageId = String(task.current_stage || '');
+  if (!progress && String(sourcePending.id || '') === `pa-${currentStageId}`) {
+    const registry = resolvedTemplateForTask(task);
+    if (registry && registry.status === 'ok') {
+      const currentStage = findStage(registry.template, currentStageId);
+      if (currentStage) {
+        const storedLifecycle = sourcePending;
+        sourcePending = buildPendingAction(registry.template, currentStage);
+        for (const field of ['created_at', 'expires_at', 'status', 'selected_number', 'selected_action_id', 'selected_at']) {
+          if (Object.prototype.hasOwnProperty.call(storedLifecycle, field)) sourcePending[field] = storedLifecycle[field];
+        }
+      }
+    }
+  }
+  const allProjectSeedCards = projectSeedAllTopicCards(root, task);
+  const verifiedProjectSeedCards = projectSeedTopicCards(root, task);
+  if (String(task.current_stage || '') === 'project_seed'
+      && allProjectSeedCards.length > 0
+      && verifiedProjectSeedCards.length === 0) {
+    sourcePending.id = `pa-project-seed-revalidate-${String(task.workflow_id || 'short')}`;
+    sourcePending.question = '旧脑洞卡未通过当前故事价值门，请先重新生成';
+    sourcePending.status = 'pending';
+    delete sourcePending.selected_number;
+    delete sourcePending.selected_action_id;
+    delete sourcePending.selected_at;
+    sourcePending.options = [
+      {
+        action_id: 'continue_next_stage',
+        label: '保留资讯来源，重新生成更燃、更爽、更有因果的脑洞卡（推荐）',
+        target_stage: 'material_learning',
+        risk_level: 'medium',
+        requires_user_confirm: false,
+      },
+      {
+        action_id: 'inspect_current_state',
+        label: `查看旧卡质量问题（${allProjectSeedCards.length} 张）`,
+        risk_level: 'low',
+        requires_user_confirm: false,
+      },
+      { action_id: 'pause', label: '暂停并保存断点', risk_level: 'low', requires_user_confirm: false },
+      { action_id: 'free_text', label: '输入其他要求', risk_level: 'low', requires_user_confirm: false },
+    ];
+  }
   if (progress) {
     const draftStages = new Set(['draft_first_section', 'draft_section', 'draft_next_section']);
     const queueItem = (Array.isArray((task.feedback_revision_queue || {}).items) ? task.feedback_revision_queue.items : [])
@@ -3404,7 +4542,7 @@ function refreshedVisibleMenu(task, root) {
       },
     ].filter(Boolean);
   }
-  const pending = task.pending_action && typeof task.pending_action === 'object'
+  const pending = (task.pending_action && typeof task.pending_action === 'object') || progress
     ? decoratePendingAction({ ...sourcePending, visible_choice_hash: '' })
     : {};
   return {
@@ -3416,20 +4554,98 @@ function refreshedVisibleMenu(task, root) {
 function pendingActionVisibleResponse(task, root, intro = '') {
   const pending = refreshedVisibleMenu(task, root);
   const progress = shortRevisionQueueProgress(task, root);
-  const options = (Array.isArray(pending.options) ? pending.options : []).slice(0, 4).map((option, index) => ({
-    ...option,
+  const infoSourceCards = infoSourceSelectionCards(root, task);
+  const infoCardPoolMode = String(task.current_stage || '') === 'info_source_selection' && infoSourceCards.length > 0;
+  const projectSeedCards = projectSeedTopicCards(root, task);
+  const cardPoolMode = String(task.current_stage || '') === 'project_seed' && projectSeedCards.length > 0;
+  const emptyCardPoolMode = String(task.current_stage || '') === 'project_seed'
+    && fs.existsSync(path.join(root, '追踪/private-short-extension/cards/topic-cards.jsonl'))
+    && projectSeedCards.length === 0;
+  const sourceOptions = infoCardPoolMode
+    ? infoSourceCards
+    : cardPoolMode
+      ? projectSeedCards
+    : (Array.isArray(pending.options) ? pending.options : []).slice(0, 4);
+  const options = sourceOptions.map((option, index) => ({
+    ...(infoCardPoolMode || cardPoolMode ? {
+      action_id: infoCardPoolMode ? 'select_info_source_card' : 'select_project_seed_card',
+      label: cardTitle(option),
+      card_id: infoCardPoolMode ? String(option.info_id || '') : cardIdentity(option),
+      recommended: infoCardPoolMode ? String(option.verdict || '') === 'write' : index === 0,
+    } : option),
     number: index + 1,
     interaction_mode: 'execute_command',
     execution_workdir: '.',
-    execution_command: [
-      'node scripts/workflow-state-machine.js resolve-action',
-      '--project-root .',
-      `--input ${index + 1}`,
-      '--bind-current',
-      '--json',
-    ].join(' '),
+    execution_command: runtimeNodeCommand('workflow-state-machine.js', [
+      'resolve-action', '--project-root', '.', '--input', String(index + 1), '--bind-current', '--json',
+    ]),
   }));
   const visiblePending = { ...pending, options };
+  if (emptyCardPoolMode) {
+    return {
+      render_mode: 'card_pool_empty',
+      status: 'workflow_choice_required',
+      selection_contract: 'text_card_pool_recovery',
+      free_text_enabled: true,
+      cards: [],
+      options: [],
+      work_queue: progress,
+      text: [
+        String(intro || '').trim(),
+        '当前卡池已经没有可选脑洞卡。',
+        '输入“换一批”重新生成脑洞卡，或输入“保存退出”保留断点。',
+      ].filter(Boolean).join('\n'),
+    };
+  }
+  if (cardPoolMode) {
+    const cardLines = projectSeedCards.map(card => `${card.display_no}. ${cardTitle(card)}`);
+    return {
+      render_mode: 'card_pool',
+      status: 'workflow_choice_required',
+      selection_contract: 'numeric_card_selection',
+      free_text_enabled: true,
+      cards: projectSeedCards,
+      options,
+      work_queue: progress,
+      text: [
+        String(intro || '').trim(),
+        '请选择脑洞卡。选中后直接建立独立短篇项目，不再二次确认工作流。',
+        '',
+        ...cardLines,
+        '',
+        '回复卡片编号选择单张；回复 1,3,5 批量建立多个独立项目。',
+        '也可以输入：看 3 详情 / 删除 3 / 换一批 / 保存退出。',
+      ].filter((line, index, values) => line !== '' || (index > 0 && values[index - 1] !== '')).join('\n').trim(),
+    };
+  }
+  if (infoCardPoolMode) {
+    const cardLines = infoSourceCards.map(card => {
+      const score = infoSourceMaterialScore(card);
+      return `${card.display_no}. 【${infoSourceRecommendationLabel(card)}】${String(card.title || '未命名资讯')}\n   写作价值：${score > 0 ? score.toFixed(1) : '待评估'}｜冲突：${String(card.human_conflict || '待补充')}\n   方向：${infoSourcePrimaryRoute(card)}`;
+    });
+    return {
+      render_mode: 'card_pool',
+      status: 'workflow_choice_required',
+      selection_contract: 'numeric_card_selection',
+      free_text_enabled: true,
+      cards: infoSourceCards,
+      options,
+      work_queue: progress,
+      text: [
+        String(intro || '').trim(),
+        '请选择资讯素材。推荐只表示写作价值，不会被自动采用。',
+        '',
+        ...cardLines,
+        '',
+        '回复卡片编号选择单张；回复 1,3 多选。',
+        '也可以输入：看 2 详情 / 保存退出。',
+      ].filter((line, index, values) => line !== '' || (index > 0 && values[index - 1] !== '')).join('\n').trim(),
+    };
+  }
+  const settingCandidate = String(task.current_stage || '') === 'short_setting'
+    && String((((task || {}).short_setting_candidate || {}).status) || '').startsWith('awaiting_')
+    ? shortSettingCandidateView(root, task)
+    : null;
   return {
     render_mode: 'text_numbers',
     status: 'workflow_choice_required',
@@ -3437,21 +4653,27 @@ function pendingActionVisibleResponse(task, root, intro = '') {
     free_text_enabled: pending.free_text_enabled !== false,
     options,
     work_queue: progress,
-    text: renderPendingActionText(visiblePending, [String(intro || '').trim(), String((progress || {}).text || '').trim()].filter(Boolean).join('\n\n')),
+    text: renderPendingActionText(visiblePending, [
+      String(intro || '').trim(),
+      settingCandidate && settingCandidate.preview
+        ? `人物与剧情设定候选（第 ${settingCandidate.revision} 版）\n\n${settingCandidate.preview}`
+        : '',
+      String((progress || {}).text || '').trim(),
+    ].filter(Boolean).join('\n\n')),
   };
 }
 
 function shortRevisionQueueProgress(task, root) {
   if (!task || !task.feedback_revision_queue) return null;
-  const lock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
+  const lock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
   return buildShortRevisionQueueProgress(task, Array.isArray(lock.sections) ? lock.sections : []);
 }
 
 function shortRevisionTaskOverview(task, root) {
   if (!task || !task.feedback_revision_queue) return null;
-  const lock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
-  const projectState = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
-  const workingTitle = String(projectState.working_title || projectState.title || '').trim();
+  const lock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
+  const projectState = readShortProjectState(root) || {};
+  const workingTitle = resolveShortWorkingTitle(root, projectState);
   const overview = buildShortRevisionTaskOverview(
     {
       ...task,
@@ -3476,9 +4698,10 @@ function shortRevisionTaskOverview(task, root) {
       number: 1,
       action_id: 'open_current_subtask',
       label: `继续当前子任务：${String(((overview || {}).current_subtask || {}).label || '进入下一执行点')}（推荐）`,
+      recommended: true,
       interaction_mode: 'execute_command',
       execution_workdir: '.',
-      execution_command: 'node scripts/workflow-state-machine.js next-candidates --project-root . --json',
+      execution_command: 'node scripts/workflow-state-machine.js next-candidates --project-root . --compact --json',
     },
     {
       number: 2,
@@ -3486,7 +4709,7 @@ function shortRevisionTaskOverview(task, root) {
       label: '查看全部子任务与检查点',
       interaction_mode: 'execute_command',
       execution_workdir: '.',
-      execution_command: 'node scripts/workflow-state-machine.js task-overview --project-root . --json',
+      execution_command: 'node scripts/workflow-state-machine.js task-overview --project-root . --compact --json',
     },
     {
       number: 3,
@@ -3517,29 +4740,87 @@ function shortRevisionTaskOverview(task, root) {
   };
 }
 
+function workflowAuthorExecutionPoint(task, root) {
+  const workflowType = String((task || {}).workflow_type || '');
+  if (isShortWorkflowType(workflowType)) {
+    const state = readShortProjectState(root) || {};
+    const queue = task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
+      ? task.feedback_revision_queue
+      : {};
+    const scopeMatch = String(task.scope || '').match(/第\s*0*(\d+)\s*节/u);
+    const sectionIndex = Number(queue.current_section_index || state.current_section_index || (scopeMatch ? scopeMatch[1] : 0));
+    const plannedSections = Number(state.planned_sections || ((state.narrative || {}).planned_sections) || 0);
+    if (!sectionIndex || !plannedSections) return null;
+    const sectionStages = new Set([
+      'first_section_brief', 'section_brief', 'next_section_brief',
+      'draft_first_section', 'draft_section', 'draft_next_section',
+      'section_machine_gate', 'section_repair_loop', 'quality_gate', 'story_value_gate',
+      'section_candidate_compare', 'section_accept_anchor', 'feedback_impact_sync', 'feedback_apply_patch',
+    ]);
+    if (!sectionStages.has(String(task.current_stage || '')) && String(queue.status || '') !== 'running') return null;
+    const titleLock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
+    const section = (Array.isArray(titleLock.sections) ? titleLock.sections : [])
+      .find(item => Number((item || {}).section_index || 0) === sectionIndex);
+    const title = String((section || {}).title || '').trim();
+    return {
+      kind: 'section',
+      index: sectionIndex,
+      total: plannedSections,
+      title,
+      label: `第 ${sectionIndex}/${plannedSections} 节${title ? `《${title}》` : ''}`,
+      compact_label: `第 ${sectionIndex}/${plannedSections} 节`,
+    };
+  }
+  if (['long_write', 'long_startup'].includes(workflowType)) {
+    const chapterMatch = String(task.scope || '').match(/第\s*0*(\d+)\s*章/u);
+    if (!chapterMatch) return null;
+    const chapterIndex = Number(chapterMatch[1]);
+    if (!chapterIndex) return null;
+    return {
+      kind: 'chapter',
+      index: chapterIndex,
+      total: null,
+      title: '',
+      label: `第 ${chapterIndex} 章`,
+      compact_label: `第 ${chapterIndex} 章`,
+    };
+  }
+  return null;
+}
+
 function workflowTaskOverview(task, root) {
   const revisionOverview = shortRevisionTaskOverview(task, root);
   if (revisionOverview) return revisionOverview;
   const registryCheck = resolvedTemplateForTask(task);
   if (!registryCheck || registryCheck.status !== 'ok') return null;
-  const overview = buildWorkflowTaskOverview(task, registryCheck.template);
+  const shortState = isShortWorkflowType((task || {}).workflow_type)
+    ? (readShortProjectState(root) || {})
+    : {};
+  const workingTitle = resolveShortWorkingTitle(root, shortState);
+  const overview = buildWorkflowTaskOverview({
+    ...task,
+    task_display_title: workingTitle ? `创作《${workingTitle}》` : String(task.task_display_title || task.user_goal || ''),
+    working_title: workingTitle,
+    author_execution_point: workflowAuthorExecutionPoint(task, root),
+  }, registryCheck.template);
   if (!overview) return null;
   const options = [
     {
       number: 1,
       action_id: 'open_current_subtask',
-      label: `进入当前子任务：${String(((overview || {}).current_subtask || {}).label || '继续当前阶段')}（推荐）`,
+      label: `继续当前阶段：${String((((overview || {}).phases || []).find(phase => phase.status === 'current') || {}).label || '当前任务')}${overview.execution_point && overview.execution_point.compact_label ? `（${overview.execution_point.compact_label}）` : ''}（推荐）`,
+      recommended: true,
       interaction_mode: 'execute_command',
       execution_workdir: '.',
-      execution_command: 'node scripts/workflow-state-machine.js next-candidates --project-root . --json',
+      execution_command: 'node scripts/workflow-state-machine.js next-candidates --project-root . --compact --json',
     },
     {
       number: 2,
       action_id: 'inspect_task_subtasks',
-      label: '查看全部阶段、完成条件与检查点',
+      label: '查看完整创作流程与当前进度',
       interaction_mode: 'execute_command',
       execution_workdir: '.',
-      execution_command: 'node scripts/workflow-state-machine.js task-overview --project-root . --json',
+      execution_command: 'node scripts/workflow-state-machine.js task-overview --project-root . --compact --json',
     },
     {
       number: 3,
@@ -3568,6 +4849,25 @@ function workflowTaskOverview(task, root) {
   };
 }
 
+function resolveShortWorkingTitle(root, state = {}) {
+  const stored = String(
+    state.working_title
+    || state.title
+    || ((state.selected_material || {}).label)
+    || state.project_title
+    || '',
+  ).trim();
+  if (stored) return stored.replace(/^《|》(?:设定(?:（第\s*\d+\s*版）)?|人物|世界观)?$/gu, '').trim();
+
+  const material = readText(path.join(root, '素材卡.md'));
+  const materialMatch = material.match(/(?:暂定作品名|作品名|书名)\s*[：:]\s*[《「“"]?([^\n》」”"]+)[》」”"]?/u);
+  if (materialMatch && String(materialMatch[1] || '').trim()) return String(materialMatch[1]).trim();
+
+  const setting = readText(path.join(root, '设定.md'));
+  const settingMatch = setting.match(/^#\s*《([^》\n]+)》(?:设定|人物|世界观|$)/mu);
+  return settingMatch ? String(settingMatch[1] || '').trim() : '';
+}
+
 function blockedVisibleChoice(task, root, status, message) {
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -3588,17 +4888,41 @@ function portableProjectCommand(command, root) {
   return value;
 }
 
+function bindStageCompletionContract(execution) {
+  if (!execution || typeof execution !== 'object') return execution;
+  const completionCommand = String(execution.stage_completion_command || execution.execution_command || '');
+  if (!completionCommand) return execution;
+  return {
+    ...execution,
+    stage_completion_command: completionCommand,
+    current_required_action: 'edit_write_set',
+    after_write_action: {
+      type: 'execute_command',
+      command: completionCommand,
+    },
+    completion_required_before_reply: true,
+    stage_completion_contract: 'read_context_edit_write_set_execute_completion_command_consume_result_same_turn',
+    execution_sequence: ['read_context', 'edit_write_set', 'execute_completion_command', 'consume_result_presentation'],
+  };
+}
+
 function runningStageResume(task, root) {
   const execution = task && task.stage_execution && task.stage_execution.status === 'running'
     ? task.stage_execution
     : null;
   if (!execution) return null;
+  const boundExecution = bindStageCompletionContract(execution);
+  const completionCommand = portableProjectCommand(boundExecution.stage_completion_command, root);
   const portableExecution = {
-    ...execution,
+    ...boundExecution,
     execution_workdir: '.',
     execution_command: portableProjectCommand(execution.execution_command, root),
     quality_command: portableProjectCommand(execution.quality_command, root),
-    stage_completion_command: portableProjectCommand(execution.stage_completion_command, root),
+    stage_completion_command: completionCommand,
+    after_write_action: {
+      type: 'execute_command',
+      command: completionCommand,
+    },
     context_read_command: portableProjectCommand(execution.context_read_command, root),
     completion_required_before_reply: true,
     stage_completion_contract: 'read_context_edit_write_set_execute_completion_command_consume_result_same_turn',
@@ -3614,20 +4938,25 @@ function runningStageResume(task, root) {
     current_stage: String(task.current_stage || ''),
     current_step: String(task.current_step || ''),
     interaction_mode: 'resume_stage',
+    presentation_allowed: false,
     execution_workdir: '.',
     execution_command: portableExecution.execution_command || '',
+    stage_completion_command: portableExecution.stage_completion_command || '',
+    current_required_action: portableExecution.current_required_action || '',
+    after_write_action: portableExecution.after_write_action || null,
     resume_hint: String(portableExecution.resume_hint || ''),
     stage_execution: portableExecution,
     completion_required_before_reply: true,
     terminal_reply_allowed_on: terminalReplyAllowedOn,
     visible_response: {
       render_mode: 'silent_resume',
+      user_visible: false,
       status: 'stage_execution_resume_ready',
-      text: '',
       selection_contract: 'resume_running_stage',
       interaction_mode: 'resume_stage',
       execution_workdir: '.',
       execution_command: portableExecution.execution_command || '',
+      stage_completion_command: portableExecution.stage_completion_command || '',
       context_read_command: portableExecution.context_read_command || '',
       resume_hint: String(portableExecution.resume_hint || ''),
       requires_user_confirm: false,
@@ -3641,6 +4970,7 @@ function runningStageDisplayName(stageId) {
   const names = {
     feedback_impact_sync: '分析反馈影响',
     feedback_apply_patch: '回写已确认的设定与小节大纲',
+    section_plan_lock: '确认总节数与小节标题',
     section_brief_ready: '生成当前小节写作提要',
     section_draft_loop: '写作当前小节',
     section_repair_loop: '修订当前小节',
@@ -3750,6 +5080,28 @@ function resolveRunningStageControl(task, root, selectedNumber) {
   };
 }
 
+function shortStageWorkUnitScope(root, task, stageId, fallback = '') {
+  if (!isShortWritingWorkflow(task)) return String(fallback || task.scope || stageId || '');
+  const normalizedStage = String(stageId || '');
+  if (SHORT_WHOLE_STORY_STAGES.has(normalizedStage)) return '全篇';
+
+  if (normalizedStage === 'feedback_impact_sync') {
+    const feedbackScope = String((((task.pending_feedback || {}).scope_snapshot) || '')).trim();
+    if (feedbackScope) return feedbackScope;
+  }
+
+  if (SHORT_SECTION_STAGES.has(normalizedStage) || normalizedStage === 'feedback_impact_sync') {
+    const state = readShortProjectState(root) || {};
+    const queue = task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
+      ? task.feedback_revision_queue
+      : {};
+    const scopeMatch = String(task.scope || '').match(/第\s*0*(\d+)\s*节/u);
+    const sectionIndex = Number(queue.current_section_index || state.current_section_index || (scopeMatch ? scopeMatch[1] : 0) || 1);
+    return `第${Math.max(1, sectionIndex)}节`;
+  }
+  return String(fallback || task.scope || '全篇');
+}
+
 function maybeStartStageExecution(root, task, selected, selectedAt, reviewPlan) {
   if (selected.action_id === 'pause') return { started: false, stageExecution: null };
 
@@ -3768,7 +5120,12 @@ function maybeStartStageExecution(root, task, selected, selectedAt, reviewPlan) 
   if (registryCheck.status !== 'ok') return blockedTaskTemplate(registryCheck);
   const tpl = registryCheck.template;
   const stageDef = findStage(tpl, targetStage) || {};
-  const unitScope = String(activeBatchRange || task.scope || ((task.lifecycle || {}).scope) || ((task.unit_lifecycle || {}).current_scope) || targetStage);
+  const unitScope = shortStageWorkUnitScope(
+    root,
+    task,
+    targetStage,
+    activeBatchRange || ((task.lifecycle || {}).scope) || ((task.unit_lifecycle || {}).current_scope) || targetStage,
+  );
   const workUnitId = stageWorkUnitId(task, targetStage, unitScope);
   const attemptChain = preservePreviousStageAttempt(task, workUnitId, selectedAt);
   const confirmationContext = stageDef.requires_user_confirm
@@ -3956,6 +5313,9 @@ function attachShortReviewStageExecutionGuidance(task, targetStage) {
 
 function blockStageExecutionContract(root, task, targetStage, finding) {
   const now = new Date().toISOString();
+  const characterContract = (task.stage_execution || {}).character_contract_blocking;
+  const characterBlocked = characterContract
+    && String(characterContract.status || '') === 'blocked_long_character_contract_upgrade_required';
   task.status = 'paused_after_step';
   task.lifecycle = normalizeLifecycle(task);
   task.lifecycle.status = 'paused';
@@ -3969,9 +5329,14 @@ function blockStageExecutionContract(root, task, targetStage, finding) {
   };
   task.pending_action = decoratePendingAction({
     id: `pa-stage-contract-${String(targetStage || 'unknown')}`,
-    question: '当前阶段缺少完整执行条件，尚未启动。',
-    options: [
-      { number: 1, action_id: 'retry_stage_contract', target_stage: targetStage, label: '重新准备当前阶段（推荐）', risk_level: 'low' },
+    question: characterBlocked ? '当前人物设定不足以支撑稳定写作，正文阶段尚未启动。' : '当前阶段缺少完整执行条件，尚未启动。',
+    options: characterBlocked ? [
+      { number: 1, action_id: 'complete_character_contract', target_stage: 'story_bible', label: '补全人物设定并重新验证（推荐）', risk_level: 'low' },
+      { number: 2, action_id: 'inspect_current_state', label: '查看缺失的人物字段与依据', risk_level: 'low' },
+      { number: 3, action_id: 'pause', label: '暂停并保存断点', risk_level: 'low' },
+      { number: 4, action_id: 'free_text', label: '输入其他要求', risk_level: 'low' },
+    ] : [
+      { number: 1, action_id: 'retry_stage_contract', target_stage: targetStage, label: '查看缺失条件并恢复执行条件（推荐）', risk_level: 'low' },
       { number: 2, action_id: 'inspect_current_state', label: '查看缺失条件与当前进度', risk_level: 'low' },
       { number: 3, action_id: 'pause', label: '暂停并保存断点', risk_level: 'low' },
       { number: 4, action_id: 'free_text', label: '输入其他要求', risk_level: 'low' },
@@ -3989,6 +5354,13 @@ function blockStageExecutionContract(root, task, targetStage, finding) {
 
 function attachStageMemoryGuidance(root, task, targetStage) {
   const execution = task.stage_execution || {};
+  if (!execution.memory_contract || typeof execution.memory_contract !== 'object') {
+    const registry = resolvedTemplateForTask(task);
+    const stageDef = registry.status === 'ok' ? findStage(registry.template, targetStage) : null;
+    if (stageDef && stageDef.memory_contract && typeof stageDef.memory_contract === 'object') {
+      execution.memory_contract = JSON.parse(JSON.stringify(stageDef.memory_contract));
+    }
+  }
   execution.memory_contract_version = 2;
   const policy = resolveExecutionMemoryPolicy(execution);
   if (policy.mode === 'missing' || policy.mode === 'none') {
@@ -4018,6 +5390,7 @@ function attachStageMemoryGuidance(root, task, targetStage) {
       memory_contract: stagePacket.memory_contract,
       memory_read_receipt: stagePacket.memory_read_receipt,
     };
+    markShortMemoryMigrationRefreshed(task, execution.memory_context, targetStage);
     return;
   }
   if (policy.context_source === 'stage_context') {
@@ -4060,6 +5433,20 @@ function attachStageMemoryGuidance(root, task, targetStage) {
       memory_read_receipt: context.memory_read_receipt,
     };
   }
+  markShortMemoryMigrationRefreshed(task, context, targetStage);
+}
+
+function markShortMemoryMigrationRefreshed(task, context, targetStage) {
+  if (String((((task || {}).memory_migration || {}).status) || '') !== 'refresh_on_resume') return;
+  if (!context || context.blocking || String(context.status || '') !== 'assembled') return;
+  task.memory_migration = {
+    ...(task.memory_migration || {}),
+    status: 'completed',
+    refreshed_stage: String(targetStage || ''),
+    refreshed_packet: String(context.packet_json || ''),
+    refreshed_revision: String((((context || {}).memory_contract || {}).memory_revision) || ''),
+    refreshed_at: new Date().toISOString(),
+  };
 }
 
 function attachLongStageExecutionGuidance(root, task, targetStage) {
@@ -4074,7 +5461,14 @@ function attachLongStageExecutionGuidance(root, task, targetStage) {
     execution.context_packet_warning = String((error && error.message) || error || 'long context packet failed').slice(0, 240);
     return;
   }
+  if (packet && packet.status === 'blocked_long_character_contract_upgrade_required') {
+    execution.character_contract_blocking = packet;
+    execution.context_packet_warning = packet.reason;
+    execution.resume_hint = '先补全人物设定并通过人物合同；不要继续生成章节 Brief 或正文。';
+    return;
+  }
   if (!packet || packet.status !== 'assembled') return;
+  delete execution.character_contract_blocking;
   execution.context_read_command = `node scripts/workflow-stage-context.js read-current --project-root . --workflow-id ${JSON.stringify(String(task.workflow_id || ''))}`;
   execution.stage_context_packet = {
     status: packet.status, packet_md: packet.packet_md, packet_json: packet.packet_json,
@@ -4119,12 +5513,57 @@ function seedShortPlanningStagedFile(root, staged, canonical) {
 }
 
 function attachShortStageExecutionGuidance(root, task, targetStage) {
-  if (!['short_write', 'short_startup', 'private_short_startup'].includes(String(task.workflow_type || ''))) return;
+  if (!isShortWorkflowType(task.workflow_type)) return;
   const execution = task.stage_execution || {};
   execution.execution_workdir = '.';
   const quotedRoot = '.';
   const quotedWorkflowId = JSON.stringify(String(task.workflow_id || ''));
   delete execution.context_read_command;
+
+  if (targetStage === 'startup_scan') {
+    execution.write_set = [`${task.task_dir}/artifacts/startup-scan.json`];
+    execution.execution_command = runtimeNodeCommand('short-startup-scan-finalize.js', [
+      '--project-root', '.', '--workflow-id', String(task.workflow_id || ''), '--json',
+    ]);
+    execution.resume_hint = '直接运行 execution_command。脚本只扫描项目标志、短篇正式资产和可信断点，不读取故事记忆、完整 Skill、历史日志或源码。';
+    return;
+  }
+
+  if (targetStage === 'info_source_pool') {
+    const windowDays = Math.max(1, Number(((task.freshness_window || {}).days) || 1));
+    const captureRel = `${task.task_dir}/artifacts/info-source-pool/source-capture.json`;
+    const contextRel = `${task.task_dir}/artifacts/info-source-pool/enrichment-context.json`;
+    const candidateRel = `${task.task_dir}/artifacts/info-source-pool/discovery-result.json`;
+    execution.info_source_capture = captureRel;
+    execution.info_source_context = contextRel;
+    execution.info_source_candidate = candidateRel;
+    execution.write_set = [captureRel, contextRel, candidateRel];
+    execution.context_read_command = runtimeNodeCommand('hot-source-capture.js', [
+      '--project-root', '.', '--workflow-id', String(task.workflow_id || ''),
+      '--window-days', String(windowDays), '--as-of', new Date().toISOString().slice(0, 10),
+      '--max-items', '3', '--output', captureRel, '--json',
+    ]);
+    execution.execution_command = runtimeNodeCommand('short-info-source-finalize.js', [
+      '--project-root', '.', '--workflow-id', String(task.workflow_id || ''), '--apply', '--json',
+    ]);
+    execution.resume_hint = `先运行 context_read_command，由私有确定性采集器生成来源快照；再立即运行 execution_command。若返回 short_info_source_card_enrichment_required，只能读取返回的 context_path，并按其中 candidate_shape 写入 ${candidateRel}，随后原样重跑 execution_command。若返回 short_info_source_value_insufficient，必须停止重写同一候选并向作者报告本轮无可用卡，等待扩大时间窗或调整方向。禁止直接读取 ${captureRel}、读取校验器源码、自行扩展联网搜索或一次生成合同外的额外卡片。`;
+    return;
+  }
+  if (targetStage === 'material_learning') {
+    const contextRel = `${task.task_dir}/artifacts/material-learning/context.json`;
+    const candidateRel = `${task.task_dir}/artifacts/material-learning/candidate-cards.json`;
+    execution.material_learning_context = contextRel;
+    execution.material_learning_candidate = candidateRel;
+    execution.write_set = [candidateRel];
+    execution.context_read_command = runtimeNodeCommand('short-material-learning-finalize.js', [
+      '--project-root', '.', '--workflow-id', String(task.workflow_id || ''), '--prepare', '--json',
+    ]);
+    execution.execution_command = runtimeNodeCommand('short-material-learning-finalize.js', [
+      '--project-root', '.', '--workflow-id', String(task.workflow_id || ''), '--apply', '--json',
+    ]);
+    execution.resume_hint = `先逐字运行 context_read_command；只按返回合同写 ${candidateRel}，再运行 execution_command。禁止读取 validator、workflow、Skill 源码，禁止联网和创建临时脚本。质量门必须同时通过主角行动、三级升级、权力反转、外部兑现与多源因果桥。`;
+    return;
+  }
   const wholeStoryStage = ['section_plan_lock', 'short_structure_impact_audit', 'hook_retention_gate', 'hook_value_gate', 'full_story_assembly', 'full_story_review', 'short_deslop', 'deslop', 'final_check'].includes(targetStage);
   const wholeStoryFeedback = ['feedback_impact_sync', 'feedback_apply_patch'].includes(targetStage)
     && /(?:全篇|整篇|全文|通篇)/u.test(String((((task || {}).pending_feedback || {}).scope_snapshot) || task.scope || ''));
@@ -4159,20 +5598,51 @@ function attachShortStageExecutionGuidance(root, task, targetStage) {
   const planningTarget = shortPlanningCanonicalTarget(targetStage);
   if (planningTarget) {
     const attempt = String(execution.stage_attempt_id || 'attempt').replace(/[^A-Za-z0-9._-]/g, '_');
-    const stagedTarget = chooseShortPlanningStagedPath(root, task, execution, targetStage, attempt, planningTarget, execution.planning_target);
+    const settingCandidatePath = targetStage === 'short_setting'
+      ? String((((task || {}).short_setting_candidate || {}).path) || '')
+      : '';
+    const stagedTarget = chooseShortPlanningStagedPath(
+      root,
+      task,
+      execution,
+      targetStage,
+      attempt,
+      planningTarget,
+      settingCandidatePath || execution.planning_target,
+    );
     seedShortPlanningStagedFile(root, stagedTarget, planningTarget);
     execution.write_set = [stagedTarget];
     execution.planning_target = stagedTarget;
     execution.planning_canonical_target = planningTarget;
     execution.planning_inputs = shortPlanningInputs(targetStage).filter((file) => fs.existsSync(path.join(root, file)));
-    execution.execution_command = `node scripts/short-planning-stage-finalize.js --project-root ${quotedRoot} --workflow-id ${quotedWorkflowId} --apply --json`;
+    execution.context_read_command = `node scripts/short-planning-stage-finalize.js --project-root ${quotedRoot} --workflow-id ${quotedWorkflowId} --context --json`;
+    const acceptingSettingCandidate = targetStage === 'short_setting'
+      && String(execution.action_id || '') === 'accept_short_setting_candidate';
+    const shouldApplyPlanningStage = targetStage !== 'short_setting' || acceptingSettingCandidate;
+    execution.execution_command = `node scripts/short-planning-stage-finalize.js --project-root ${quotedRoot} --workflow-id ${quotedWorkflowId}${shouldApplyPlanningStage ? ' --apply' : ''} --json`;
     const inputs = execution.planning_inputs.length ? execution.planning_inputs.join('、') : '当前已确认的用户输入与工作流上下文';
-    execution.resume_hint = `只读取 ${inputs}，只修改暂存制品 ${stagedTarget}；完成后运行 execution_command 受控提交到 ${planningTarget}。不得直接写正式文件、手写 result packet 或读取 workflow 源码。`;
+    if (targetStage === 'short_setting' && !acceptingSettingCandidate) {
+      const feedback = String((((task || {}).short_setting_candidate || {}).feedback) || '').trim();
+      execution.resume_hint = [
+        `先运行 context_read_command，不再分别扩读 ${inputs}；写入前用 Read 读取一次暂存候选 ${stagedTarget}，Markdown/纯文本不得传 pages 参数。`,
+        '先形成一张可供作者决策的紧凑设定卡：作品承诺；主角目标/软肋/缺陷/能力边界/主动选择；2-4 个关键人物的独立利益与关系债；核心冲突；三级升级；关键反转；结局兑现；待作者决定项。',
+        '候选控制在 1200-2200 个中文字，同一事实只写一次；不得提前扩写成完整设定书。',
+        feedback ? `本轮作者调整意见：${feedback}` : '',
+        '完成后运行 execution_command 进入作者确认门；不得写正式设定.md、手写 result packet、研究迁移脚本、进入 Plan 模式或读取 workflow 源码。',
+      ].filter(Boolean).join(' ');
+    } else if (acceptingSettingCandidate) {
+      execution.resume_hint = `作者已确认 ${stagedTarget} 的人物与剧情方向。先运行 context_read_command，再用 Read 读取一次该暂存文件，Markdown/纯文本不得传 pages 参数。只在同一暂存文件中补齐正式人物合同和必要现实边界，避免重复扩写；完成后运行 execution_command 受控提交到 ${planningTarget}。不得改变已确认的主角、关系、核心冲突、反转或结局，不得研究迁移脚本或 workflow 源码。`;
+    } else {
+      execution.resume_hint = `先运行 context_read_command，不再分别扩读 ${inputs}；再用 Read 读取一次暂存制品 ${stagedTarget}，Markdown/纯文本不得传 pages 参数。只修改该暂存制品；完成后运行 execution_command 受控提交到 ${planningTarget}。不得直接写正式文件、手写 result packet 或读取 workflow 源码。`;
+    }
     return;
   }
 
   if (targetStage === 'section_plan_lock') {
-    execution.write_set = ['追踪/private-short-extension/section-title-lock.json', '追踪/private-short-extension/project-state.json'];
+    execution.write_set = [
+      resolveShortStateRelative(root, 'section-title-lock.json', { forWrite: true }),
+      resolveShortStateRelative(root, 'project-state.json', { forWrite: true }),
+    ];
     execution.execution_command = `node scripts/short-section-title-lock.js --project-root ${quotedRoot} --workflow-id ${quotedWorkflowId} --json`;
     execution.resume_hint = '直接运行 execution_command。已确认且与当前小节大纲一致的标题锁会被复用并完成本阶段；标题发生变化时会显示完整标题清单和 1/2/3/4 选择。不得读取上下文包、手写结果包或重复扫描项目。';
     return;
@@ -4196,7 +5666,7 @@ function attachShortStageExecutionGuidance(root, task, targetStage) {
     reconcileShortRevisionQueueWithTitleLock(root, task);
     const sectionIndex = shortSectionIndex(root, task, targetStage) || 1;
     synchronizeShortUnitScope(task, sectionIndex, targetStage);
-    const lock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
+    const lock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
     const titleEntry = (Array.isArray(lock.sections) ? lock.sections : []).find((item) => Number((item || {}).section_index) === sectionIndex);
     if (!titleEntry || titleEntry.confirmed !== true) {
       execution.title_confirmation_required = true;
@@ -4312,7 +5782,10 @@ function attachShortStageExecutionGuidance(root, task, targetStage) {
       execution.execution_command = `node scripts/short-section-draft-finalize.js --project-root ${quotedRoot} --workflow-id ${quotedWorkflowId} --apply --json`;
       execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；只写 ${draftTarget}。完成后运行 execution_command；不得手写 result packet、连续写下一节、重复扫描项目或猜状态机参数。`;
     } else if (targetStage === 'section_repair_loop') {
-      const draftSource = (packet.source_files || []).find((source) => String((source || {}).kind || '') === 'current_draft');
+      const draftSource = (packet.source_files || []).find((source) => {
+        const kind = String((source || {}).kind || '');
+        return kind === 'current_draft' || kind === 'current_draft_expression_focus';
+      });
       const repairTarget = String((draftSource || {}).path || '');
       const repairFile = repairTarget ? path.join(root, repairTarget) : '';
       if (!repairTarget || !repairFile || !fs.existsSync(repairFile)) {
@@ -4568,6 +6041,63 @@ function classifyFreeTextInput(task, input, pending) {
   };
 }
 
+function restartShortInfoDiscovery(root, task, taskTemplate, input) {
+  const freshnessStage = findStage(taskTemplate, 'freshness_window');
+  if (!freshnessStage) return blocked('blocked_short_freshness_stage_missing', '短篇工作流缺少资讯时间窗口阶段。');
+  const now = new Date().toISOString();
+  const ordered = taskTemplate.stages.map(stage => String(stage.stage_id || ''));
+  const targetIndex = ordered.indexOf('freshness_window');
+  const preservedCompleted = ordered.slice(0, targetIndex).filter(stageId =>
+    (Array.isArray((task.machine || {}).completed_stages) ? task.machine.completed_stages : []).includes(stageId));
+  task.machine = normalizeMachine(task, taskTemplate);
+  task.machine.completed_stages = preservedCompleted;
+  task.machine.remaining_stages = ordered.slice(targetIndex);
+  task.machine.last_transition = 'short_info_discovery_restarted';
+  task.machine.next_stop_reason = 'awaiting_freshness_window';
+  task.current_stage = 'freshness_window';
+  task.current_step = 'freshness_window';
+  task.stage_execution = null;
+  delete task.freshness_window;
+  task.info_source_revision = {
+    status: 'restarted',
+    reason: String(input || '').trim(),
+    previous_stage: String((task.unit_lifecycle || {}).current_stage || ''),
+    old_artifacts_preserved: true,
+    restarted_at: now,
+  };
+  task.pending_action = buildShortFreshnessWindowPendingAction(task);
+  task.status = 'running';
+  task.lifecycle = {
+    ...(task.lifecycle || {}),
+    status: 'active',
+    updated_at: now,
+  };
+  task.unit_lifecycle = {
+    ...(task.unit_lifecycle || {}),
+    status: 'active',
+    current_stage: 'freshness_window',
+    current_role: currentUnitRole(taskTemplate.unit_lifecycle_contract || {}, 'freshness_window'),
+    updated_at: now,
+  };
+  task.updated_at = now;
+  writeTaskState(root, task, { writeMarkdown: false });
+  if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
+  appendHistory(root, 'short_info_discovery_restarted', {
+    workflow_id: String(task.workflow_id || ''),
+    reason: String(input || '').trim(),
+    old_artifacts_preserved: true,
+  });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'short_info_discovery_restarted',
+    workflow_id: String(task.workflow_id || ''),
+    current_stage: 'freshness_window',
+    old_artifacts_preserved: true,
+    pending_action: task.pending_action,
+    visible_response: pendingActionVisibleResponse(task, root, '旧资讯已保留为历史，不再参与本轮。请重新选择资讯时间范围。'),
+  };
+}
+
 function inferStructureChangeType(text) {
   if (/插入|插章/.test(text)) return 'insert';
   if (/合并/.test(text)) return 'merge';
@@ -4658,6 +6188,15 @@ function inferFreeTextClassification(text) {
   const normalized = text.replace(/\s+/g, ' ');
   const scopeMatch = normalized.match(/(\d+\s*[-到至]\s*\d+)/);
   const targetScope = scopeMatch ? scopeMatch[1].replace(/\s+/g, '') : '';
+  if (/(?:重新|重来|再|换一批|作废|不要|丢弃).{0,12}(?:抓取|获取|搜|资讯|热点|素材)|(?:资讯|热点|素材).{0,12}(?:重新抓取|重抓|换一批|作废|不要了)/.test(normalized)) {
+    return {
+      classification: 'restart_short_info_discovery',
+      recommended_action: 'restart_short_info_discovery',
+      suggested_workflow_type: 'short_write',
+      target_scope: '',
+      reason: '用户明确要求废弃当前资讯选择并重新发现热点；旧素材保留为历史，不进入后续上下文。',
+    };
+  }
   if (/先别|不要继续|换个任务|新任务|改成|转去|先审|审阅|审查/.test(normalized) && /(审阅|审查|拆文|写|短篇|长篇|去\s*AI|下载|导入)/.test(normalized)) {
     return {
       classification: 'switch_intent',
@@ -4717,6 +6256,40 @@ function suggestedWorkflowType(text) {
   return '';
 }
 
+function internalizeLegacyAuthorStop(root, task, tpl) {
+  if (activeShortFeedbackRevision(task)) return { changed: false, started: false };
+  const stageDef = findStage(tpl, task.current_stage);
+  const interaction = ((stageDef || {}).interaction_contract) || {};
+  if (!stageDef
+      || stageDef.requires_user_confirm
+      || String(interaction.author_visibility || '') !== 'internal') {
+    return { changed: false, started: false };
+  }
+  const executionStatus = String((((task || {}).stage_execution || {}).status) || '');
+  const hasLegacyPending = Boolean(task.pending_action && typeof task.pending_action === 'object');
+  const awaitingOldConfirmation = ['awaiting_author_confirmation', 'awaiting_confirmation'].includes(executionStatus);
+  if (!hasLegacyPending && !awaitingOldConfirmation) return { changed: false, started: false };
+
+  task.pending_action = null;
+  if (awaitingOldConfirmation) task.stage_execution = null;
+  task.state_version = Number(task.state_version || 0) + 1;
+  task.updated_at = new Date().toISOString();
+  const autoStart = maybeAutoStartInternalStage(root, task, tpl);
+  persistTaskSnapshot(root, task);
+  writeCurrentTaskMarkdownIfFocused(root, task);
+  appendTaskJournal(root, 'legacy_author_stop_internalized', {
+    workflow_id: task.workflow_id,
+    stage_id: stageDef.stage_id,
+    author_phase: String((((interaction || {}).author_phase || {}).label) || ''),
+  });
+  appendHistory(root, 'legacy_author_stop_internalized', {
+    workflow_id: task.workflow_id,
+    workflow_type: task.workflow_type,
+    stage_id: stageDef.stage_id,
+  });
+  return { changed: true, started: autoStart.started, stageExecution: autoStart.stageExecution || null };
+}
+
 function nextCandidates(args) {
   const root = path.resolve(args.projectRoot);
   const task = readFocusedAuthority(root);
@@ -4731,6 +6304,8 @@ function nextCandidates(args) {
   if (reviewPlanValidation.legacy) return blockedLegacyReviewPlan(task);
   const registryCheck = resolvedTemplateForTask(task);
   if (registryCheck.status !== 'ok') return blockedTaskTemplate(registryCheck);
+  ensureShortSettingAuthorDecisionMigration(root, task, registryCheck.template);
+  internalizeLegacyAuthorStop(root, task, registryCheck.template);
   const activePending = task.pending_action && typeof task.pending_action === 'object'
     && String(task.pending_action.status || 'pending') !== 'resolved';
   const resume = !activePending ? runningStageResume(task, root) : null;
@@ -4893,6 +6468,7 @@ function replayAcceptedMemoryProjection(root, task, taskTemplate, reviewPlanVali
       shortFullStoryReviewProjection: acceptance.short_full_story_review_projection,
       shortFeedbackIntegration: acceptance.integration_event,
       shortPlanningMemoryProjection: acceptance.planning_memory_projection,
+      shortReaderPromiseProjection: acceptance.reader_promise_projection,
       shortFeedbackRevisionQueue: acceptance.feedback_revision_queue,
       resultHistory: acceptance.result_history,
     },
@@ -4936,6 +6512,7 @@ function holdAcceptedResultForMemoryProjection(root, task, result, resultFile, a
       short_full_story_review_projection: (acceptance || {}).shortFullStoryReviewProjection || null,
       integration_event: (acceptance || {}).shortFeedbackIntegration || null,
       planning_memory_projection: (acceptance || {}).shortPlanningMemoryProjection || null,
+      reader_promise_projection: (acceptance || {}).shortReaderPromiseProjection || null,
       feedback_revision_queue: (acceptance || {}).shortFeedbackRevisionQueue || null,
       result_history: (acceptance || {}).resultHistory || null,
     },
@@ -5023,6 +6600,10 @@ function applyResult(args) {
   if (validation.status !== 'ok') {
     return validation;
   }
+  const characterContractValidation = validateWorkflowCharacterContract(root, task, result);
+  if (characterContractValidation && characterContractValidation.status !== 'pass') {
+    return characterContractValidation;
+  }
 
   const feedbackImpactValidation = validateShortFeedbackImpactResult(task, result);
   if (feedbackImpactValidation) return feedbackImpactValidation;
@@ -5074,6 +6655,37 @@ function applyResult(args) {
     };
   }
 
+  const characterContractProjection = projectWorkflowCharacterContract(root, task, result);
+  if (String(characterContractProjection.status || '').startsWith('blocked_')) {
+    return blocked(characterContractProjection.status, [{
+      field: 'character_memory_projection',
+      message: '人物设计已通过阶段验收，但无法投影为当前作品人物记忆。',
+      details: characterContractProjection,
+    }]);
+  }
+  if (characterContractProjection.status === 'projected') {
+    task.character_memory_projection = characterContractProjection;
+  }
+  if (String(result.stage_id || '') === 'short_setting') {
+    const candidate = task.short_setting_candidate && typeof task.short_setting_candidate === 'object'
+      ? task.short_setting_candidate
+      : {};
+    task.short_setting_candidate = {
+      ...candidate,
+      status: 'accepted',
+      author_decision: 'confirmed',
+      accepted_at: new Date().toISOString(),
+      accepted_result_packet: String(result.result_packet_path || ''),
+    };
+    task.short_setting_author_decision = {
+      status: 'confirmed',
+      candidate_sha256: String(candidate.sha256 || ''),
+      candidate_revision: Number(candidate.revision || 0),
+      confirmed_at: String(candidate.confirmed_at || new Date().toISOString()),
+      workflow_id: String(task.workflow_id || ''),
+    };
+  }
+
   const shortSectionProjection = projectAcceptedShortSection(root, task, result);
   if (shortSectionProjection && shortSectionProjection.blocked) return shortSectionProjection.blocked;
   const shortAssemblyProjection = projectShortStoryAssembly(root, task, result);
@@ -5086,6 +6698,12 @@ function applyResult(args) {
       field: 'planning_memory_projection',
       message: shortPlanningMemoryProjection.message || '已接受的规划反馈无法投影到短篇记忆。',
     }]);
+  }
+  const shortReaderPromiseProjection = projectShortReaderPromise(root, task, result);
+  if (shortReaderPromiseProjection.status === 'reader_promise_projected'
+      || shortReaderPromiseProjection.status === 'reader_promise_projection_incomplete'
+      || shortReaderPromiseProjection.status === 'current') {
+    task.short_reader_promise_projection = shortReaderPromiseProjection;
   }
   const shortFeedbackRevisionQueue = initializeShortFeedbackRevisionQueue(
     task,
@@ -5127,6 +6745,7 @@ function applyResult(args) {
       shortFullStoryReviewProjection,
       shortFeedbackIntegration,
       shortPlanningMemoryProjection,
+      shortReaderPromiseProjection,
       shortFeedbackRevisionQueue,
     });
   }
@@ -5146,6 +6765,7 @@ function applyResult(args) {
       shortFullStoryReviewProjection,
       shortFeedbackIntegration,
       shortPlanningMemoryProjection,
+      shortReaderPromiseProjection,
       shortFeedbackRevisionQueue,
       resultHistory,
     },
@@ -5168,6 +6788,7 @@ function finalizeAcceptedResult({
   const shortFullStoryReviewProjection = acceptanceContext.shortFullStoryReviewProjection || { status: 'not_applicable' };
   const shortFeedbackIntegration = acceptanceContext.shortFeedbackIntegration || { status: 'not_applicable' };
   const shortPlanningMemoryProjection = acceptanceContext.shortPlanningMemoryProjection || { status: 'not_applicable' };
+  const shortReaderPromiseProjection = acceptanceContext.shortReaderPromiseProjection || { status: 'not_applicable' };
   const shortFeedbackRevisionQueue = acceptanceContext.shortFeedbackRevisionQueue || { status: 'not_applicable' };
   const resultHistory = acceptanceContext.resultHistory || { status: 'not_available' };
 
@@ -5232,6 +6853,7 @@ function finalizeAcceptedResult({
   }
   if (shortFeedbackIntegration.status !== 'not_applicable') advanced.integration_event = shortFeedbackIntegration;
   if (shortPlanningMemoryProjection.status !== 'not_applicable') advanced.planning_memory_projection = shortPlanningMemoryProjection;
+  if (shortReaderPromiseProjection.status !== 'not_applicable') advanced.reader_promise_projection = shortReaderPromiseProjection;
   if (shortFeedbackRevisionQueue.status !== 'not_applicable') advanced.feedback_revision_queue = task.feedback_revision_queue;
   advanced.memory_projection = memoryProjection;
   advanced.result_history = resultHistory;
@@ -5277,8 +6899,7 @@ function finalizeAcceptedResult({
 }
 
 function validateShortSectionAcceptanceResult(projectRoot, task, result) {
-  const shortWorkflowTypes = new Set(['short_write', 'short_startup', 'private_short_startup']);
-  if (!shortWorkflowTypes.has(String(task.workflow_type || ''))
+  if (!SHORT_WORKFLOW_TYPES.has(String(task.workflow_type || ''))
     || String(task.current_stage || '') !== 'section_accept_anchor') return null;
   if (!result.section_acceptance || typeof result.section_acceptance !== 'object') {
     return blocked('blocked_short_section_acceptance_proof_missing', [{
@@ -5310,8 +6931,7 @@ function validateShortSectionAcceptanceResult(projectRoot, task, result) {
 }
 
 function projectAcceptedShortSection(projectRoot, task, result) {
-  const shortWorkflowTypes = new Set(['short_write', 'short_startup', 'private_short_startup']);
-  if (!shortWorkflowTypes.has(String(task.workflow_type || ''))
+  if (!SHORT_WORKFLOW_TYPES.has(String(task.workflow_type || ''))
     || Number(task.result_contract_version || 1) < 2
     || String(task.current_stage || '') !== 'section_accept_anchor') return null;
   const proof = result.section_acceptance && typeof result.section_acceptance === 'object'
@@ -5329,7 +6949,7 @@ function projectAcceptedShortSection(projectRoot, task, result) {
     };
   }
 
-  const stateFile = resolveSafeProjectFile(projectRoot, '追踪/private-short-extension/project-state.json');
+  const stateFile = shortStateFile(projectRoot, 'project-state.json', { forWrite: true });
   const state = stateFile && fs.existsSync(stateFile) ? readJson(stateFile) : {};
   if (!state || state.__error) {
     return {
@@ -5414,6 +7034,7 @@ function projectAcceptedShortSection(projectRoot, task, result) {
 
   const completed = Boolean(result.all_sections_completed) && sectionIndex === plannedSections;
   const remaining = Array.from({ length: Math.max(0, plannedSections - sectionIndex) }, (_, index) => sectionIndex + index + 1);
+  const nextSectionIndex = completed ? sectionIndex : sectionIndex + 1;
   const canonicalAssets = [...new Set([
     ...(Array.isArray(state.canonical_assets) ? state.canonical_assets : []),
     String(proof.canonical_path || ''),
@@ -5426,7 +7047,8 @@ function projectAcceptedShortSection(projectRoot, task, result) {
   };
   writeJson(stateFile, {
     ...state,
-    current_section_index: sectionIndex,
+    current_section_index: nextSectionIndex,
+    last_accepted_section_index: sectionIndex,
     accepted_sections: accepted,
     remaining_sections: remaining,
     status: completed ? 'all_sections_accepted' : `section_${String(sectionIndex).padStart(3, '0')}_accepted`,
@@ -5448,8 +7070,7 @@ function projectAcceptedShortSection(projectRoot, task, result) {
 }
 
 function validateShortStoryAssemblyResult(projectRoot, task, result) {
-  const shortWorkflowTypes = new Set(['short_write', 'short_startup', 'private_short_startup']);
-  if (!shortWorkflowTypes.has(String(task.workflow_type || ''))
+  if (!SHORT_WORKFLOW_TYPES.has(String(task.workflow_type || ''))
     || String(task.current_stage || '') !== 'full_story_assembly') return null;
   const proof = result.short_story_assembly && typeof result.short_story_assembly === 'object'
     ? result.short_story_assembly
@@ -5487,14 +7108,13 @@ function validateShortStoryAssemblyResult(projectRoot, task, result) {
 }
 
 function projectShortStoryAssembly(projectRoot, task, result) {
-  const shortWorkflowTypes = new Set(['short_write', 'short_startup', 'private_short_startup']);
-  if (!shortWorkflowTypes.has(String(task.workflow_type || ''))
+  if (!SHORT_WORKFLOW_TYPES.has(String(task.workflow_type || ''))
     || String(task.current_stage || '') !== 'full_story_assembly') return null;
   const proof = result.short_story_assembly && typeof result.short_story_assembly === 'object'
     ? result.short_story_assembly
     : null;
   if (!proof) return null;
-  const stateFile = resolveSafeProjectFile(projectRoot, '追踪/private-short-extension/project-state.json');
+  const stateFile = shortStateFile(projectRoot, 'project-state.json', { forWrite: true });
   const state = stateFile && fs.existsSync(stateFile) ? readJson(stateFile) : {};
   if (!state || state.__error) return { blocked: blocked('blocked_short_project_state_invalid', '短篇项目状态不可读。') };
   const planned = Number(proof.planned_sections || 0);
@@ -5523,8 +7143,7 @@ function projectShortStoryAssembly(projectRoot, task, result) {
 }
 
 function validateShortFullStoryReviewResult(projectRoot, task, result) {
-  const shortWorkflowTypes = new Set(['short_write', 'short_startup', 'private_short_startup']);
-  if (!shortWorkflowTypes.has(String(task.workflow_type || ''))
+  if (!SHORT_WORKFLOW_TYPES.has(String(task.workflow_type || ''))
     || String(task.current_stage || '') !== 'full_story_review') return null;
   const proof = result.short_full_story_review && typeof result.short_full_story_review === 'object'
     ? result.short_full_story_review
@@ -5953,6 +7572,7 @@ function validateShortResultMemoryReceipt(task, result, projectRoot) {
   const execution = task.stage_execution && typeof task.stage_execution === 'object'
     ? task.stage_execution
     : {};
+  if (acceptedShortPlanningMemoryBoundary(task, result, execution)) return null;
   if (!execution.stage_context_packet
       || String(((execution.memory_context || {}).context_source) || '') !== 'stage_context') return null;
   const validation = checkShortMemoryStage({
@@ -5970,6 +7590,21 @@ function validateShortResultMemoryReceipt(task, result, projectRoot) {
     stale_sources: validation.stale_sources,
     resume_stage: validation.resume_stage,
   }]);
+}
+
+function acceptedShortPlanningMemoryBoundary(task, result, execution) {
+  const stageId = String(result.stage_id || execution.stage_id || task.current_stage || '');
+  if (!['project_seed', 'material_card', 'short_setting', 'platform_genre_lock', 'rhythm_pattern_selection', 'section_outline', 'feedback_apply_patch'].includes(stageId)) return false;
+  const validation = result.memory_validation && typeof result.memory_validation === 'object'
+    ? result.memory_validation
+    : {};
+  if (String(validation.stage_attempt_id || '') !== String(execution.stage_attempt_id || '')) return false;
+  const boundary = String(validation.boundary || '');
+  const status = String(validation.status || '');
+  if (boundary === 'pre_commit' && ['pass', 'not_recorded'].includes(status)) return true;
+  if (boundary !== 'accepted_commit_replay' || status !== 'accepted_transaction') return false;
+  const resultCommitId = String((((result || {}).chapter_commit || {}).accepted_commit_id) || (((result.evidence || [])[0] || {}).commit_id) || '');
+  return Boolean(resultCommitId && resultCommitId === String(validation.accepted_commit_id || ''));
 }
 
 function validateLongformWriteSet(task, result, projectRoot) {
@@ -6332,6 +7967,7 @@ function validateV2ExecutionBinding(task, result, projectRoot, resultFile, taskT
   const tpl = taskTemplate;
   const stageDef = findStage(tpl, task.current_stage) || {};
   const execution = task.stage_execution || {};
+  if (shortSectionAcceptanceAlreadyCommitted(projectRoot, task, result)) return null;
   if (execution.status !== 'running') {
     return stageDef.requires_user_confirm
       ? blocked('blocked_confirmation_required', '当前确认阶段没有持久化的 running stage_execution 与确认 token。')
@@ -6362,11 +7998,25 @@ function validateV2ExecutionBinding(task, result, projectRoot, resultFile, taskT
     return blocked('blocked_result_packet_path_mismatch', 'checkpoint_policy.expected_result_packet 与 running stage_execution 不一致。');
   }
 
-  if (stageDef.requires_user_confirm && !resultPreviouslyValidatedBeforeAudit(task, result, resultFile, projectRoot)) {
+  if (stageDef.requires_user_confirm
+    && !resultPreviouslyValidatedBeforeAudit(task, result, resultFile, projectRoot)
+    && !shortSectionAcceptanceAlreadyCommitted(projectRoot, task, result)) {
     const confirmationValidation = validateConfirmationContext(task, execution);
     if (confirmationValidation) return confirmationValidation;
   }
   return null;
+}
+
+function shortSectionAcceptanceAlreadyCommitted(projectRoot, task, result) {
+  if (!SHORT_WORKFLOW_TYPES.has(String((task || {}).workflow_type || ''))
+    || String((task || {}).current_stage || '') !== 'section_accept_anchor') return false;
+  const proof = validateShortSectionAcceptanceProof({
+    projectRoot,
+    workflowId: (task || {}).workflow_id,
+    proof: (result || {}).section_acceptance,
+    requireCommit: true,
+  });
+  return proof.status === 'accepted';
 }
 
 function resultPreviouslyValidatedBeforeAudit(task, result, resultFile, projectRoot) {
@@ -6401,6 +8051,8 @@ function validateConfirmationContext(task, execution) {
   const selection = task.last_selection || {};
   const pending = task.pending_action || {};
   const expiresAt = Date.parse(String(confirmation.expires_at || ''));
+  const resumedConfirmedStage = execution.action_id === 'resume_paused_stage'
+    && selection.action_id === 'resume_paused_stage';
   const matches = Boolean(confirmation.confirmation_token)
     && confirmation.status === 'confirmed'
     && confirmation.confirmation_token === execution.confirmation_token
@@ -6417,7 +8069,7 @@ function validateConfirmationContext(task, execution) {
     && confirmation.visible_choice_hash === pending.visible_choice_hash
     && confirmation.visible_choice_hash === selection.visible_choice_hash
     && pending.status === 'resolved'
-    && selection.requires_user_confirm === true
+    && (selection.requires_user_confirm === true || resumedConfirmedStage)
     && Number.isFinite(expiresAt)
     && expiresAt > Date.now();
   if (!matches) {
@@ -6431,6 +8083,7 @@ function validateConfirmationContext(task, execution) {
 
 function validateChapterCommit(projectRoot, task, result) {
   if (result.step_status !== 'completed') return null;
+  if (shortSectionAcceptanceAlreadyCommitted(projectRoot, task, result)) return null;
   const isLongformCommit = task.workflow_type === 'long_write' && task.current_stage === 'chapter_commit';
   const strictCanonicalTargets = strictCanonicalResultTargets(projectRoot, result);
   if (strictCanonicalTargets.error) return strictCanonicalTargets.error;
@@ -6440,12 +8093,12 @@ function validateChapterCommit(projectRoot, task, result) {
   if (!chapterCommit || typeof chapterCommit !== 'object') {
     return {
       schemaVersion: SCHEMA_VERSION,
-      status: strictCanonicalTargets.targets.length > 0 ? 'blocked_canonical_transaction_required' : 'blocked_chapter_commit_missing',
+      status: isLongformCommit ? 'blocked_chapter_commit_missing' : 'blocked_canonical_transaction_required',
       findings: [{
         field: 'chapter_commit',
-        message: strictCanonicalTargets.targets.length > 0
-          ? '严格模式下审阅修复修改正式资产前必须提供 accepted chapter commit。'
-          : '长篇章节提交节点完成前必须提供 accepted chapter commit。',
+        message: isLongformCommit
+          ? '长篇章节提交节点完成前必须提供内部章节事务记录 accepted chapter commit；这不是 Git 提交，不要运行 git status 或 git commit。'
+          : '严格模式下审阅修复修改正式资产前必须提供内部章节事务记录 accepted chapter commit；这不是 Git 提交，不要运行 git status 或 git commit。',
       }],
     };
   }
@@ -6454,7 +8107,7 @@ function validateChapterCommit(projectRoot, task, result) {
       return {
         schemaVersion: SCHEMA_VERSION,
         status: 'blocked_canonical_transaction_required',
-        findings: [{ field: 'chapter_commit.mode', message: '严格模式下正式资产修复不能使用 legacy_nontransactional。' }],
+        findings: [{ field: 'chapter_commit.mode', message: '严格模式下正式资产修复不能使用 legacy_nontransactional；这里检查的是内部章节事务，不是 Git。' }],
       };
     }
     const changedFiles = Array.isArray(result.changed_files) ? result.changed_files.filter(Boolean) : [];
@@ -6462,7 +8115,7 @@ function validateChapterCommit(projectRoot, task, result) {
       return {
         schemaVersion: SCHEMA_VERSION,
         status: 'blocked_chapter_commit_invalid',
-        findings: [{ field: 'chapter_commit', message: 'legacy_nontransactional 必须列出变更文件、兼容原因并显式确认风险。' }],
+        findings: [{ field: 'chapter_commit', message: 'legacy_nontransactional 必须列出变更文件、兼容原因并显式确认风险；这里检查的是内部章节事务，不是 Git。' }],
       };
     }
     return null;
@@ -6471,7 +8124,7 @@ function validateChapterCommit(projectRoot, task, result) {
     return {
       schemaVersion: SCHEMA_VERSION,
       status: 'blocked_chapter_commit_invalid',
-      findings: [{ field: 'chapter_commit.mode', message: 'chapter_commit.mode 必须是 transactional 或 legacy_nontransactional。' }],
+      findings: [{ field: 'chapter_commit.mode', message: 'chapter_commit.mode 必须是 transactional 或 legacy_nontransactional；这里检查的是内部章节事务，不是 Git。' }],
     };
   }
 
@@ -6686,11 +8339,138 @@ function advanceTask(task, result, projectRoot, taskTemplate) {
   task.pending_action = nextStageId
     ? transition.reason === 'short_quality_single_candidate_ready' && nextStageId === 'section_accept_anchor'
       ? buildShortSectionDecisionPendingAction(tpl, task)
-      : isShortWritingWorkflow(task) && ['draft_first_section', 'draft_section', 'draft_next_section'].includes(nextStageId)
-        ? buildShortDraftPendingAction(findStage(tpl, nextStageId), task)
-        : buildPendingAction(tpl, findStage(tpl, nextStageId))
+      : isShortWritingWorkflow(task) && nextStageId === 'startup_menu'
+        ? buildShortStartupMenuPendingAction(task)
+        : isShortWritingWorkflow(task) && nextStageId === 'freshness_window'
+          ? buildShortFreshnessWindowPendingAction(task)
+          : isShortWritingWorkflow(task) && nextStageId === 'info_source_selection'
+            ? buildShortInfoSourceSelectionPendingAction(task)
+            : isShortWritingWorkflow(task) && ['draft_first_section', 'draft_section', 'draft_next_section'].includes(nextStageId)
+              ? buildShortDraftPendingAction(findStage(tpl, nextStageId), task)
+              : buildPendingAction(tpl, findStage(tpl, nextStageId))
     : buildCompletionPendingAction(task, task.recommended_next);
   return task;
+}
+
+function buildShortStartupMenuPendingAction(task) {
+  return decoratePendingAction({
+    id: `pa-short-startup-${String(task.workflow_id || 'task')}`,
+    question: '请选择短篇创作入口',
+    compact_options: true,
+    options: [
+      {
+        action_id: 'discover_fresh_material',
+        label: '抓取最新热点资讯做选题（推荐）',
+        description: '先选时间范围，再从主流热榜、资讯门户、视频社区和生活方式平台形成分层资讯池。',
+        target_stage: 'freshness_window', risk_level: 'low', requires_user_confirm: false,
+      },
+      {
+        action_id: 'use_existing_material',
+        label: '从已有素材或脑洞开写',
+        description: '使用你提供的素材、本地素材或一句脑洞建立素材卡。',
+        target_stage: 'project_seed', risk_level: 'medium', requires_user_confirm: true,
+      },
+      {
+        action_id: 'review_existing_short',
+        label: '导入或回炉已有短篇',
+        description: '对当前目录已有稿件做只读识别后进入审阅或回炉。',
+        target_stage: 'short_review', risk_level: 'medium', requires_user_confirm: true,
+      },
+      { action_id: 'free_text', label: '输入其他要求', risk_level: 'low', requires_user_confirm: false },
+    ],
+    free_text_enabled: true,
+  });
+}
+
+function buildShortFreshnessWindowPendingAction(task) {
+  return decoratePendingAction({
+    id: `pa-short-freshness-${String(task.workflow_id || 'task')}`,
+    question: '请选择热点时间范围',
+    compact_options: true,
+    options: [
+      { action_id: 'lock_freshness_window', label: '最近 24 小时（推荐）', target_stage: 'info_source_pool', target_scope: '1d', risk_level: 'low', requires_user_confirm: false },
+      { action_id: 'lock_freshness_window', label: '最近 3 天', target_stage: 'info_source_pool', target_scope: '3d', risk_level: 'low', requires_user_confirm: false },
+      { action_id: 'lock_freshness_window', label: '最近 7 天', target_stage: 'info_source_pool', target_scope: '7d', risk_level: 'low', requires_user_confirm: false },
+      { action_id: 'free_text', label: '自定义日期范围', risk_level: 'low', requires_user_confirm: false },
+    ],
+    free_text_enabled: true,
+  });
+}
+
+function buildShortInfoSourceSelectionPendingAction(task) {
+  return decoratePendingAction({
+    id: `pa-short-info-source-selection-${String(task.workflow_id || 'task')}`,
+    question: '请选择资讯素材',
+    compact_options: true,
+    options: [
+      { action_id: 'select_info_source_card', label: '选择资讯卡（推荐）', risk_level: 'low', requires_user_confirm: true },
+      { action_id: 'inspect_current_state', label: '查看当前进度与依据', risk_level: 'low', requires_user_confirm: false },
+      { action_id: 'pause', label: '保存退出', risk_level: 'low', requires_user_confirm: false },
+      { action_id: 'free_text', label: '输入其他要求', risk_level: 'low', requires_user_confirm: false },
+    ],
+    free_text_enabled: true,
+  });
+}
+
+function completeShortDecisionStage(task, selected, selectedAt, tpl) {
+  if (!isShortWritingWorkflow(task)) return;
+  const current = String(task.current_stage || '');
+  if (!['startup_menu', 'freshness_window'].includes(current)) return;
+  const machine = normalizeMachine(task, tpl);
+  if (!machine.completed_stages.includes(current)) machine.completed_stages.push(current);
+  machine.remaining_stages = machine.remaining_stages.filter(stageId => stageId !== current);
+  machine.last_transition = `${current}_selection_confirmed`;
+  machine.next_stop_reason = 'ready_next_stage';
+  task.machine = machine;
+  if (current === 'startup_menu') {
+    task.short_startup_choice = {
+      action_id: String(selected.action_id || ''),
+      target_stage: String(selected.target_stage || ''),
+      selected_at: selectedAt,
+    };
+  }
+  if (current === 'freshness_window') {
+    const days = ({ 1: 1, 2: 3, 3: 7 })[Number(selected.selected_number)] || 1;
+    const end = new Date();
+    const start = new Date(end.getTime());
+    start.setUTCDate(start.getUTCDate() - days);
+    task.freshness_window = {
+      status: 'locked',
+      days,
+      start_date: start.toISOString().slice(0, 10),
+      end_date: end.toISOString().slice(0, 10),
+      selected_at: selectedAt,
+    };
+  }
+}
+
+function enterShortDecisionStage(task, selected, selectedAt, tpl) {
+  const target = String(selected.target_stage || '');
+  if (!isShortWritingWorkflow(task) || target !== 'freshness_window') return null;
+  const fromStage = String(task.current_stage || '');
+  task.current_stage = target;
+  task.current_step = target;
+  task.status = 'running';
+  task.lifecycle = normalizeLifecycle(task);
+  task.lifecycle.status = 'active';
+  task.lifecycle.updated_at = selectedAt;
+  const machine = normalizeMachine(task, tpl);
+  machine.completed_stages = machine.completed_stages.filter(stageId => stageId !== target);
+  machine.remaining_stages = [target, ...machine.remaining_stages.filter(stageId => stageId !== target)];
+  machine.last_transition = 'freshness_window_choice_required';
+  machine.next_stop_reason = 'awaiting_user_confirmation';
+  task.machine = machine;
+  task.stage_execution = {
+    ...(task.stage_execution || {}),
+    status: 'completed',
+    completed_at: selectedAt,
+  };
+  task.pending_action = buildShortFreshnessWindowPendingAction(task);
+  return { from_stage: fromStage, target_stage: target };
+}
+
+function runtimeNodeCommand(scriptName, args = []) {
+  return ['node', JSON.stringify(path.join(__dirname, scriptName)), ...args.map(value => JSON.stringify(String(value)))].join(' ');
 }
 
 function completionDebtResumeStage(task, tpl) {
@@ -6977,73 +8757,9 @@ function advanceUnitLifecycleState(existing, tpl, nextStageDef, result, now, opt
   };
 }
 
-function blocked(status, messageOrFindings) {
-  const findings = Array.isArray(messageOrFindings)
-    ? messageOrFindings
-    : [{ field: status, message: messageOrFindings }];
-  return { schemaVersion: SCHEMA_VERSION, status, findings };
-}
-
 function print(result, json) {
   if (json) console.log(JSON.stringify(result, null, 2));
   else console.log(`${result.status || 'ok'}`);
-}
-
-function compactActivatedResult(result) {
-  if (!result || !['activated', 'stage_started'].includes(String(result.status || '')) || !result.task) return result;
-  const task = result.task;
-  const execution = task.stage_execution && typeof task.stage_execution === 'object'
-    ? task.stage_execution
-    : null;
-  const context = execution && execution.stage_context_packet && typeof execution.stage_context_packet === 'object'
-    ? execution.stage_context_packet
-    : null;
-  const overview = result.task_overview && typeof result.task_overview === 'object'
-    ? result.task_overview
-    : null;
-  return {
-    schemaVersion: result.schemaVersion || SCHEMA_VERSION,
-    status: result.status,
-    previous_workflow_id: String(result.previous_workflow_id || ''),
-    task: {
-      workflow_id: String(task.workflow_id || ''),
-      workflow_type: String(task.workflow_type || ''),
-      status: String(task.status || ''),
-      state_version: Number(task.state_version || 0),
-      current_stage: String(task.current_stage || ''),
-      current_step: String(task.current_step || ''),
-      scope: String(task.scope || ''),
-      project_identity: task.project_identity || null,
-      pending_action: task.pending_action || null,
-      stage_execution: execution ? {
-        status: String(execution.status || ''),
-        stage_id: String(execution.stage_id || ''),
-        step_id: String(execution.step_id || ''),
-        owner_module: String(execution.owner_module || ''),
-        write_set: Array.isArray(execution.write_set) ? execution.write_set : [],
-        expected_result_packet: String(execution.expected_result_packet || ''),
-        draft_target: String(execution.draft_target || ''),
-        repair_target: String(execution.repair_target || ''),
-        stage_context_packet: context ? {
-          packet_md: String(context.packet_md || ''),
-          estimated_tokens: Number(context.estimated_tokens || 0),
-          token_budget: Number(context.token_budget || 0),
-        } : null,
-        execution_command: String(execution.execution_command || ''),
-        resume_hint: String(execution.resume_hint || ''),
-      } : null,
-    },
-    task_overview: overview ? {
-      status: String(overview.status || ''),
-      task_title: String(overview.task_title || ''),
-      task_form: String(overview.task_form || ''),
-      phase_count: Array.isArray(overview.phases) ? overview.phases.length : 0,
-      current_subtask: overview.current_subtask || null,
-    } : null,
-    // The full overview remains available through `task-overview`. Repeating it
-    // here made compact activation inject tens of kilobytes into every host.
-    visible_response: null,
-  };
 }
 
 function main() {
@@ -7097,6 +8813,9 @@ function main() {
   }
 
   if (args.compact && args.command === 'activate') result = compactActivatedResult(result);
+  if (args.compact && args.command === 'apply-result') result = compactApplyResult(result);
+  if (args.compact && args.command === 'task-overview') result = compactTaskOverviewResult(result);
+  if (args.compact && args.command === 'next-candidates') result = compactNextCandidatesResult(result);
   print(result, args.json);
   process.exitCode = isConsoleErrorStatus(result.status) ? 2 : 0;
 }

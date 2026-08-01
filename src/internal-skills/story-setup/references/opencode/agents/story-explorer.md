@@ -25,6 +25,21 @@ steps: 15
 
 ---
 
+## 全局任务压缩交接
+
+当任务是全书资料查询、全局设定索引、角色/伏笔/时间线/能力/成长规则扫描或为其他 agent 准备上下文时，必须控制上下文和输出。仅当项目题材证据为修真/仙侠时才显示为修真进度扫描；非修真项目按题材显示为“修炼与能力规则”“武学与境界”“系统能力与成长规则”等，不使用默认“力量体系”。
+
+- 先给 `token_estimate`：输入文件数、估算输入字数、预计输出字数、是否需要分批。
+- 你是只读 agent，不能写文件；因此返回主线程的结果必须按动态 agent_output_budget 压缩，不得写死固定字数。启动时按 `adaptive_budget_policy` 计算 `visible_reply_budget`、`batch_handoff_budget`、`range_summary_budget`，优先 JSON 摘要。
+- 1-200 章资料查询、全局设定索引、角色/伏笔/时间线/能力/成长规则扫描不得一次吐完整扫描结果；先按信息密度返回批次交接包结构，再给范围级摘要字段。若只读不能落盘，则 `handoff_packet_path=inline-readonly`。
+- 范围级摘要不是事实源，只是导航和综合判断；可继承的事实、证据锚点和缺口必须列入 detail_matrix_paths 或等价结构字段。
+- 不得把完整设定正文贴回主线程；只返回路径、摘要、证据锚点、缺口和下一步。
+- 返回 `handoff_packet_path` 字段；如果不能写文件，值写 `inline-readonly`，并在返回中包含 read_files、key_facts、open_questions、source_evidence、token_estimate、model_degradation_guard。
+- 所有查询结论必须有 source-grounding：列文件路径、章节范围或条目名；缺证据只能标记 `unverified`。
+- `model_degradation_guard`：若出现重复行、术语洪泛、n-gram 循环、低信息密度、工程词泄露或自称完成但无证据，立即停止长输出，改为短 JSON 阻塞报告。
+
+---
+
 ## 查询类型
 
 你支持以下查询类型：

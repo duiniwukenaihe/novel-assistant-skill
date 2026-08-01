@@ -48,7 +48,8 @@ function compactStageExecution(value) {
     'status', 'stage_attempt_id', 'work_unit_id', 'work_unit_scope', 'attempt_no',
     'stage_id', 'step_id', 'action_id', 'selected_number', 'owner_module',
     'expected_result_packet', 'write_set', 'execution_workdir', 'context_read_command',
-    'execution_command', 'resume_hint', 'completion_required_before_reply',
+    'execution_command', 'stage_completion_command', 'current_required_action', 'after_write_action',
+    'resume_hint', 'completion_required_before_reply',
     'requires_user_confirm', 'risk_level', 'completion_boundary', 'batch_id', 'batch_scope',
   ];
   return Object.fromEntries(fields.filter((field) => Object.prototype.hasOwnProperty.call(value, field))
@@ -68,6 +69,7 @@ function stageRecoveryPresentation(task, options = {}) {
     ? task.stage_execution
     : {};
   const instruction = String(options.instruction || execution.resume_hint || '修复当前阶段后重试一次。');
+  const completionCommand = String(execution.stage_completion_command || execution.execution_command || '');
   const stageExecution = {
     status: 'running',
     stage_attempt_id: String(execution.stage_attempt_id || ''),
@@ -79,6 +81,12 @@ function stageRecoveryPresentation(task, options = {}) {
     execution_workdir: '.',
     context_read_command: String(execution.context_read_command || ''),
     execution_command: String(execution.execution_command || ''),
+    stage_completion_command: completionCommand,
+    current_required_action: 'edit_write_set',
+    after_write_action: {
+      type: 'execute_command',
+      command: completionCommand,
+    },
     resume_hint: instruction,
     completion_required_before_reply: true,
     stage_completion_contract: 'read_context_edit_write_set_execute_completion_command_consume_result_same_turn',
@@ -86,11 +94,13 @@ function stageRecoveryPresentation(task, options = {}) {
   };
   const terminalReplyAllowedOn = ['workflow_choice_required', 'workflow_completed', 'host_tool_call_failed_after_retry', 'retry_budget_exhausted'];
   return {
+    presentation_allowed: false,
     stage_execution: stageExecution,
     pending_action: null,
     next_candidates: [],
     visible_response: {
       render_mode: 'silent_resume',
+      user_visible: false,
       status: String(options.status || 'stage_recovery_required'),
       selection_contract: 'resume_running_stage',
       interaction_mode: 'resume_stage',
@@ -112,7 +122,6 @@ function recoverableStageResult(task, status, instruction, extra = {}) {
   return {
     status: String(status || 'stage_recovery_required'),
     ...extra,
-    instruction: String(instruction || '修复当前阶段后重试一次。'),
     ...stageRecoveryPresentation(task, { status, instruction }),
   };
 }

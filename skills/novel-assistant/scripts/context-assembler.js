@@ -12,6 +12,7 @@ const { readTaskFamily } = require('./lib/task-family-store');
 const { readFocusedTask, resolveTaskContext } = require('./lib/workflow-task-authority');
 const { validateMemoryEvidence } = require('./lib/memory-evidence');
 const { loadOrBuildActiveMemoryIndex } = require('./lib/memory-active-index');
+const { readShortProjectState } = require('./lib/short-project-state');
 const MEMORY_LAYER_ORDER = ['book', 'volume', 'stage', 'chapter', 'task'];
 
 const args = parseArgs(process.argv);
@@ -520,7 +521,7 @@ function loadAcceptedFactEntries(root) {
 
 function obsoleteCanonicalRevisionDebt(root, debt) {
   if (!debt || debt.status !== 'hash_mismatch') return false;
-  const state = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
+  const state = readShortProjectState(root) || {};
   const accepted = Array.isArray(state.accepted_sections) ? state.accepted_sections : [];
   const authority = new Map(accepted.map(item => [normalizePath((item || {}).canonical_path), item]));
   const evidence = Array.isArray(((debt || {}).fact || {}).evidence) ? debt.fact.evidence : [];

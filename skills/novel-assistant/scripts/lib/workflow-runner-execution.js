@@ -26,6 +26,9 @@ const { buildAdapterInvocation, composeStageContextGuidance } = require('./workf
 const { createStreamHealthMonitor } = require('./workflow-stream-health');
 const { appendJsonl, atomicWriteJson } = require('./workflow-state-store');
 const { normalizeExecutionBoundary } = require('./workflow-execution-boundary');
+const { classifyTaskComplexity } = require('./task-complexity-policy');
+const { compactToolOutput } = require('./tool-output-compactor');
+const { buildPromptEnvelope, STABLE_HARNESS_PREFIX } = require('./prompt-envelope');
 const { sanitizeForArtifact, terminateProcessGroup } = require('../behavior-eval');
 const {
   cancelBudgetReservation,
@@ -48,6 +51,20 @@ function buildRunPreview(root, task, execution, options, attempt, memoryContext,
   const runnerPacketRel = `${task.task_dir}/runner-packets/${execution.stage_id}.attempt-${attempt + 1}.run.json`;
   const expectedResultPacket = execution.expected_result_packet;
   const stageContract = stageContractFor(task, execution);
+  const estimate = (((task || {}).runtime_guard || {}).token_estimate || {});
+  const executionPolicy = classifyTaskComplexity({
+    workflowType: task.workflow_type,
+    stageId: execution.stage_id,
+    inputFiles: estimate.input_files,
+    inputChars: estimate.input_chars_estimate,
+    unitCount: estimate.estimated_unit_window || estimate.batch_size || 1,
+    riskLevel: estimate.risk_level,
+    independentDomains: execution.independent_domains || [],
+    maxParallelAgents: execution.max_parallel_agents || 4,
+    structuralChange: execution.structural_change,
+    crossVolume: execution.cross_volume,
+    failureCount: attempt,
+  });
   const stageContextOk = stageContextPacket
     && stageContextPacket.status === 'assembled'
     && Boolean(stageContextPacket.packet_md);
@@ -58,6 +75,10 @@ function buildRunPreview(root, task, execution, options, attempt, memoryContext,
   const stageContextGuidance = stageContextOk
     ? composeStageContextGuidance(stageContextPacket)
     : '';
+  const promptEnvelope = buildRunnerPromptEnvelope(runnerPacketRel, expectedResultPacket, task, execution, attempt);
+  const consumedArtifactIds = stageContextOk
+    ? Array.from(new Set((stageContextPacket.source_files || []).map((item) => String(item.artifact_id || '')).filter(Boolean)))
+    : [];
   const runnerPacket = {
     schemaVersion: '1.0.0',
     run_id: runId,
@@ -89,12 +110,16 @@ function buildRunPreview(root, task, execution, options, attempt, memoryContext,
       memory_contract: stageContextPacket.memory_contract || null,
       memory_read_receipt: stageContextPacket.memory_read_receipt || null,
     } : null,
+    consumed_artifact_ids: consumedArtifactIds,
     attempt: attempt + 1,
     max_attempts: options.maxRetries + 1,
     execution_boundary: execution.completion_boundary || 'stop_after_stage',
     // The host must echo this immutable contract in its result packet. Keeping
     // it in the runner packet makes the packet genuinely self-sufficient.
     stage_contract: stageContract,
+    execution_policy: executionPolicy,
+    prompt_prefix_digest: promptEnvelope.stable_prefix_digest,
+    dynamic_context_digest: promptEnvelope.dynamic_context_digest,
     result_packet_template: resultPacketTemplateFor(
       task,
       execution,
@@ -102,6 +127,7 @@ function buildRunPreview(root, task, execution, options, attempt, memoryContext,
       expectedResultPacket,
       runnerPacketRel,
       memoryContext,
+      consumedArtifactIds,
     ),
     requirements: [
       '使用 novel-assistant 入口并路由到 owner_module',
@@ -117,13 +143,16 @@ function buildRunPreview(root, task, execution, options, attempt, memoryContext,
       stageContextOk
         ? `先读取 stage_context_packet.packet_md（${stageContextPacket.packet_md}），只使用包内资产写正文，不得自由搜索其他文件或读取全量 journal/result-packets/scripts`
         : '若无 stage_context_packet，按 owner_module 默认资产范围执行',
+      executionPolicy.recommended_agent_count <= 1
+        ? '当前阶段按单执行者路径运行，不得派发额外 Agent'
+        : `当前阶段最多并行 ${executionPolicy.recommended_agent_count} 个只读 Agent，仅处理 execution_policy.parallel_domains；正式资产仍由单写入者提交`,
       // I1: collaboration-mode advisory — surface the managed_runner handoff
       // hint when the packet is valid. Empty when guidance is not applicable.
       ...(stageContextGuidance ? [stageContextGuidance] : []),
       '输出退化或工具连续失败时立即停止，不伪造完成',
     ],
   };
-  const prompt = buildPrompt(runnerPacketRel, expectedResultPacket, task, execution, attempt);
+  const prompt = promptEnvelope.prompt;
   const invocation = buildAdapterInvocation(options.adapter, {
     projectRoot: root,
     prompt,
@@ -156,7 +185,7 @@ function stageContractFor(task, execution) {
   };
 }
 
-function resultPacketTemplateFor(task, execution, stageContract, expectedResultPacket, runnerPacketPath, memoryContext) {
+function resultPacketTemplateFor(task, execution, stageContract, expectedResultPacket, runnerPacketPath, memoryContext, consumedArtifactIds) {
   const target = stageContract.asset_target || {};
   const review = stageContract.review_requirement || {};
   return {
@@ -168,6 +197,8 @@ function resultPacketTemplateFor(task, execution, stageContract, expectedResultP
     ...stageContract,
     step_status: 'completed',
     outputs: [],
+    consumed_artifact_ids: Array.isArray(consumedArtifactIds) ? consumedArtifactIds.slice() : [],
+    produced_artifact_ids: [],
     changed_files: [],
     evidence: [],
     verification_result: review.required === true ? 'accepted' : 'pass',
@@ -211,21 +242,19 @@ function stageInstructionFor(task, execution, stageContract) {
   };
 }
 
-function buildPrompt(runnerPacketRel, expectedResultPacket, task, execution, attempt) {
+function buildRunnerPromptEnvelope(runnerPacketRel, expectedResultPacket, task, execution, attempt) {
   const recovery = attempt > 0
     ? '这是一次受控恢复。缩小工具调用和输出，只从最后可信断点完成当前阶段；不得重复上一轮错误。'
     : '';
-  return [
-    '这是已路由、已确认的非交互工作流执行。现在直接完成当前阶段。',
+  return buildPromptEnvelope([
     `先读取 ${runnerPacketRel}，它是本轮唯一执行契约和阶段指令。`,
     `当前工作流：${task.workflow_type}；阶段：${execution.stage_id}。`,
-    '不要再次调用 /novel-assistant，不要重新规划流程，不要询问用户是否执行，也不要展示候选菜单。',
     '仅执行 runner packet 的 stage_instruction，写入仅限 stage_contract.write_set。',
     '完成后必须把结构化回执写入 expected_result_packet：先从 result_packet_template 复制必填字段，再填准确的 changed_files 与 result_write_set。',
     `本轮唯一回执路径：${expectedResultPacket}。即使受阻也必须在此写入 step_status=blocked 的回执和原因。`,
     '只完成当前阶段，不越过确认边界；最终文本只给一句完成摘要，不粘贴大段正文。',
     recovery,
-  ].filter(Boolean).join('\n');
+  ]);
 }
 
 async function runHost(root, task, execution, run, options) {
@@ -256,6 +285,16 @@ async function runHost(root, task, execution, run, options) {
   const monitor = createStreamHealthMonitor({ idleTimeoutMs: options.idleTimeoutMs });
   const eventRel = `${task.task_dir}/runner-events/${run.runId}.jsonl`;
   const eventAbs = resolveInsideProject(root, eventRel);
+  const outputBaseRel = `${task.task_dir}/runner-output/${run.runId}`;
+  const stdoutRel = `${outputBaseRel}.stdout.log`;
+  const stderrRel = `${outputBaseRel}.stderr.log`;
+  const summaryRel = `${outputBaseRel}.summary.json`;
+  const stdoutAbs = resolveInsideProject(root, stdoutRel);
+  const stderrAbs = resolveInsideProject(root, stderrRel);
+  const summaryAbs = resolveInsideProject(root, summaryRel);
+  fs.mkdirSync(path.dirname(stdoutAbs), { recursive: true });
+  fs.writeFileSync(stdoutAbs, '', 'utf8');
+  fs.writeFileSync(stderrAbs, '', 'utf8');
   const startedAt = Date.now();
   const hostEvents = [];
   let stdoutBuffer = '';
@@ -289,6 +328,7 @@ async function runHost(root, task, execution, run, options) {
     killTimer.unref();
   }
   function consume(channel, chunk) {
+    fs.appendFileSync(channel === 'stdout' ? stdoutAbs : stderrAbs, chunk);
     monitor.ingest(channel, chunk);
     appendJsonl(eventAbs, {
       type: 'host_output',
@@ -332,6 +372,14 @@ async function runHost(root, task, execution, run, options) {
   collectHostEvent(stdoutBuffer, hostEvents);
   const health = monitor.snapshot();
   const durationMs = Date.now() - startedAt;
+  const rawStdout = fs.readFileSync(stdoutAbs, 'utf8');
+  const rawStderr = fs.readFileSync(stderrAbs, 'utf8');
+  const toolOutputSummary = {
+    ...compactToolOutput(`${rawStdout}${rawStderr ? `\n${rawStderr}` : ''}`, { kind: 'host' }),
+    raw_stdout: stdoutRel,
+    raw_stderr: stderrRel,
+  };
+  atomicWriteJson(summaryAbs, toolOutputSummary);
   const usage = normalizeHostUsage(options.adapter, hostEvents, durationMs, { outputChars: health.total_bytes || 0 });
   settleBudget(options, budgetReservation, usage);
   appendJsonl(eventAbs, {
@@ -351,6 +399,11 @@ async function runHost(root, task, execution, run, options) {
     health,
     duration_ms: durationMs,
     usage,
+    tool_output_summary: { ...toolOutputSummary, path: summaryRel },
+    prompt_envelope: {
+      stable_prefix_digest: run.runnerPacket.prompt_prefix_digest,
+      dynamic_context_digest: run.runnerPacket.dynamic_context_digest,
+    },
   };
   attemptResult.accounting = recordCost(root, task, execution, options, attemptResult, ownerModuleFor(task, execution.stage_id));
   if (!attemptResult.accounting.ok) {
@@ -431,6 +484,7 @@ function redactInvocation(invocation) {
 }
 
 module.exports = {
+  STABLE_HARNESS_PREFIX,
   assertNoSymlinkEscape,
   buildRunPreview,
   redactInvocation,

@@ -70,3 +70,31 @@ NODE
     test -x "$REPO/skills/novel-assistant/scripts/check-degeneration.js"
     test -x "$REPO/skills/novel-assistant/scripts/check-degeneration.js"
 }
+
+# Audit point #2（Task 4）：扫描器只完成部分输入时，--json 结果必须显式标 status=partial
+# 并列出未读文件，不得靠空 findings 冒充完成。仅看 findings 数组的聚合器无法仅凭 findings
+# 区分「全部扫完且无问题」与「部分文件崩掉、只扫到可读文件」，扫描器必须在 JSON 里自报 partial。
+@test "check-degeneration --json marks partial scan when an input file is unreadable" {
+    READABLE="$TMP_DIR/ok.md"
+    MISSING="$TMP_DIR/missing.md"
+    printf '正常正文一段，没有退化。\n' > "$READABLE"
+
+    # 退出码 2 = 扫描错误（区别于 0=clean / 1=quality finding）。用 run 捕获退出码不外抛。
+    run node "$SCRIPT" --json "$READABLE" "$MISSING"
+    [ "$status" -eq 2 ]
+    printf '%s' "$output" > "$TMP_DIR/out.json"
+
+    node - "$TMP_DIR/out.json" <<'NODE'
+const fs = require('fs');
+const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+// 必须有显式 status，且部分扫描时为 partial（不是 pass/ok）
+if (report.status !== 'partial') {
+  throw new Error(`expected status=partial on unreadable input, got status=${JSON.stringify(report.status)}, keys=${Object.keys(report)}`);
+}
+// 必须列出未读文件，聚合器才能把崩溃文件和「扫完没发现」区分开
+const failed = Array.isArray(report.files_unreadable) ? report.files_unreadable : [];
+if (!failed.some((entry) => /missing\.md/.test(String(entry.file || entry)))) {
+  throw new Error(`missing file not reported in files_unreadable: ${JSON.stringify(report)}`);
+}
+NODE
+}

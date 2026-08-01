@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { resolveShortStateRelative } = require('./short-project-state');
 
 const REQUIREMENT_HEADINGS = [
   ['承接', ['承接', '上节承接']],
@@ -34,11 +35,14 @@ function buildShortRevisionRequirementView(projectRoot, task = {}, sectionIndex)
     || !plan.affected_sections.length
     || plan.affected_sections.map(Number).includes(index)
     || (Array.isArray(queue.affected_sections) && queue.affected_sections.map(Number).includes(index));
+  const previousAnchor = index > 1
+    ? resolveShortStateRelative(root, `section-${String(index - 1).padStart(3, '0')}-anchor.json`)
+    : '';
   const sources = [
     brief ? { kind: 'current_brief', path: briefPath, digest: sha256(brief) } : null,
     fs.existsSync(path.join(root, '小节大纲.md')) ? { kind: 'section_outline', path: '小节大纲.md' } : null,
-    index > 1 && fs.existsSync(path.join(root, `追踪/private-short-extension/section-${String(index - 1).padStart(3, '0')}-anchor.json`))
-      ? { kind: 'previous_anchor', path: `追踪/private-short-extension/section-${String(index - 1).padStart(3, '0')}-anchor.json` }
+    previousAnchor && fs.existsSync(path.join(root, previousAnchor))
+      ? { kind: 'previous_anchor', path: previousAnchor }
       : null,
     planApplies && String(plan.plan_id || '') ? { kind: 'accepted_plan', path: String(task.accepted_plan_path || '任务已确认方案'), id: String(plan.plan_id) } : null,
   ].filter(Boolean);

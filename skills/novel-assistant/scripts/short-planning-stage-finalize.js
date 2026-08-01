@@ -5,9 +5,14 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { acceptTransaction, prepareTransaction } = require('./lib/chapter-commit-store');
+const { acceptTransaction, prepareTransaction, rollbackPreparedTransaction } = require('./lib/chapter-commit-store');
 const { classifyWorkflowApply, recoverableStageResult, stageRecoveryPresentation } = require('./lib/workflow-apply-result');
-const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
+const { mutateTaskAuthority, resolveTaskAuthority } = require('./lib/workflow-task-authority');
+const {
+  buildShortSettingCandidatePendingAction,
+  decoratePendingAction,
+  renderPendingActionText,
+} = require('./lib/workflow-action-renderer');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const {
@@ -15,13 +20,19 @@ const {
   assertShortProjectOwnership,
   ensureShortProjectState,
   readShortProjectState,
+  resolveShortStateRelative,
 } = require('./lib/short-project-state');
 const { appendIntegrationEvent } = require('./lib/integration-outbox');
+const { ensureCurrentShortMemoryStage } = require('./lib/short-memory-stage-recovery');
 const {
   analyzeShortOutlineNarrativeQuality,
   inferPlannedSections,
   outlineSections,
 } = require('./lib/short-plan-contract');
+const {
+  analyzeShortCharacterContract,
+  projectShortCharacterMemory,
+} = require('./lib/short-character-contract');
 
 const STAGE_TARGETS = Object.freeze({
   project_seed: '素材卡.md',
@@ -48,8 +59,8 @@ function main() {
   const workflowId = String(args.workflowId || focusedWorkflowId(root));
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 0, args.json);
-  const task = authority.task;
-  const execution = task.stage_execution || {};
+  let task = authority.task;
+  let execution = task.stage_execution || {};
   const stageId = String(task.current_stage || '');
   if (stageId === 'feedback_apply_patch') {
     return runFeedbackPlanningPatch({ root, workflowId, task, execution, args });
@@ -66,8 +77,47 @@ function main() {
   if (!stagedFile || !fs.existsSync(stagedFile) || !fs.statSync(stagedFile).isFile()) {
     return finish({ status: 'short_planning_staged_artifact_missing', planning_target: stagedRel, instruction: '重新启动当前阶段生成暂存制品；不得直接写正式文件。' }, 0, args.json);
   }
+  if (args.context) {
+    return finish(buildPlanningContext({ root, workflowId, stageId, execution, stagedRel, stagedFile }), 0, args.json);
+  }
   if (!fs.readFileSync(stagedFile, 'utf8').trim()) {
     return finish({ status: 'short_planning_staged_artifact_empty', planning_target: stagedRel, instruction: '补全当前规划制品后重跑同一 execution_command。' }, 0, args.json);
+  }
+  const characterSettingText = canonicalTarget === '设定.md'
+    ? fs.readFileSync(stagedFile, 'utf8')
+    : readText(path.join(root, '设定.md'));
+  if (stageId === 'short_setting' && !args.apply) {
+    const missing = [];
+    const candidateText = characterSettingText;
+    if (!/(?:主角|女主|男主)/u.test(candidateText)) missing.push('主角');
+    if (!/(?:目标|想要|要完成|要保住)/u.test(candidateText)) missing.push('主角目标');
+    if (!/(?:软肋|恐惧|害怕|内在需求|缺陷|误信)/u.test(candidateText)) missing.push('软肋或缺陷');
+    if (!/(?:压力角色|对手|阻力|主要人物)/u.test(candidateText)) missing.push('压力角色');
+    if (!/(?:关系债|关系压力|利益冲突|人物关系)/u.test(candidateText)) missing.push('人物关系');
+    if (!/(?:核心冲突|故事冲突)/u.test(candidateText)) missing.push('核心冲突');
+    if (!/(?:升级|递进|第一层|第二层|三级)/u.test(candidateText)) missing.push('剧情升级');
+    if (!/(?:反转|揭示|真相)/u.test(candidateText)) missing.push('关键反转');
+    if (!/(?:结局|终局|结尾兑现)/u.test(candidateText)) missing.push('结局兑现');
+    if (missing.length) {
+      return finish({
+        status: 'short_setting_candidate_revision_required',
+        planning_target: stagedRel,
+        missing_fields: missing,
+        instruction: '只补齐候选卡缺失项，保持紧凑，不要扩写成完整设定书；完成后重跑同一 execution_command。',
+      }, 0, args.json);
+    }
+  } else if (['short_setting', 'platform_genre_lock', 'rhythm_pattern_selection', 'section_outline'].includes(stageId)) {
+    const characterContract = analyzeShortCharacterContract(characterSettingText);
+    if (characterContract.status !== 'pass') {
+      return finish({
+        status: 'short_character_contract_revision_required',
+        planning_target: canonicalTarget === '设定.md' ? stagedRel : '设定.md',
+        protagonist: characterContract.protagonist,
+        findings: characterContract.findings,
+        advisories: characterContract.advisories,
+        instruction: '先补齐主角目标、软肋/内在需求、缺陷或误信、能力边界、主动变化，以及主要压力角色的独立利益和人物关系债；不要进入小节大纲、Brief 或正文。',
+      }, 0, args.json);
+    }
   }
   if (stageId === 'section_outline') {
     const outlineText = fs.readFileSync(stagedFile, 'utf8');
@@ -75,17 +125,24 @@ function main() {
     const currentState = readShortProjectState(root) || {};
     const sections = outlineSections(outlineText);
     const plannedSections = inferPlannedSections(settingText, currentState, sections);
-    const narrative = analyzeShortOutlineNarrativeQuality(outlineText, plannedSections);
+    const narrative = analyzeShortOutlineNarrativeQuality(outlineText, plannedSections, { settingText });
     if (narrative.status !== 'pass') {
-      return finish({
+      return handlePlanningValidationFailure({
+        root,
+        workflowId,
+        task,
+        stageId,
+        stagedRel,
         status: 'short_outline_narrative_revision_required',
-        planning_target: stagedRel,
-        planned_sections: plannedSections,
-        section_roles: narrative.section_roles,
         findings: narrative.findings.slice(0, 24),
-        instruction: '只修当前暂存小节大纲：补足可见阻力、场景动作、主角选择、本节兑现、关系变化和代价；高潮必须兑现核心承诺，结尾必须落责任与后果。不得进入 Brief 或正文临场补剧情。',
-      }, 0, args.json);
+        extra: { planned_sections: plannedSections, section_roles: narrative.section_roles },
+        instruction: '只修当前暂存小节大纲中真正缺失的故事功能；沿用自然中文标题与字段，不得新增 YAML、JSON、S00/B01 或其他机器编号。机器结构由确定性脚本自动投影。',
+        json: args.json,
+      });
     }
+    const cleared = clearPlanningValidationRecovery(root, workflowId, task, stageId);
+    task = cleared.task;
+    execution = cleared.execution;
   }
   const pollution = runJson(root, 'output-pollution-check.js', ['--check', '--json', stagedFile]);
   const findings = Array.isArray(pollution.findings) ? pollution.findings : [];
@@ -97,13 +154,52 @@ function main() {
       instruction: '只修当前暂存制品中的重复、工程词泄漏或模型污染，完成后重跑同一 execution_command。',
     }, 0, args.json);
   }
-  if (!args.apply) return finish({ status: 'short_planning_ready', stage_id: stageId, planning_target: stagedRel, canonical_target: canonicalTarget }, 0, args.json);
+  if (!args.apply) {
+    if (stageId === 'short_setting') {
+      return prepareShortSettingCandidateReview({ root, workflowId, task, stagedRel, stagedFile, args });
+    }
+    return finish({ status: 'short_planning_ready', stage_id: stageId, planning_target: stagedRel, canonical_target: canonicalTarget }, 0, args.json);
+  }
 
   try {
     assertShortProjectOwnership(root, readShortProjectState(root), workflowId);
   } catch (error) {
     return finish({ status: String(error.status || error.code || 'short_project_ownership_conflict'), workflow_id: workflowId, instruction: '当前目录已有未完成的短篇写作任务；请从任务收件箱恢复或明确结束旧任务。' }, 0, args.json);
   }
+  const packetRel = String(execution.expected_result_packet || `${task.task_dir}/result-packets/${stageId}.result.json`);
+  const packetFile = safeProjectFile(root, packetRel);
+  const existingPacket = readJson(packetFile);
+  const reusableCommit = reusablePlanningCommit(root, existingPacket, workflowId, execution, canonicalTarget);
+  if (reusableCommit) {
+    existingPacket.chapter_commit = planningCommitReceipt(reusableCommit, stagedRel);
+    existingPacket.memory_validation = {
+      schema_version: '1.0.0',
+      boundary: 'accepted_commit_replay',
+      status: 'accepted_transaction',
+      stage_attempt_id: String(execution.stage_attempt_id || ''),
+      accepted_commit_id: String(reusableCommit.commit_id || ''),
+    };
+    atomicWriteJson(packetFile, existingPacket);
+    const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+    const outcome = classifyWorkflowApply(applied);
+    return finish({
+      status: outcome.applied ? 'applied' : 'apply_blocked',
+      workflow_status: outcome.workflowStatus,
+      workflow_id: workflowId,
+      stage_id: stageId,
+      canonical_target: canonicalTarget,
+      commit_id: reusableCommit.commit_id,
+      result_packet: packetRel,
+      reused_accepted_result: true,
+      next_stage: String(outcome.result.current_stage || ((outcome.result.task || {}).current_stage) || ''),
+      ...outcome.presentation,
+      ...(outcome.applied ? {} : { recovery: outcome.result }),
+    }, outcome.exitCode, args.json);
+  }
+  const memoryValidation = validatePlanningMemoryBeforeCommit({ root, task, execution, stageId });
+  if (memoryValidation.blocking) return finish(memoryValidation.result, 0, args.json);
+  task = memoryValidation.task;
+  execution = memoryValidation.execution;
   const manifestRel = `${task.task_dir}/artifacts/planning-commits/${stageId}-${safeSegment(execution.stage_attempt_id || 'attempt')}.manifest.json`;
   const manifestFile = safeProjectFile(root, manifestRel);
   atomicWriteJson(manifestFile, {
@@ -116,10 +212,20 @@ function main() {
     facts: [],
   });
   let commit;
+  let preparedTransactionId = '';
   try {
+    rollbackOrphanedPlanningTransactions(root, workflowId, stageId);
     const prepared = prepareTransaction(root, manifestRel);
+    preparedTransactionId = String(prepared.transaction_id || '');
     commit = acceptTransaction(root, prepared.transaction_id);
   } catch (error) {
+    if (preparedTransactionId) {
+      try {
+        rollbackPreparedTransaction(root, preparedTransactionId, `planning accept failed: ${String(error.status || error.code || error.message || error)}`);
+      } catch (_) {
+        // Preserve the original commit error; the next run will reconcile the orphan.
+      }
+    }
     return finish({ status: String(error.status || error.code || 'short_planning_commit_blocked'), detail: String(error.message || error), instruction: '暂存制品仍保留；修复提交条件后重跑同一 execution_command，不要重新生成内容。' }, 0, args.json);
   }
 
@@ -137,6 +243,20 @@ function main() {
       commit_id: String(commit.commit_id || ''),
       instruction: '规划制品已安全提交，但项目状态投影失败；修复状态后重放当前阶段，不要重新生成规划内容。',
     }, 0, args.json);
+  }
+  let characterMemory = null;
+  if (canonicalTarget === '设定.md') {
+    characterMemory = projectShortCharacterMemory(root, { workflowId });
+    if (characterMemory.status !== 'projected') {
+      return finish({
+        status: 'short_character_memory_projection_blocked',
+        workflow_id: workflowId,
+        canonical_target: canonicalTarget,
+        commit_id: String(commit.commit_id || ''),
+        character_memory: characterMemory,
+        instruction: '设定已安全提交，但人物记忆投影失败；修复人物合同后重放投影，不要重新生成设定。',
+      }, 0, args.json);
+    }
   }
   const eventType = planningEventType(stageId);
   let integrationEvent = null;
@@ -157,8 +277,6 @@ function main() {
     }
   }
 
-  const packetRel = String(execution.expected_result_packet || `${task.task_dir}/result-packets/${stageId}.result.json`);
-  const packetFile = safeProjectFile(root, packetRel);
   atomicWriteJson(packetFile, {
     workflow_id: workflowId,
     workflow_type: String(task.workflow_type || 'short_write'),
@@ -167,19 +285,21 @@ function main() {
     owner_module: String(execution.owner_module || task.workflow_owner || ''),
     step_status: 'completed',
     outputs: [canonicalTarget],
-    changed_files: [canonicalTarget, '追踪/private-short-extension/project-state.json', ...(integrationEvent && integrationEvent.status === 'appended' ? ['追踪/integration/outbox.jsonl'] : [])],
+    changed_files: [canonicalTarget, resolveShortStateRelative(root, 'project-state.json', { forWrite: true }), ...(integrationEvent && integrationEvent.status === 'appended' ? ['追踪/integration/outbox.jsonl'] : [])],
     created_files: [],
-    evidence: [{ planning_target: stagedRel, canonical_target: canonicalTarget, commit_id: String(commit.commit_id || ''), projection_status: String(((commit.projection || {}).status) || ''), project_id: projectState.project_id, plan_revision: projectState.plan_revision, integration_event: integrationEvent ? integrationEvent.status : 'not_applicable' }],
+    evidence: [{ planning_target: stagedRel, canonical_target: canonicalTarget, commit_id: String(commit.commit_id || ''), projection_status: String(((commit.projection || {}).status) || ''), project_id: projectState.project_id, plan_revision: projectState.plan_revision, integration_event: integrationEvent ? integrationEvent.status : 'not_applicable', character_memory: characterMemory ? characterMemory.status : 'not_applicable' }],
     verification_result: 'pass',
     blocking_findings: [],
     output_health_result: 'pass',
     checkpoint_state: { current_stage: stageId, completed_range: `${canonicalTarget} 已受控接受`, remaining_range: '进入下一规划阶段', resume_from: '' },
     next_recommendation: '进入工作流给出的下一阶段。',
     handoff_summary: `${canonicalTarget} 已通过受控事务写入。`,
+    chapter_commit: planningCommitReceipt(commit, stagedRel),
+    memory_validation: memoryValidation.receipt,
     memory_updates: [],
     result_packet_path: packetRel,
   });
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(applied);
   const result = outcome.result;
   return finish({
@@ -199,7 +319,325 @@ function main() {
   }, outcome.exitCode, args.json);
 }
 
+function handlePlanningValidationFailure({ root, workflowId, task, stageId, stagedRel, status, findings, extra = {}, instruction, json }) {
+  const fingerprint = crypto.createHash('sha256')
+    .update(JSON.stringify({ stageId, stagedRel, findings }), 'utf8')
+    .digest('hex');
+  let updated;
+  try {
+    updated = mutateTaskAuthority(root, workflowId, Number(task.state_version || 0), (draft) => {
+      const execution = draft.stage_execution && typeof draft.stage_execution === 'object'
+        ? draft.stage_execution
+        : {};
+      const previous = execution.validation_recovery && typeof execution.validation_recovery === 'object'
+        ? execution.validation_recovery
+        : {};
+      const sameAttempt = String(previous.stage_attempt_id || '') === String(execution.stage_attempt_id || '');
+      const attempts = sameAttempt ? Number(previous.attempts || 0) + 1 : 1;
+      const maxAutomaticAttempts = stageId === 'section_outline' ? 0 : 1;
+      const exhausted = attempts > maxAutomaticAttempts;
+      execution.validation_recovery = {
+        status: exhausted ? 'awaiting_user_decision' : 'retry_once',
+        stage_attempt_id: String(execution.stage_attempt_id || ''),
+        fingerprint,
+        attempts,
+        max_automatic_attempts: maxAutomaticAttempts,
+        findings: Array.isArray(findings) ? findings : [],
+        updated_at: new Date().toISOString(),
+      };
+      if (exhausted) {
+        execution.status = 'awaiting_user_decision';
+        execution.completion_required_before_reply = false;
+        draft.status = 'paused_after_step';
+        draft.pending_action = buildPlanningValidationPendingAction(draft, stageId);
+        draft.machine = draft.machine || {};
+        draft.machine.next_stop_reason = 'planning_validation_retry_exhausted';
+      }
+      draft.stage_execution = execution;
+      return draft;
+    });
+  } catch (error) {
+    return finish({
+      status: String(error.code || 'short_planning_validation_state_conflict').toLowerCase(),
+      instruction: '任务状态已变化，请重新显示当前任务；保留暂存规划，不要重新生成。',
+    }, 0, json);
+  }
+  const recovery = (updated.stage_execution || {}).validation_recovery || {};
+  if (Number(recovery.attempts || 0) <= Number(recovery.max_automatic_attempts || 0)) {
+    return finish(recoverableStageResult(updated, status, instruction, {
+      planning_target: stagedRel,
+      findings,
+      ...extra,
+      automatic_retry: { current: 1, maximum: 1 },
+    }), 0, json);
+  }
+  const pending = updated.pending_action || buildPlanningValidationPendingAction(updated, stageId);
+  const automaticAttempts = Number(recovery.max_automatic_attempts || 0);
+  const heading = automaticAttempts > 0
+    ? '当前规划已自动修订一次，仍有未通过项；系统已停止自动改写，避免继续浪费 token。'
+    : '当前规划存在未通过项；系统未自动改写，避免整份大纲反复重写和浪费 token。';
+  return finish({
+    status: 'workflow_choice_required',
+    workflow_id: workflowId,
+    stage_id: stageId,
+    planning_target: stagedRel,
+    findings,
+    ...extra,
+    pending_action: pending,
+    next_candidates: pending.options,
+    visible_response: {
+      render_mode: 'text_numbers',
+      status: 'planning_validation_retry_exhausted',
+      options: pending.options,
+      text: renderPendingActionText(pending, heading),
+    },
+    interaction_contract: 'render_visible_response_text_verbatim',
+  }, 0, json);
+}
+
+function buildPlanningValidationPendingAction(task, stageId) {
+  return decoratePendingAction({
+    id: `pa-planning-validation-${String(task.workflow_id || 'short')}-${stageId}`,
+    question: '请选择当前规划的处理方式',
+    options: [
+      { action_id: 'inspect_current_state', label: '查看未通过项与已识别内容（推荐）', risk_level: 'low', requires_user_confirm: false },
+      { action_id: 'free_text', label: '调整当前大纲要求', risk_level: 'low', requires_user_confirm: false },
+      { action_id: 'retry_stage_contract', label: '重新生成当前暂存大纲一次', target_stage: stageId, risk_level: 'low', requires_user_confirm: false },
+      { action_id: 'pause', label: '暂停并保存断点', risk_level: 'low', requires_user_confirm: false },
+    ],
+    free_text_enabled: true,
+  });
+}
+
+function clearPlanningValidationRecovery(root, workflowId, task, stageId) {
+  const recovery = (((task || {}).stage_execution || {}).validation_recovery);
+  if (!recovery || String(((task || {}).current_stage) || '') !== String(stageId || '')) {
+    return { task, execution: (task || {}).stage_execution || {} };
+  }
+  try {
+    const updated = mutateTaskAuthority(root, workflowId, Number(task.state_version || 0), (draft) => {
+      const execution = { ...(draft.stage_execution || {}) };
+      delete execution.validation_recovery;
+      if (String(execution.status || '') === 'awaiting_user_decision') execution.status = 'running';
+      draft.stage_execution = execution;
+      draft.pending_action = null;
+      return draft;
+    });
+    return { task: updated, execution: updated.stage_execution || {} };
+  } catch (_) {
+    return { task, execution: (task || {}).stage_execution || {} };
+  }
+}
+
+function planningCommitReceipt(commit, stagedRel) {
+  return {
+    mode: 'transactional',
+    accepted_commit_id: String(commit.commit_id || ''),
+    commit_file: String(commit.commit_file || ''),
+    staged_artifacts: [stagedRel],
+    projection_status: String(commit.projection_status || 'projection_not_required'),
+    projection_debt: String(commit.projection_status || '') === 'projection_failed',
+  };
+}
+
+function reusablePlanningCommit(root, packet, workflowId, execution, canonicalTarget) {
+  if (!packet || packet.step_status !== 'completed') return null;
+  if (String(packet.workflow_id || '') !== String(workflowId || '')) return null;
+  if (String(packet.stage_id || '') !== String(execution.stage_id || '')) return null;
+  const commitId = String((((packet || {}).chapter_commit || {}).accepted_commit_id)
+    || ((((packet || {}).evidence || [])[0] || {}).commit_id)
+    || '');
+  if (!commitId) return null;
+  const commitFile = path.join(root, '追踪', 'story-system', 'commits', `${commitId}.json`);
+  const commit = readJson(commitFile);
+  if (!commit || commit.status !== 'accepted' || String(commit.workflow_id || '') !== String(workflowId || '')) return null;
+  if (String(((commit.provenance || {}).stage_attempt_id) || '') !== String(execution.stage_attempt_id || '')) return null;
+  const artifact = (Array.isArray(commit.artifacts) ? commit.artifacts : [])
+    .find(item => String((item || {}).target || '') === canonicalTarget);
+  const canonical = path.join(root, canonicalTarget);
+  if (!artifact || !fs.existsSync(canonical) || String(artifact.after_hash || '') !== hashFile(canonical)) return null;
+  return {
+    commit_id: commitId,
+    commit_file: path.relative(root, commitFile).split(path.sep).join('/'),
+    projection_status: 'projection_not_required',
+  };
+}
+
+function prepareShortSettingCandidateReview({ root, workflowId, task, stagedRel, stagedFile, args }) {
+  const source = fs.readFileSync(stagedFile, 'utf8').trim();
+  const digest = `sha256:${crypto.createHash('sha256').update(source, 'utf8').digest('hex')}`;
+  let updated;
+  try {
+    updated = mutateTaskAuthority(root, workflowId, Number(task.state_version || 0), (draft) => {
+      const previous = draft.short_setting_candidate && typeof draft.short_setting_candidate === 'object'
+        ? draft.short_setting_candidate
+        : {};
+      draft.short_setting_candidate = {
+        status: 'awaiting_author_confirmation',
+        path: stagedRel,
+        sha256: digest,
+        revision: Math.max(1, Number(previous.revision || 0) + 1),
+        generated_at: new Date().toISOString(),
+        author_decision: 'pending',
+        feedback: String(previous.feedback || ''),
+      };
+      draft.stage_execution = {
+        ...(draft.stage_execution || {}),
+        status: 'awaiting_author_confirmation',
+        candidate_path: stagedRel,
+        candidate_sha256: digest,
+        execution_command: '',
+        resume_hint: '先展示人物与剧情设定候选；作者确认前不得写入正式设定.md，也不得进入平台、节奏、小节大纲或正文。',
+      };
+      draft.pending_action = buildShortSettingCandidatePendingAction(draft);
+      draft.machine = draft.machine || {};
+      draft.machine.last_transition = 'short_setting_candidate_ready';
+      draft.machine.last_execution_event = 'awaiting_author_confirmation';
+      draft.machine.next_stop_reason = 'short_setting_author_confirmation_required';
+      draft.machine.allowed_actions = ['confirm_setting', 'revise_setting', 'inspect', 'pause'];
+      return draft;
+    });
+  } catch (error) {
+    return finish({
+      status: String(error.code || 'short_setting_candidate_state_conflict').toLowerCase(),
+      planning_target: stagedRel,
+      instruction: '任务状态已变化，请重新显示当前候选；不要重复生成设定。',
+    }, 0, args.json);
+  }
+  return finish({
+    status: 'short_setting_candidate_ready',
+    workflow_id: workflowId,
+    stage_id: 'short_setting',
+    planning_target: stagedRel,
+    candidate_sha256: digest,
+    candidate_preview: source.slice(0, 6000),
+    preview_truncated: source.length > 6000,
+    pending_action: updated.pending_action,
+    instruction: '展示候选与数字选项，等待作者确认或调整；不得自动运行提交命令。',
+  }, 0, args.json);
+}
+
+function rollbackOrphanedPlanningTransactions(root, workflowId, stageId) {
+  const transactionsRoot = path.join(root, '追踪', 'story-system', 'transactions');
+  if (!fs.existsSync(transactionsRoot) || !fs.statSync(transactionsRoot).isDirectory()) return [];
+  const rolledBack = [];
+  for (const entry of fs.readdirSync(transactionsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const transactionFile = path.join(transactionsRoot, entry.name, 'transaction.json');
+    let transaction;
+    try {
+      transaction = JSON.parse(fs.readFileSync(transactionFile, 'utf8'));
+    } catch (_) {
+      continue;
+    }
+    if (String(transaction.status || '') !== 'prepared') continue;
+    if (String(transaction.workflow_id || '') !== String(workflowId || '')) continue;
+    if (String(transaction.volume || '') !== '短篇规划') continue;
+    if (Number(transaction.chapter || 0) !== Number(STAGE_NUMBERS[stageId] || 0)) continue;
+    rollbackPreparedTransaction(root, entry.name, `superseded orphan before retrying ${stageId}`);
+    rolledBack.push(entry.name);
+  }
+  return rolledBack;
+}
+
+function buildPlanningContext({ root, workflowId, stageId, execution, stagedRel, stagedFile }) {
+  const inputs = Array.isArray(execution.planning_inputs) ? execution.planning_inputs : [];
+  const assets = [];
+  let remaining = stageId === 'section_outline' ? 12000 : 16000;
+  for (const relative of [...inputs, stagedRel]) {
+    if (remaining <= 0) break;
+    const file = safeProjectFile(root, relative);
+    if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) continue;
+    const source = fs.readFileSync(file, 'utf8');
+    const limit = relative === stagedRel ? Math.min(5000, remaining) : Math.min(7000, remaining);
+    const content = compactPlanningInput(relative, source, stageId, limit);
+    assets.push({
+      path: relative,
+      role: relative === stagedRel ? 'staged_target' : 'planning_input',
+      content,
+      truncated: source.length > content.length,
+    });
+    remaining -= content.length;
+  }
+  const settingText = readText(path.join(root, '设定.md'));
+  const currentState = readShortProjectState(root) || {};
+  const stagedSections = stageId === 'section_outline' ? outlineSections(readText(stagedFile)) : [];
+  const plannedSections = stageId === 'section_outline'
+    ? inferPlannedSections(settingText, currentState, stagedSections)
+    : 0;
+  const outputContract = stageId === 'section_outline'
+    ? {
+      artifact: stagedRel,
+      planned_sections: plannedSections,
+      max_chars: Math.min(9000, Math.max(4200, plannedSections * 1100)),
+      max_lines: Math.min(240, Math.max(90, plannedSections * 24 + 24)),
+      per_section: ['压力变化', '场景动作', '可见阻力', '角色选择', '本节兑现', '关系变化', '代价', '新钩子'],
+      rule: '每项只写一次；每节保留可执行动作和因果，不复述整份人物设定或证据原文。',
+    }
+    : null;
+  return {
+    status: 'short_planning_context_ready',
+    workflow_id: workflowId,
+    stage_id: stageId,
+    planning_target: stagedRel,
+    assets,
+    ...(outputContract ? { output_contract: outputContract } : {}),
+    instruction: 'assets 已包含当前阶段所需的权威摘要。只使用这份有界上下文；写入前用 Read 读取一次 planning_target，Markdown/纯文本不要传 pages 参数。禁止再列目录、读取历史 result packet、完整设定或 workflow 源码。',
+  };
+}
+
+function compactPlanningInput(relative, source, stageId, limit) {
+  const text = String(source || '');
+  if (stageId !== 'section_outline' || relative !== '设定.md') return boundedText(text, limit);
+  const blocks = markdownLevelTwoBlocks(text);
+  const wanted = [
+    /项目定位/u,
+    /可执行人物|主要人物|角色/u,
+    /故事承诺/u,
+    /不可变事实|规划接口/u,
+    /平台与题材|平台.*锁定/u,
+    /节奏模式|节奏.*选择|节奏.*锁定/u,
+    /风险边界|现实边界/u,
+    /对话锚点|关键锚点/u,
+  ];
+  const selected = [];
+  for (const pattern of wanted) {
+    const block = blocks.find((item) => pattern.test(item.heading));
+    if (block && !selected.includes(block)) selected.push(block);
+  }
+  const preamble = text.slice(0, Math.max(0, text.search(/^##\s+/mu)) || Math.min(text.length, 500));
+  const compact = [preamble.trim(), ...selected.map((block) => compactMarkdownBlock(block.text, 1300))]
+    .filter(Boolean)
+    .join('\n\n');
+  return boundedText(compact || text, limit);
+}
+
+function markdownLevelTwoBlocks(source) {
+  const text = String(source || '');
+  const matches = Array.from(text.matchAll(/^##\s+(.+)$/gmu));
+  return matches.map((match, index) => ({
+    heading: String(match[1] || '').trim(),
+    text: text.slice(match.index, matches[index + 1] ? matches[index + 1].index : text.length).trim(),
+  }));
+}
+
+function compactMarkdownBlock(value, limit) {
+  const text = String(value || '');
+  if (text.length <= limit) return text;
+  const head = Math.max(1, Math.floor(limit * 0.72));
+  const tail = Math.max(1, limit - head - 24);
+  return `${text.slice(0, head).trimEnd()}\n[本节中段已压缩]\n${text.slice(-tail).trimStart()}`;
+}
+
+function boundedText(value, limit) {
+  const text = String(value || '');
+  if (text.length <= limit) return text;
+  return compactMarkdownBlock(text, limit);
+}
+
 function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
+  let currentTask = task;
+  let currentExecution = execution;
   if (String(execution.status || '') !== 'running' || String(execution.stage_id || '') !== 'feedback_apply_patch') {
     return finish({ status: 'stage_action_not_applicable', actual: String(task.current_stage || ''), instruction: '读取当前 execution_command，不要重试旧阶段命令。' }, 0, args.json);
   }
@@ -227,6 +665,20 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
       continue;
     }
     if (!fs.readFileSync(stagedFile, 'utf8').trim()) empty.push(target.staged);
+    if (target.canonical === '设定.md') {
+      const characterContract = analyzeShortCharacterContract(fs.readFileSync(stagedFile, 'utf8'));
+      if (characterContract.status !== 'pass') {
+        const instruction = '只补齐暂存设定中的人物发动机、主要压力角色和关系债；不要继续改小节大纲或正文。';
+        return finish({
+          status: 'short_feedback_character_contract_revision_required',
+          planning_target: target.staged,
+          findings: characterContract.findings,
+          advisories: characterContract.advisories,
+          instruction,
+          ...stageRecoveryPresentation(task, { status: 'short_feedback_character_contract_revision_required', instruction }),
+        }, 0, args.json);
+      }
+    }
     const pollution = runJson(root, 'output-pollution-check.js', ['--check', '--json', stagedFile]);
     for (const finding of Array.isArray(pollution.findings) ? pollution.findings : []) {
       pollutionFindings.push({ target: target.staged, ...finding });
@@ -238,7 +690,7 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
       const currentState = readShortProjectState(root) || {};
       const sections = outlineSections(outlineText);
       const plannedSections = inferPlannedSections(readText(settingFile), currentState, sections);
-      const narrative = analyzeShortOutlineNarrativeQuality(outlineText, plannedSections);
+      const narrative = analyzeShortOutlineNarrativeQuality(outlineText, plannedSections, { settingText: readText(settingFile) });
       if (narrative.status !== 'pass') {
         const instruction = '只修暂存小节大纲中受影响小节的重复版本、场景行动、可见阻力、人物选择、关系变化、兑现和承接；不要进入写作提要或正文。修完后重新运行当前阶段提交命令。';
         return finish({
@@ -273,7 +725,15 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
   const existingPacket = readJson(packetFile);
   const reusableCommit = reusableFeedbackCommit(root, existingPacket, workflowId, execution, actualAssets);
   if (reusableCommit) {
-    const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+    existingPacket.memory_validation = {
+      schema_version: '1.0.0',
+      boundary: 'accepted_commit_replay',
+      status: 'accepted_transaction',
+      stage_attempt_id: String(execution.stage_attempt_id || ''),
+      accepted_commit_id: String(reusableCommit.commit_id || ''),
+    };
+    atomicWriteJson(packetFile, existingPacket);
+    const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
     const outcome = classifyWorkflowApply(applied);
     return finish({
       status: outcome.applied ? 'applied' : 'apply_blocked',
@@ -291,8 +751,12 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
       ...(outcome.applied ? {} : { recovery: outcome.result }),
     }, outcome.exitCode, args.json);
   }
-  const attempt = safeSegment(execution.stage_attempt_id || 'attempt');
-  const manifestRel = `${task.task_dir}/artifacts/planning-commits/feedback_apply_patch-${attempt}.manifest.json`;
+  const memoryValidation = validatePlanningMemoryBeforeCommit({ root, task: currentTask, execution: currentExecution, stageId: 'feedback_apply_patch' });
+  if (memoryValidation.blocking) return finish(memoryValidation.result, 0, args.json);
+  currentTask = memoryValidation.task;
+  currentExecution = memoryValidation.execution;
+  const attempt = safeSegment(currentExecution.stage_attempt_id || 'attempt');
+  const manifestRel = `${currentTask.task_dir}/artifacts/planning-commits/feedback_apply_patch-${attempt}.manifest.json`;
   const manifestFile = safeProjectFile(root, manifestRel);
   atomicWriteJson(manifestFile, {
     schemaVersion: '1.0.0',
@@ -311,7 +775,7 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
     return finish({ status: String(error.status || error.code || 'short_feedback_planning_commit_blocked'), detail: String(error.message || error), instruction: '暂存规划资产仍保留；修复提交条件后重跑同一 execution_command，不要重新生成。' }, 0, args.json);
   }
 
-  const title = inferProjectTitle(readText(path.join(root, targets[0].canonical)), task, root);
+  const title = inferProjectTitle(readText(path.join(root, targets[0].canonical)), currentTask, root);
   let projectState;
   try {
     projectState = actualAssets.includes('小节大纲.md')
@@ -325,19 +789,32 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
       instruction: '规划资产已安全提交但项目状态投影失败；修复状态后重放当前提交，不要重新生成内容。',
     }, 0, args.json);
   }
+  let characterMemory = null;
+  if (actualAssets.includes('设定.md')) {
+    characterMemory = projectShortCharacterMemory(root, { workflowId });
+    if (characterMemory.status !== 'projected') {
+      return finish({
+        status: 'short_character_memory_projection_blocked',
+        workflow_id: workflowId,
+        commit_id: String(commit.commit_id || ''),
+        character_memory: characterMemory,
+        instruction: '规划资产已安全提交，但人物记忆投影失败；修复投影后重放当前阶段，不要重新生成内容。',
+      }, 0, args.json);
+    }
+  }
 
   atomicWriteJson(packetFile, {
     workflow_id: workflowId,
-    workflow_type: String(task.workflow_type || 'short_write'),
+    workflow_type: String(currentTask.workflow_type || 'short_write'),
     stage_id: 'feedback_apply_patch',
     step_id: 'feedback_apply_patch',
-    owner_module: String(execution.owner_module || task.workflow_owner || ''),
+    owner_module: String(currentExecution.owner_module || currentTask.workflow_owner || ''),
     step_status: 'completed',
     outputs: actualAssets,
-    changed_files: [...actualAssets, '追踪/private-short-extension/project-state.json'],
+    changed_files: [...actualAssets, resolveShortStateRelative(root, 'project-state.json', { forWrite: true })],
     changed_assets: actualAssets,
     created_files: [],
-    evidence: [{ plan_id: acceptedPlan.plan_id, planning_assets: actualAssets, commit_id: String(commit.commit_id || ''), project_id: projectState.project_id, plan_revision: projectState.plan_revision }],
+    evidence: [{ plan_id: acceptedPlan.plan_id, planning_assets: actualAssets, commit_id: String(commit.commit_id || ''), project_id: projectState.project_id, plan_revision: projectState.plan_revision, character_memory: characterMemory ? characterMemory.status : 'not_applicable' }],
     verification_result: 'pass',
     blocking_findings: [],
     output_health_result: 'pass',
@@ -362,10 +839,11 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
       projection_status: String(commit.projection_status || 'projection_not_required'),
       projection_debt: String(commit.projection_status || '') === 'projection_failed',
     },
+    memory_validation: memoryValidation.receipt,
     memory_updates: [],
     result_packet_path: packetRel,
   });
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(applied);
   return finish({
     status: outcome.applied ? 'applied' : 'apply_blocked',
@@ -381,6 +859,55 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
     ...outcome.presentation,
     ...(outcome.applied ? {} : { recovery: outcome.result }),
   }, outcome.exitCode, args.json);
+}
+
+function validatePlanningMemoryBeforeCommit({ root, task, execution, stageId }) {
+  if (!execution.stage_context_packet
+      || String(((execution.memory_context || {}).context_source) || '') !== 'stage_context') {
+    return {
+      blocking: false,
+      task,
+      execution,
+      receipt: {
+        schema_version: '1.0.0',
+        boundary: 'pre_commit',
+        status: 'not_recorded',
+        stage_attempt_id: String(execution.stage_attempt_id || ''),
+      },
+    };
+  }
+  const checked = ensureCurrentShortMemoryStage({
+    projectRoot: root,
+    workflowId: String(task.workflow_id || ''),
+    task,
+    execution,
+    sectionIndex: Number(((execution.stage_context_packet || {}).section_index) || 0) || undefined,
+    stageId,
+  });
+  if (checked.blocking) {
+    return {
+      blocking: true,
+      result: recoverableStageResult(
+        task,
+        'short_planning_memory_context_refresh_required',
+        checked.instruction || '规划提交前作品记忆已变化；保留暂存规划，刷新当前阶段后复核，不要重新生成。',
+        { stale_sources: checked.stale_sources || [], memory_status: checked.memory_status || '' },
+      ),
+    };
+  }
+  return {
+    blocking: false,
+    task: checked.task,
+    execution: checked.execution,
+    receipt: {
+      schema_version: '1.0.0',
+      boundary: 'pre_commit',
+      status: 'pass',
+      stage_attempt_id: String((checked.execution || {}).stage_attempt_id || ''),
+      memory_status: String(checked.memory_status || 'not_recorded'),
+      memory_revision: String(((((checked.execution || {}).memory_context || {}).memory_read_receipt || {}).memory_revision) || ''),
+    },
+  };
 }
 
 function reusableFeedbackCommit(root, packet, workflowId, execution, expectedAssets) {
@@ -444,9 +971,9 @@ function safeSegment(value) { return String(value || '').replace(/[^A-Za-z0-9._-
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
 function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch (_) { return ''; } }
 function parseJson(value) { try { return JSON.parse(String(value || '').trim()); } catch (_) { return null; } }
-function parseArgs(argv) { const out = { projectRoot: '', workflowId: '', apply: false, json: false, help: false }; for (let index = 0; index < argv.length; index += 1) { const arg = argv[index]; if (arg === '--project-root') out.projectRoot = argv[++index] || ''; else if (arg === '--workflow-id') out.workflowId = argv[++index] || ''; else if (arg === '--apply' || arg === '--write') out.apply = true; else if (arg === '--json') out.json = true; else if (arg === '--help' || arg === '-h') out.help = true; else return usage(`unknown argument: ${arg}`); } return out; }
+function parseArgs(argv) { const out = { projectRoot: '', workflowId: '', apply: false, context: false, json: false, help: false }; for (let index = 0; index < argv.length; index += 1) { const arg = argv[index]; if (arg === '--project-root') out.projectRoot = argv[++index] || ''; else if (arg === '--workflow-id') out.workflowId = argv[++index] || ''; else if (arg === '--apply' || arg === '--write') out.apply = true; else if (arg === '--context') out.context = true; else if (arg === '--json') out.json = true; else if (arg === '--help' || arg === '-h') out.help = true; else return usage(`unknown argument: ${arg}`); } return out; }
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }
-function usage(message) { process.stderr.write(`${message}\nUsage: node short-planning-stage-finalize.js --project-root <book> --workflow-id <id> [--apply] [--json]\n`); process.exit(2); }
-function help() { process.stdout.write('Usage: node short-planning-stage-finalize.js --project-root <book> --workflow-id <id> [--apply] [--json]\n'); return 0; }
+function usage(message) { process.stderr.write(`${message}\nUsage: node short-planning-stage-finalize.js --project-root <book> --workflow-id <id> [--context] [--apply] [--json]\n`); process.exit(2); }
+function help() { process.stdout.write('Usage: node short-planning-stage-finalize.js --project-root <book> --workflow-id <id> [--context] [--apply] [--json]\n'); return 0; }
 
 process.exitCode = main();

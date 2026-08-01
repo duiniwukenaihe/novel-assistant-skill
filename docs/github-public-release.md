@@ -40,6 +40,16 @@ The publisher must never create the public branch with `switch -C` from `main`: 
 
 The script refuses to commit or push if any verification step fails.
 
+## Public File And Version Policy
+
+`config/github-public-release-files.json` is the explicit public-release policy. The existing `github/public-release` Git index is the baseline whitelist; policy fields control changes to that baseline:
+
+- `additionalFiles` authorizes new public files. A listed file that is missing from the sanitized source blocks the release.
+- `removedFiles` revokes an already published path even when the file remains on private `main`.
+- `releaseVersion` is the public version source. It must match the version shown in `README.md`, the first version in the sanitized `CHANGELOG.md`, and `skills/novel-assistant/novel-assistant-manifest.json`.
+
+Files outside the baseline and `additionalFiles` are skipped and reported; they are never copied by default. A path cannot appear in both `additionalFiles` and `removedFiles`.
+
 The sanitizer removes public-only forbidden assets:
 
 - `docs/superpowers/`
@@ -80,6 +90,7 @@ After sanitization, public workflow behavior must be:
 
 - `public-release-audit.js --json` must pass.
 - `production-smoke-matrix.js --json` must pass on the sanitized worktree.
+- `bats tests/test-short-workflow-production-e2e.bats` must complete the public short-writing production loop.
 - `workflow-state-machine.js templates --json` must report `privateRegistryCount=0`.
 - `short_write` may use `story-workflow` for control stages; every professional short-form stage must use public `story-short-write`.
 - `private_short_startup` must not exist in public templates.
@@ -87,6 +98,8 @@ After sanitization, public workflow behavior must be:
 - `privateInternalSkillCount` must be `0`.
 - public entry/router/workflow/short-write bundle files must exist.
 - `git diff --check` must pass.
+
+`--skip-runtime-verify` is available only for an uncommitted diagnostic preview. The publisher rejects it together with `--commit` or `--push`, so production artifacts cannot bypass smoke, E2E, registry, or owner gates.
 
 This is deliberately stricter than “clean enough to push”: the GitHub branch must be installable and routable as a public `novel-assistant` package.
 

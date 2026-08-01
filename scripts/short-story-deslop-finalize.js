@@ -13,6 +13,7 @@ const { resolvePlannedSectionCount } = require('./lib/short-workflow-state');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
+const { readShortProjectState, resolveShortStateRelative, shortStateFile } = require('./lib/short-project-state');
 
 const VOLUME = '短篇发布稿';
 
@@ -87,8 +88,8 @@ function main() {
   }
 
   if (!args.apply) return finish({ status: 'short_deslop_ready', visible_status: { code: 'expression_cleanup_ready', label: preservation.status === 'explicit_exception' ? '去 AI 后保真可提交（已记录结构例外）' : '去 AI 后保真通过' }, staged_target: stagedRel, canonical_sha256: hashText(text), preservation }, 0, args.json);
-  const projectStateFile = path.join(root, '追踪/private-short-extension/project-state.json');
-  const projectState = readJson(projectStateFile) || {};
+  const projectStateFile = shortStateFile(root, 'project-state.json', { forWrite: true });
+  const projectState = readShortProjectState(root) || {};
   const acceptedByIndex = new Map((Array.isArray(projectState.accepted_sections) ? projectState.accepted_sections : [])
     .map((item) => [Number((item || {}).section_index), { ...(item || {}) }]));
   const projectedFiles = [];
@@ -106,7 +107,7 @@ function main() {
     } catch (error) {
       return finish({ status: String(error.status || 'short_deslop_section_commit_blocked'), section_index: section.section_index, detail: String(error.message || error), instruction: '已完成的逐节提交可安全复用；修复当前提交条件后重跑 execution_command，不要重新去 AI。' }, 0, args.json);
     }
-    const anchorRel = `追踪/private-short-extension/section-${String(section.section_index).padStart(3, '0')}-anchor.json`;
+    const anchorRel = resolveShortStateRelative(root, `section-${String(section.section_index).padStart(3, '0')}-anchor.json`, { forWrite: true });
     const anchorFile = safeProjectFile(root, anchorRel);
     const anchor = readJson(anchorFile) || {};
     atomicWriteJson(anchorFile, {
@@ -136,7 +137,7 @@ function main() {
     accepted_sections: [...acceptedByIndex.values()].sort((a, b) => Number(a.section_index) - Number(b.section_index)),
     expression_revision_at: new Date().toISOString(),
   });
-  projectedFiles.push('追踪/private-short-extension/project-state.json');
+  projectedFiles.push(resolveShortStateRelative(root, 'project-state.json', { forWrite: true }));
   const artifactDir = `${task.task_dir}/artifacts/short-deslop-commit`;
   const manifestRel = `${artifactDir}/manifest.json`;
   atomicWriteJson(safeProjectFile(root, manifestRel), {
@@ -186,8 +187,8 @@ function main() {
 
 function plannedSections(root) {
   return resolvePlannedSectionCount({
-    projectState: readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {},
-    titleLock: readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {},
+    projectState: readShortProjectState(root) || {},
+    titleLock: readJson(shortStateFile(root, 'section-title-lock.json')) || {},
     outlineText: readText(path.join(root, '小节大纲.md')),
   });
 }
@@ -203,7 +204,7 @@ function splitSections(text) {
 }
 function runJson(root, script, argv) { const run = spawnSync(process.execPath, [path.join(__dirname, script), ...argv], { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }); return parseJson(run.stdout) || { status: 'checker_failed', findings: [{ type: script, message: String(run.stderr || '').trim().slice(0, 500) }] }; }
 function matchingCommit(root, workflowId, text) { const commit = (inspectChapter(root, VOLUME, 1) || {}).latest_commit; if (!commit || String(commit.workflow_id || '') !== workflowId) return null; const hash = hashText(text); const artifact = (commit.artifacts || []).find((item) => String(item.target || '') === '正文.md'); return artifact && normalizeHash(artifact.after_hash || artifact.content_hash) === hash && fs.existsSync(path.join(root, '正文.md')) && hashFile(path.join(root, '正文.md')) === hash ? commit : null; }
-function applyResult(root, workflowId, packetFile, packetRel, json) { const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }); const outcome = classifyWorkflowApply(run); const result = outcome.result; return finish({ status: outcome.applied ? 'applied' : 'apply_blocked', workflow_status: outcome.workflowStatus, workflow_id: workflowId, result_packet: packetRel, next_stage: String(result.current_stage || ((result.task || {}).current_stage) || ''), ...outcome.presentation, ...(outcome.applied ? {} : { recovery: result }) }, outcome.exitCode, json); }
+function applyResult(root, workflowId, packetFile, packetRel, json) { const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }); const outcome = classifyWorkflowApply(run); const result = outcome.result; return finish({ status: outcome.applied ? 'applied' : 'apply_blocked', workflow_status: outcome.workflowStatus, workflow_id: workflowId, result_packet: packetRel, next_stage: String(result.current_stage || ((result.task || {}).current_stage) || ''), ...outcome.presentation, ...(outcome.applied ? {} : { recovery: result }) }, outcome.exitCode, json); }
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file !== root && file.startsWith(`${root}${path.sep}`) ? file : ''; }
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }

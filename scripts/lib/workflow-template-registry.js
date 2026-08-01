@@ -4,6 +4,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { isShortWorkflowType } = require('./short-workflow-types');
 
 const SCRIPT_DIR = path.resolve(__dirname, '..');
 
@@ -67,6 +68,13 @@ const SHORT_STAGE_CONTEXT_MEMORY = new Set([
   'full_story_review',
 ]);
 const DETERMINISTIC_NO_MEMORY_STAGES = new Set([
+  'startup_scan',
+  'startup_menu',
+  'freshness_window',
+  'info_source_pool',
+  'info_source_selection',
+  'material_learning',
+  'project_seed',
   'section_machine_gate',
   'full_story_assembly',
   'short_deslop',
@@ -96,6 +104,63 @@ const WORKFLOW_MEMORY_BUDGETS = Object.freeze({
   setup_update: 0,
 });
 
+const AUTHOR_PHASES = Object.freeze({
+  short_startup: [
+    ['material', '资讯 / 素材 / 脑洞卡', ['project_type_lock', 'material_source_choice', 'material_card'], 'material_card'],
+    ['setting', '设定与人物', ['short_setting', 'platform_genre_lock'], 'short_setting'],
+    ['outline', '节奏与全篇小节大纲', ['rhythm_pattern_selection', 'section_outline', 'section_plan_lock'], 'section_plan_lock'],
+    ['brief', '当前节 Brief', ['first_section_brief', 'start_ready_handoff'], 'first_section_brief'],
+  ],
+  short_write: [
+    ['material', '资讯 / 素材 / 脑洞卡', ['startup_scan', 'startup_menu', 'freshness_window', 'info_source_pool', 'info_source_selection', 'material_learning', 'project_seed', 'project_type_lock', 'material_source_choice', 'material_card'], ['startup_menu', 'freshness_window', 'info_source_selection', 'material_learning', 'material_card', 'project_seed']],
+    ['setting', '设定与人物', ['short_setting', 'platform_genre_lock'], 'short_setting'],
+    ['outline', '节奏与全篇小节大纲', ['rhythm_pattern_selection', 'section_outline', 'section_plan_lock', 'short_structure_impact_audit', 'hook_value_gate', 'hook_retention_gate'], 'section_plan_lock'],
+    ['brief', '当前节 Brief', ['first_section_brief', 'section_brief', 'next_section_brief'], ['first_section_brief', 'section_brief', 'next_section_brief']],
+    ['draft', '只写当前节', ['draft_first_section', 'draft_section', 'draft_next_section'], ['draft_first_section', 'draft_section', 'draft_next_section']],
+    ['acceptance', '双门验收与采用', ['section_machine_gate', 'section_repair_loop', 'quality_gate', 'story_value_gate', 'section_candidate_compare', 'section_accept_anchor', 'feedback_impact_sync', 'feedback_apply_patch'], ['section_candidate_compare', 'section_accept_anchor', 'feedback_apply_patch']],
+    ['publish', '合稿 / 精修 / 发布检查', ['short_review', 'full_story_assembly', 'full_story_review', 'short_deslop', 'deslop', 'final_check'], 'final_check'],
+  ],
+  long_startup: [
+    ['core', '故事核心', ['project_type_lock', 'market_positioning', 'core_promise', 'character_design', 'plot_engine'], 'plot_engine'],
+    ['master_outline', '总纲', ['macro_outline'], 'macro_outline'],
+    ['volume_outline', '卷纲', ['volume_outline'], 'volume_outline'],
+    ['detail_outline', '阶段细纲', ['first_detail_outline', 'start_ready_handoff'], 'first_detail_outline'],
+  ],
+  long_write: [
+    ['core', '故事核心', ['positioning', 'story_bible'], 'story_bible'],
+    ['master_outline', '总纲', ['master_outline', 'master_outline_review'], 'master_outline_review'],
+    ['volume_outline', '卷纲', ['volume_outline', 'volume_outline_review'], 'volume_outline_review'],
+    ['detail_outline', '阶段细纲', ['stage_detail_outline', 'detail_outline_review'], 'detail_outline_review'],
+    ['brief', '章节 Brief', ['chapter_brief', 'brief_review'], 'brief_review'],
+    ['prose', '正文与验收', ['prose', 'prose_acceptance'], 'prose_acceptance'],
+    ['commit', '人物 / 伏笔 / 时间线提交', ['chapter_commit'], 'chapter_commit'],
+    ['handoff', '复盘与跨卷交接', ['milestone_review', 'volume_acceptance', 'book_acceptance'], 'book_acceptance'],
+  ],
+});
+
+function authorPhaseForStage(workflowType, stageDef) {
+  const stageId = String((stageDef || {}).stage_id || '');
+  const phases = AUTHOR_PHASES[workflowType] || [];
+  const phaseIndex = phases.findIndex(([, , stageIds]) => stageIds.includes(stageId));
+  const match = phaseIndex >= 0 ? phases[phaseIndex] : null;
+  if (!match) {
+    return {
+      id: stageId || 'workflow',
+      label: String((stageDef || {}).label || stageId || '当前阶段'),
+      order: 999,
+      visibility: 'decision',
+    };
+  }
+  const [id, label, stageIds, decisionStage] = match;
+  const decisionStages = Array.isArray(decisionStage) ? decisionStage : [decisionStage];
+  return {
+    id,
+    label,
+    order: phaseIndex + 1,
+    visibility: decisionStages.includes(stageId) && Boolean((stageDef || {}).requires_user_confirm) ? 'decision' : 'internal',
+  };
+}
+
 function memoryNeedsForStage(workflowType, stageDef) {
   if (NO_STORY_MEMORY_WORKFLOWS.has(workflowType)) return [];
   if (/(?:scan|cover|setup)/u.test(workflowType)) return ['user_preferences'];
@@ -118,7 +183,7 @@ function memoryNeedsForStage(workflowType, stageDef) {
 function stageMemoryContract(workflowType, stageDef) {
   const noMemory = NO_STORY_MEMORY_WORKFLOWS.has(workflowType);
   const deterministicNoMemory = DETERMINISTIC_NO_MEMORY_STAGES.has(String(stageDef.stage_id || ''));
-  const shortStageContext = ['short_write', 'short_startup', 'private_short_startup'].includes(workflowType)
+  const shortStageContext = isShortWorkflowType(workflowType)
     && SHORT_STAGE_CONTEXT_MEMORY.has(String(stageDef.stage_id || ''));
   const readMode = noMemory || deterministicNoMemory
     ? 'none'
@@ -188,7 +253,8 @@ function stageTransitionContract(stageDef) {
   };
 }
 
-function stageInteractionContract(stageDef) {
+function stageInteractionContract(workflowType, stageDef) {
+  const authorPhase = authorPhaseForStage(workflowType, stageDef);
   return {
     menu_style: 'numbered_1_4',
     expose_as_top_level_task: false,
@@ -196,6 +262,9 @@ function stageInteractionContract(stageDef) {
     chat_interruptible: true,
     show_progress_after_stage: true,
     confirmation_boundary: stageDef.requires_user_confirm ? 'before_canonical_write' : 'stage_contract',
+    author_phase: authorPhase,
+    author_visibility: authorPhase.visibility,
+    auto_continue_within_author_phase: authorPhase.visibility === 'internal',
   };
 }
 
@@ -218,7 +287,7 @@ function ensureTemplateMemoryContracts(templateDef) {
       allowed_next: Array.isArray(stageDef.allowed_next) ? stageDef.allowed_next.slice() : [],
     },
     interaction_contract: {
-      ...stageInteractionContract(stageDef),
+      ...stageInteractionContract(workflowType, stageDef),
       ...(stageDef.interaction_contract && typeof stageDef.interaction_contract === 'object'
         ? cloneJson(stageDef.interaction_contract)
         : {}),
@@ -230,10 +299,10 @@ function ensureTemplateMemoryContracts(templateDef) {
 
 const BASE_TEMPLATES = {
   long_startup: template('long_startup', 'stage_then_confirm', false, [
-    stage('project_type_lock', 'story-workflow', [], ['market_positioning'], true, 'low', '确认新书类型、目标平台、题材方向、目标读者、篇幅和是否使用对标/拆文素材；不得直接写正文。'),
-    stage('market_positioning', 'story-long-write', ['project_type_lock'], ['core_promise'], true, 'medium', '完成市场定位、题材卖点、读者承诺和差异化判断。'),
-    stage('core_promise', 'story-long-write', ['market_positioning'], ['character_design'], true, 'medium', '锁定核心设定、金手指/核心能力、主线承诺、爽点承诺和不可偏离边界。'),
-    stage('character_design', 'story-long-write', ['core_promise'], ['plot_engine'], true, 'medium', '设计主角、关键配角、反派、关系压力、人物不变量和成长曲线。'),
+    stage('project_type_lock', 'story-workflow', [], ['market_positioning'], false, 'low', '在故事核心阶段内部整理新书类型、目标平台、题材方向、目标读者、篇幅和对标素材；存在真实歧义时才询问作者。'),
+    stage('market_positioning', 'story-long-write', ['project_type_lock'], ['core_promise'], false, 'medium', '在故事核心阶段内部完成市场定位、题材卖点、读者承诺和差异化判断。'),
+    stage('core_promise', 'story-long-write', ['market_positioning'], ['character_design'], false, 'medium', '在故事核心阶段内部锁定核心设定、金手指/核心能力、主线承诺、爽点承诺和不可偏离边界。'),
+    stage('character_design', 'story-long-write', ['core_promise'], ['plot_engine'], false, 'medium', '在故事核心阶段内部设计主角发动机、关键配角独立欲望、主要压力角色、关系债、能力边界和跨阶段成长里程碑。'),
     stage('plot_engine', 'story-long-write', ['character_design'], ['macro_outline'], true, 'medium', '设计剧情引擎、冲突循环、钩子债表、升级节奏和长期可写性。'),
     stage('macro_outline', 'story-long-write', ['plot_engine'], ['volume_outline'], true, 'medium', '形成全书总纲、主线阶段、关键节点、卷级目标和风险点。'),
     stage('volume_outline', 'story-long-write', ['macro_outline'], ['first_detail_outline'], true, 'medium', '生成第一卷卷纲、卷内节奏、爆点安排、人物状态推进和卷尾承诺。'),
@@ -254,10 +323,10 @@ const BASE_TEMPLATES = {
     stage('project_type_lock', 'story-workflow', [], ['material_source_choice'], true, 'low', '确认短篇目标平台、题材、目标情绪、是否从脑洞卡/素材库/新鲜素材进入；不得直接写正文。'),
     stage('material_source_choice', 'story-short-write', ['project_type_lock'], ['material_card'], true, 'low', '选择素材来源：检查未完成短篇、抓取或学习新鲜素材、从已有素材开写、审阅或回炉已有短篇。'),
     stage('material_card', 'story-short-write', ['material_source_choice'], ['short_setting'], true, 'medium', '形成素材卡/脑洞卡，锁定标题承诺、现实入口、爆点、反转、风险和可写路线。'),
-    stage('short_setting', 'story-short-write', ['material_card'], ['platform_genre_lock'], true, 'medium', '生成短篇设定：人物、关系、动机、真实场景、核心冲突、情绪债和结尾价值。'),
-    stage('platform_genre_lock', 'story-short-write', ['short_setting'], ['rhythm_pattern_selection'], true, 'medium', '一次只确认一个目标平台配置和一张题材方法卡，锁定开篇承诺、阅读停顿、结尾兑现、证据来源与可信度；确认前可继续聊天、纠偏或换方向，不写小纲或正文。'),
-    stage('rhythm_pattern_selection', 'story-short-write', ['platform_genre_lock'], ['section_outline'], true, 'medium', '选择短篇节奏套路、爽点类型、反转方式和钩子兑现。'),
-    stage('section_outline', 'story-short-write', ['rhythm_pattern_selection'], ['section_plan_lock'], true, 'medium', '生成小节大纲；每节必须同时锁定上一节钩子承接、压力变化、场景动作、可见阻力、角色选择、本节兑现、关系变化、代价与新钩子。连续查表/看文件不算剧情。'),
+    stage('short_setting', 'story-short-write', ['material_card'], ['platform_genre_lock'], true, 'medium', '生成并验收短篇人物合同：主角发动机、压力角色、关系债、能力边界、真实场景、核心冲突、情绪债和结尾价值。'),
+    stage('platform_genre_lock', 'story-short-write', ['short_setting'], ['rhythm_pattern_selection'], false, 'medium', '在已确认设定内补齐目标平台与题材方法，不形成新的作者停靠点；存在平台歧义时才返回设定与人物阶段询问。'),
+    stage('rhythm_pattern_selection', 'story-short-write', ['platform_genre_lock'], ['section_outline'], false, 'medium', '在全篇大纲阶段内部选择短篇节奏套路、爽点类型、反转方式和钩子兑现。'),
+    stage('section_outline', 'story-short-write', ['rhythm_pattern_selection'], ['section_plan_lock'], false, 'medium', '生成小节大纲；每节必须同时锁定上一节钩子承接、压力变化、场景动作、可见阻力、角色选择、本节兑现、关系变化、代价与新钩子。连续查表/看文件不算剧情。'),
     stage('section_plan_lock', 'story-short-write', ['section_outline'], ['first_section_brief'], true, 'medium', '锁定总小节数、发布形态、当前第 1 节目标、全篇小节标题与扩容/缩容规则。标题必须展示给用户确认，无标题也要明确锁定。'),
     stage('first_section_brief', 'story-short-write', ['section_plan_lock'], ['start_ready_handoff'], true, 'medium', '生成第 1 节 Brief，锁定视角、人物称谓、场景物件、主动动作、节尾钩子和禁写漂移点；逐项映射第 1 节大纲合同的稳定 ID，不得临场改剧情。'),
     stage('start_ready_handoff', 'story-workflow', ['first_section_brief'], [], false, 'low', '输出开写前交接包：下一步进入短篇正文小节 workflow，而不是在启动流程里直接写正文。'),
@@ -288,15 +357,15 @@ const BASE_TEMPLATES = {
   })),
   long_write: template('long_write', 'stage_then_confirm', false, [
     longformStage('positioning', 'story-long-write', [], ['story_bible'], false, 'low', '锁定平台、读者、题材、核心卖点和预期体量。'),
-    longformStage('story_bible', 'story-long-write', ['positioning'], ['master_outline'], false, 'medium', '建立故事核心、人物不变量、世界规则和持续剧情引擎。'),
+    longformStage('story_bible', 'story-long-write', ['positioning'], ['master_outline'], false, 'medium', '建立并验收故事核心、人物发动机、关系债、跨卷成长里程碑、世界规则和持续剧情引擎。'),
     longformStage('master_outline', 'story-long-write', ['story_bible'], ['master_outline_review'], false, 'medium', '设计全书主线、阶段、成长、升级和结局兑现。'),
-    longformStage('master_outline_review', 'story-review', ['master_outline'], ['master_outline', 'volume_outline'], false, 'medium', '审阅总纲的故事核、因果链、长期承诺和可持续性。'),
+    longformStage('master_outline_review', 'story-review', ['master_outline'], ['master_outline', 'volume_outline'], true, 'medium', '审阅总纲的故事核、因果链、长期承诺和可持续性；通过后由作者确认总纲。'),
     longformStage('volume_outline', 'story-long-write', ['master_outline_review'], ['volume_outline_review'], false, 'medium', '设计当前卷目标、阻力、代价、人物变化和跨卷承接。'),
-    longformStage('volume_outline_review', 'story-review', ['volume_outline'], ['volume_outline', 'stage_detail_outline'], false, 'medium', '审阅当前卷对总纲的贡献及上下卷接口。'),
+    longformStage('volume_outline_review', 'story-review', ['volume_outline'], ['volume_outline', 'stage_detail_outline'], true, 'medium', '审阅当前卷对总纲的贡献及上下卷接口；通过后由作者确认卷纲。'),
     longformStage('stage_detail_outline', 'story-long-write', ['volume_outline_review'], ['detail_outline_review'], false, 'medium', '按剧情阶段设计连续事件、因果、冲突升级和回收位置。'),
-    longformStage('detail_outline_review', 'story-review', ['stage_detail_outline'], ['stage_detail_outline', 'chapter_brief'], false, 'medium', '审阅阶段细纲的基础可写性和按风险激活的专业维度。', 'detail_outline_quality_v1'),
+    longformStage('detail_outline_review', 'story-review', ['stage_detail_outline'], ['stage_detail_outline', 'chapter_brief'], true, 'medium', '审阅阶段细纲的基础可写性和按风险激活的专业维度；通过后由作者确认当前阶段细纲。', 'detail_outline_quality_v1'),
     longformStage('chapter_brief', 'story-long-write', ['detail_outline_review'], ['brief_review'], false, 'medium', '锁定当前章节的视角、场景目标、阻力、动作、信息和承接。'),
-    longformStage('brief_review', 'story-review', ['chapter_brief'], ['chapter_brief', 'prose'], false, 'medium', '确认 Brief 可写、与细纲一致且不把关键剧情留给正文临场生成。'),
+    longformStage('brief_review', 'story-review', ['chapter_brief'], ['chapter_brief', 'prose'], true, 'medium', '确认 Brief 可写、与细纲一致且不把关键剧情留给正文临场生成；通过后由作者决定是否开始当前章正文。'),
     longformStage('prose', 'story-long-write', ['brief_review'], ['prose_acceptance'], true, 'high', '只生产已通过 Brief 的当前章节正文候选。'),
     longformStage('prose_acceptance', 'story-review', ['prose'], ['prose', 'chapter_commit'], false, 'medium', '执行当前正文的机器质量门和创作质量门。'),
     longformStage('chapter_commit', 'story-workflow', ['prose_acceptance'], ['chapter_brief', 'milestone_review'], false, 'high', '原子接受正文和事实增量，并投影到追踪与记忆。'),
@@ -325,9 +394,9 @@ const BASE_TEMPLATES = {
     stage('project_type_lock', 'story-workflow', [], ['material_source_choice'], true, 'low', '确认短篇目标平台、题材、目标情绪和素材入口；不得直接写正文。'),
     stage('material_source_choice', 'story-short-write', ['project_type_lock'], ['material_card'], true, 'low', '选择检查现有素材、使用已有素材、学习新鲜素材或直接输入脑洞。'),
     stage('material_card', 'story-short-write', ['material_source_choice'], ['short_setting'], false, 'low'),
-    stage('short_setting', 'story-short-write', ['material_card'], ['platform_genre_lock'], false, 'medium'),
-    stage('platform_genre_lock', 'story-short-write', ['short_setting'], ['rhythm_pattern_selection'], true, 'medium', '一次只确认一个目标平台配置和一张题材方法卡，锁定开篇承诺、阅读停顿、结尾兑现、证据来源与可信度；确认前可继续聊天、纠偏或换方向，只更新设定与大纲元数据。'),
-    stage('rhythm_pattern_selection', 'story-short-write', ['platform_genre_lock'], ['section_outline'], true, 'medium', '在平台题材契约确认后，选择短篇主节奏/辅节奏、爽点套路、反转方式和兑现方式；至少覆盖爽文打脸、公开审判、亲情断亲、追妻火葬场、死人文学、规则怪谈、身份反转、重生复仇等候选，并写入设定.md。'),
+    stage('short_setting', 'story-short-write', ['material_card'], ['platform_genre_lock'], true, 'medium', '先生成紧凑的人物与剧情设定候选，展示主角发动机、关键人物独立利益、关系债、核心冲突、三级升级、关键反转和结局兑现；作者确认或通过 Chat 调整后，才扩写并受控写入设定.md。'),
+    stage('platform_genre_lock', 'story-short-write', ['short_setting'], ['rhythm_pattern_selection'], false, 'medium', '在已确认设定内补齐目标平台和题材方法，不形成新的作者停靠点；只有平台或题材存在真实歧义时，才返回设定与人物阶段询问。'),
+    stage('rhythm_pattern_selection', 'story-short-write', ['platform_genre_lock'], ['section_outline'], false, 'medium', '在全篇大纲阶段内部选择短篇主节奏/辅节奏、爽点套路、反转方式和兑现方式；至少覆盖爽文打脸、公开审判、亲情断亲、追妻火葬场、死人文学、规则怪谈、身份反转、重生复仇等候选。'),
     stage('section_outline', 'story-short-write', ['rhythm_pattern_selection'], ['section_plan_lock'], false, 'medium', '生成并验收小节故事引擎：上一节钩子承接、压力变化、场景动作、可见阻力、角色选择、本节兑现、关系变化和代价必须齐全；重复钩子/兑现或另起无关调查线均阻断；高潮兑现核心承诺，结尾落责任后果。'),
     stage('section_plan_lock', 'story-short-write', ['section_outline'], ['short_structure_impact_audit'], true, 'medium', '锁定短篇总小节数、目标字数带、发布形态、每节功能、小节标题、当前节序号和全篇完成分支；标题必须展示并取得用户确认，无标题也要明确锁定。未确定总小节/完成条件/标题锁，不得进入 Brief 或正文。扩容、缩容、插节、合并、删节和重排必须回到这里。'),
     stage('short_structure_impact_audit', 'story-short-write', ['section_plan_lock'], ['hook_value_gate'], false, 'medium', '检查扩容/缩容/插节/合并/删节/重排对素材卡、设定、节奏套路、小节大纲、已生成 Brief、采用锚点、候选稿、正文索引和发布合并稿的影响；输出保留/失效/重算清单，通过后才进入看点价值门。'),
@@ -340,7 +409,7 @@ const BASE_TEMPLATES = {
     stage('feedback_impact_sync', 'story-workflow', [], ['feedback_apply_patch'], false, 'medium', '只读分析用户反馈影响层级：表达层、当前 Brief、规划层或结构层；输出受影响文件、保留项、失效项、重算项、建议回写顺序，以及 revision_groups（每组目标、小节范围、完成条件），不直接修改正文或规划资产。影响两个及以上小节、跨节钩子、压力曲线或高潮/结尾职责时必须先回受影响范围的小节大纲，不得从 Brief 或正文补写开始；只展示 workflow 返回的作者选项，不发明命令。'),
     stage('feedback_apply_patch', 'story-short-write', ['feedback_impact_sync'], ['section_repair_loop', 'section_brief', 'short_setting', 'section_outline', 'section_plan_lock'], true, 'high', '按已确认的影响计划回写：表达层只修当前节；当前节故事调整先重建 Brief；人物动机、关键因果、反转、节奏或后续承接冲突先更新设定/小节大纲并使旧 Brief 失效；扩缩容、插节、合并、删节或重排先回计划锁定和结构影响审计。跨节回写必须继承 revision_groups，供作者查看阶段目标并逐节推进。'),
     stage('section_accept_anchor', 'story-short-write', ['story_value_gate'], ['next_section_brief', 'full_story_assembly'], true, 'medium', '采用当前小节为 canonical 正文，记录小节摘要、人物状态、承接钩子、质量门结果、当前节序号和剩余小节；未写锚点不得生成下一节。若总小节已完成，进入全篇组装。'),
-    stage('next_section_brief', 'story-short-write', ['section_accept_anchor'], ['draft_section'], false, 'medium', '自动生成下一小节 Brief，读取已采用小节锚点、正文末尾、用户反馈和质量债，并校验作品内篇幅基准；明显偏离时调整目标或记录结构例外理由。生成后停在正文写前确认，不自动写正文。'),
+    stage('next_section_brief', 'story-short-write', ['section_accept_anchor'], ['draft_next_section'], false, 'medium', '自动生成下一小节 Brief，读取已采用小节锚点、正文末尾、用户反馈和质量债，并校验作品内篇幅基准；明显偏离时调整目标或记录结构例外理由。生成后停在正文写前确认，不自动写正文。'),
     stage('full_story_assembly', 'story-short-write', ['section_accept_anchor'], ['full_story_review'], false, 'medium', '确认所有计划小节均已采用，合并/整理正文.md，生成全篇节序索引、缺节检查、节尾承接检查和发布前完整稿。'),
     stage('full_story_review', 'story-review', ['full_story_assembly'], ['deslop', 'feedback_impact_sync'], false, 'medium', '执行一次全篇总编辑验收：开篇场景化与信息负载、小节功能/篇幅曲线、配角主动性、对手动机、主角身份效用、高潮跑道、结尾后果和标题承诺必须引用正文证据。通过后进入表达清理；需要回炉时把问题交给反馈影响链，先确认规划回写范围，不直接改正文。'),
     stage('deslop', 'story-short-write', ['full_story_review'], ['final_check'], false, 'medium', '只在故事层可进入表达清理后处理 AI 套话、重复解释、工程词和标点；提交前必须比较去 AI 前后逐节篇幅与全篇删损。显著删损时只补回动作、反应、后果和承接，不按字数差额机械灌水。'),
@@ -607,12 +676,12 @@ function registryRoots(extraRoot, noDefaultRoots) {
   const includeInstalledPrivateRoots = !sourceCheckoutMode || Boolean(envSkillDir);
   const sourcePrivateRoot = path.join(SCRIPT_DIR, '..', 'src', 'private-internal-skills');
   const roots = sourceCheckoutMode ? [
+    sourcePrivateRoot,
     path.join(SCRIPT_DIR, '..', 'skills', 'novel-assistant', 'references', 'private-internal-skills'),
     path.join(SCRIPT_DIR, '..', 'references', 'private-internal-skills'),
     envSkillDir ? path.join(envSkillDir, 'references', 'private-internal-skills') : '',
     includeInstalledPrivateRoots ? path.join(home, '.codex', 'skills', 'novel-assistant', 'references', 'private-internal-skills') : '',
     includeInstalledPrivateRoots ? path.join(home, '.claude', 'skills', 'novel-assistant', 'references', 'private-internal-skills') : '',
-    sourcePrivateRoot,
   ] : [
     sourcePrivateRoot,
     path.join(SCRIPT_DIR, '..', 'skills', 'novel-assistant', 'references', 'private-internal-skills'),
@@ -902,6 +971,7 @@ module.exports = {
   buildEffectiveTemplates,
   ensureTemplateMemoryContracts,
   resolveTemplateForTask,
+  registryRoots,
   stageMemoryContract,
   validateWorkflowExtensionCoverage,
   unitLifecycle,

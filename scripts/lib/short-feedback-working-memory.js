@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const { appendJsonl } = require('./workflow-state-store');
 
+const IMPACT_LEVEL_ORDER = ['expression_only', 'current_brief', 'planning', 'structure'];
+
 function enqueueShortFeedback(projectRoot, task, input, options = {}) {
   const root = path.resolve(projectRoot);
   const text = String(input || '').trim();
@@ -16,10 +18,8 @@ function enqueueShortFeedback(projectRoot, task, input, options = {}) {
   let items = previous.items;
   const duplicate = items.find(item => item.content_hash === contentHash);
   if (!duplicate) {
-    const impact = promoteFeedbackImpact(
-      inferFeedbackImpact(text, options.classification),
-      options.minimumImpactLevel,
-    );
+    const resolved = resolveFeedbackImpact(text, options);
+    const impact = promoteFeedbackImpact(resolved, options.minimumImpactLevel);
     const item = {
       feedback_id: `feedback-${contentHash.slice(0, 16)}`,
       content_hash: contentHash,
@@ -27,6 +27,9 @@ function enqueueShortFeedback(projectRoot, task, input, options = {}) {
       classification: String(options.classification || 'current_artifact_feedback'),
       impact_level_hint: impact.impact_level,
       affected_assets_hint: impact.affected_assets,
+      inference_source: impact.inference_source,
+      classification_reason: impact.classification_reason,
+      reclassify_advisory: impact.reclassify_advisory,
       section_index: positiveInteger(options.sectionIndex),
       scope_snapshot: String(options.scopeSnapshot || task.scope || ''),
       scope_mode: String(options.scopeMode || ''),
@@ -48,11 +51,41 @@ function enqueueShortFeedback(projectRoot, task, input, options = {}) {
   return { status: duplicate ? 'duplicate_feedback_retained' : 'feedback_queued', pending_feedback: pending };
 }
 
+// 优先采用调用方/模型显式声明的影响级别；正则推断退为 fallback。
+// 低置信度（正则 fallback 命中 expression_only 但文本含人物/动机等 planning 关键词）
+// 标记 reclassify_advisory，让上层模型/用户确认，不硬 block。
+function resolveFeedbackImpact(text, options = {}) {
+  const explicit = String(options.explicitImpactLevel || '').trim();
+  if (IMPACT_LEVEL_ORDER.includes(explicit)) {
+    return {
+      impact_level: explicit,
+      affected_assets: inferFeedbackImpact(text, options.classification).affected_assets,
+      inference_source: 'model_explicit',
+      classification_reason: String(options.classificationReason || ''),
+      reclassify_advisory: false,
+    };
+  }
+  const inferred = inferFeedbackImpact(text, options.classification);
+  const reason = String(options.classificationReason || '');
+  const advisory = inferred.impact_level === 'expression_only'
+    && RECLASSIFY_KEYWORDS.test(String(text || ''));
+  return {
+    impact_level: inferred.impact_level,
+    affected_assets: inferred.affected_assets,
+    inference_source: 'keyword_fallback',
+    classification_reason: reason,
+    reclassify_advisory: advisory,
+  };
+}
+
+const RECLASSIFY_KEYWORDS = /人物|动机|关系|转变|成长|弧光/u;
+
 function promoteFeedbackImpact(impact, minimumImpactLevel) {
-  const order = ['expression_only', 'current_brief', 'planning', 'structure'];
+  const order = IMPACT_LEVEL_ORDER;
   const minimum = String(minimumImpactLevel || '');
   if (!order.includes(minimum) || order.indexOf(impact.impact_level) >= order.indexOf(minimum)) return impact;
   return {
+    ...impact,
     impact_level: minimum,
     affected_assets: minimum === 'current_brief' ? ['写作Brief', '正文'] : impact.affected_assets,
   };
@@ -170,6 +203,11 @@ function resolveShortFeedback(projectRoot, task, result = {}) {
 
 function inferFeedbackImpact(text, classification = '') {
   const value = String(text || '');
+  const titleOnly = /(标题|改名|命名)/u.test(value)
+    && !/(剧情|情节|结构|反转|结局|人物|动机|关系|增删|合并|拆分|重排|扩容|缩容).{0,8}(变化|调整|修改|重写|一起|同时)|改标题.{0,8}(并|同时).{0,8}(改|调整|重写)/u.test(value.replace(/剧情不要变化|情节不要变化|不改剧情|不改情节/gu, ''));
+  if (titleOnly) {
+    return { impact_level: 'expression_only', affected_assets: ['小节大纲.md', 'section-title-lock.json'] };
+  }
   if (/(增加|删除|合并|拆分|重排|扩容|缩容).{0,8}(节|小节)|节数|章节数量/u.test(value)) {
     return { impact_level: 'structure', affected_assets: ['设定.md', '小节大纲.md'] };
   }
@@ -195,6 +233,9 @@ function normalizePendingItems(pending) {
         classification: String(pending.classification || 'current_artifact_feedback'),
         impact_level_hint: String(pending.impact_hint || inferFeedbackImpact(pending.text).impact_level),
         affected_assets_hint: Array.isArray(pending.affected_assets_hint) ? pending.affected_assets_hint : inferFeedbackImpact(pending.text).affected_assets,
+        inference_source: 'keyword_fallback',
+        classification_reason: '',
+        reclassify_advisory: false,
         section_index: positiveInteger(pending.section_index),
         scope_snapshot: String(pending.scope_snapshot || ''),
         source_kind: 'user_message',
@@ -203,7 +244,13 @@ function normalizePendingItems(pending) {
       }]
       : [];
   return {
-    items: source.map(item => ({ ...item, content_hash: String(item.content_hash || digest(item.text)) })),
+    items: source.map(item => ({
+      ...item,
+      content_hash: String(item.content_hash || digest(item.text)),
+      inference_source: String(item.inference_source || 'keyword_fallback'),
+      classification_reason: String(item.classification_reason || ''),
+      reclassify_advisory: item.reclassify_advisory === true,
+    })),
     previous_stage: String(pending.previous_stage || ''),
     section_index: positiveInteger(pending.section_index),
     first_received_at: String(pending.first_received_at || pending.received_at || ''),
@@ -211,7 +258,7 @@ function normalizePendingItems(pending) {
 }
 
 function strongestImpact(items) {
-  const order = ['expression_only', 'current_brief', 'planning', 'structure'];
+  const order = IMPACT_LEVEL_ORDER;
   return items.reduce((strongest, item) => order.indexOf(item.impact_level_hint) > order.indexOf(strongest) ? item.impact_level_hint : strongest, 'expression_only');
 }
 

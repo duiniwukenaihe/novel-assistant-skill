@@ -30,7 +30,8 @@ function preferredPlanningStage(changedAssets, allowed, section) {
   const changedMaterial = changedAssets.some((item) => /(^|\/)素材卡\.md$/.test(item));
   const changedSetting = changedAssets.some((item) => /(^|\/)设定\.md$/.test(item));
   const changedOutline = changedAssets.some((item) => /(^|\/)小节大纲\.md$/.test(item));
-  if (changedOutline) return 'section_plan_lock';
+  if (changedOutline && allowed.has('section_plan_lock')) return 'section_plan_lock';
+  if (changedOutline) return preferredBriefStage(allowed, section);
   if (changedSetting) return 'section_outline';
   if (changedMaterial) return 'short_setting';
   return preferredBriefStage(allowed, section);
@@ -97,7 +98,7 @@ function resolveShortFeedbackPatch({ result = {}, allowedNext = [], sectionIndex
     nextStageId = preferredPlanningStage(changedAssets, allowed, section);
     invalidatesBrief = true;
     invalidatesDraft = true;
-    requiresStructureAudit = crossSectionImpact;
+    requiresStructureAudit = false;
     downstreamRevalidation = true;
   } else {
     if (!includesPlanningAsset(changedAssets)) {

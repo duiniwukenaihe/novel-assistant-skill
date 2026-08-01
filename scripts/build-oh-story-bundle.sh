@@ -15,6 +15,7 @@ PRIVATE_SOURCE_SKILLS_DIR="${PRIVATE_SOURCE_SKILLS_DIR:-$REPO_ROOT/src/private-i
 INCLUDE_PRIVATE_INTERNAL_SKILLS="${NOVEL_ASSISTANT_INCLUDE_PRIVATE:-1}"
 BUNDLE_NAMES=(${BUNDLE_NAMES:-novel-assistant})
 BUILD_MANIFEST="$REPO_ROOT/config/novel-assistant-bundle-files.json"
+PUBLIC_RELEASE_POLICY="$REPO_ROOT/config/github-public-release-files.json"
 # Runtime script manifest is config-driven. Required managed runtime anchors:
 # workflow-runner.js, workflow-supervisor.js, workflow-session-heartbeat.js,
 # token-cost-ledger.js.
@@ -23,6 +24,17 @@ if [ ! -f "$BUILD_MANIFEST" ]; then
   echo "Error: missing bundle file manifest: $BUILD_MANIFEST" >&2
   exit 1
 fi
+if [ ! -f "$PUBLIC_RELEASE_POLICY" ]; then
+  echo "Error: missing public release policy: $PUBLIC_RELEASE_POLICY" >&2
+  exit 1
+fi
+RELEASE_VERSION="$(node -e '
+const fs = require("fs");
+const policy = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const version = String(policy.releaseVersion || "");
+if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error("invalid public release version");
+process.stdout.write(version);
+' "$PUBLIC_RELEASE_POLICY")"
 
 manifest_list() {
   node - "$REPO_ROOT/scripts/lib/bundle-version.js" "$REPO_ROOT" "$1" <<'NODE'
@@ -101,20 +113,11 @@ for bundle_name in "${BUNDLE_NAMES[@]}"; do
     done
   fi
 
-  find "$BUNDLE_SCRIPTS_DIR" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} +
-  rm -rf "$BUNDLE_SCRIPTS_DIR/lib" "$BUNDLE_SCRIPTS_DIR/native"
-  for script_name in "${SCRIPT_NAMES[@]}"; do
-    src="$REPO_ROOT/scripts/$script_name"
-    if [ ! -f "$src" ]; then
-      echo "Error: missing script source: $src" >&2
-      exit 1
-    fi
-    cp "$src" "$BUNDLE_SCRIPTS_DIR/$script_name"
-  done
-  cp -R "$REPO_ROOT/scripts/lib" "$BUNDLE_SCRIPTS_DIR/lib"
-  cp -R "$REPO_ROOT/scripts/native" "$BUNDLE_SCRIPTS_DIR/native"
+  node "$REPO_ROOT/scripts/lib/mirror-sync.js" sync \
+    "$REPO_ROOT/scripts" "$BUNDLE_SCRIPTS_DIR" "$BUILD_MANIFEST" >/dev/null
+  node "$REPO_ROOT/scripts/lib/mirror-sync.js" audit \
+    "$REPO_ROOT/scripts" "$BUNDLE_SCRIPTS_DIR" "$BUILD_MANIFEST" >/dev/null
   cp "$BUILD_MANIFEST" "$BUNDLE_DIR/config/novel-assistant-bundle-files.json"
-  chmod +x "$BUNDLE_SCRIPTS_DIR"/*
 
   SOURCE_COMMIT="$BUILD_START_SOURCE_COMMIT"
   SOURCE_BRANCH="$BUILD_START_SOURCE_BRANCH"
@@ -141,6 +144,7 @@ for bundle_name in "${BUNDLE_NAMES[@]}"; do
   cat > "$BUNDLE_DIR/novel-assistant-manifest.json" <<JSON
 {
   "bundleName": "$bundle_name",
+  "releaseVersion": "$RELEASE_VERSION",
   "bundleId": "$BUNDLE_ID",
   "sourceTreeId": "$SOURCE_TREE_ID",
   "sourceInputDigest": "$SOURCE_INPUT_DIGEST",

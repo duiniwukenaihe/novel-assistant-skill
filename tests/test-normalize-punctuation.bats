@@ -11,27 +11,26 @@ teardown() {
     rm -rf "$TMP_DIR"
 }
 
-@test "normalize-punctuation rewrites controlled Chinese em dashes" {
+@test "normalize-punctuation preserves sparse functional Chinese em dashes" {
     FILE="$TMP_DIR/body.md"
     printf '他终于明白——真相就在账本里。\n她停了一下--还是推开门。\n---\n' > "$FILE"
 
     node "$SCRIPT" "$FILE"
 
-    grep -q '他终于明白：真相就在账本里。' "$FILE"
+    grep -q '他终于明白——真相就在账本里。' "$FILE"
     grep -q '她停了一下，还是推开门。' "$FILE"
-    ! grep -q '——\|—\|--' "$FILE"
+    ! grep -q -- '--' "$FILE"
     ! grep -q '^---$' "$FILE"
 }
 
-@test "normalize-punctuation rewrites numeric ranges and interrupted dialogue" {
+@test "normalize-punctuation rewrites numeric ranges but preserves functional interruption" {
     FILE="$TMP_DIR/body.md"
     printf '价格从100——200之间浮动。\n「别过来——」\n' > "$FILE"
 
     node "$SCRIPT" "$FILE"
 
     grep -q '价格从100到200之间浮动。' "$FILE"
-    grep -q '「别过来。」' "$FILE"
-    ! grep -q '——\|—\|--' "$FILE"
+    grep -q '「别过来——」' "$FILE"
 }
 
 @test "normalize-punctuation rejects per-character dash corruption for rewrite" {

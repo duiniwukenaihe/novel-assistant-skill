@@ -7,6 +7,7 @@ const { spawnSync } = require('child_process');
 const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
+const { readShortProjectState, resolveShortStateRelative, shortStateFile } = require('./lib/short-project-state');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -58,7 +59,7 @@ function main() {
   if (!args.apply || report.unassigned_blocking.length) {
     return finish({ status: report.unassigned_blocking.length ? 'short_structure_impact_blocked' : 'short_structure_impact_ready', report: artifactRel, result_packet: packetRel, findings: report.unassigned_blocking }, 0, args.json);
   }
-  const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', String(task.workflow_id || ''), '--result', packetFile, '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', String(task.workflow_id || ''), '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(run);
   return finish({
     status: outcome.applied ? 'short_structure_impact_completed' : 'short_structure_impact_apply_blocked',
@@ -76,8 +77,8 @@ function buildImpactReport(root, task) {
     ...((((task.accepted_plan || {}).affected_sections) || []).map(Number)),
     ...(((((task.feedback_revision_queue || task.short_feedback_revision_queue || {}).affected_sections) || [])).map(Number)),
   ].filter(Number.isInteger));
-  const titleLock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
-  const projectState = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
+  const titleLock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
+  const projectState = readShortProjectState(root) || {};
   const acceptedTitles = new Map((Array.isArray(projectState.accepted_sections) ? projectState.accepted_sections : [])
     .map(entry => [Number((entry || {}).section_index || 0), normalizeTitle((entry || {}).title)]));
   const titleChangedSections = (Array.isArray(titleLock.sections) ? titleLock.sections : [])
@@ -96,11 +97,11 @@ function buildImpactReport(root, task) {
     const disposition = exists ? (changed.has(rel) ? 'recheck' : 'keep') : 'recompute';
     items.push(item(rel, disposition, changed.has(rel) ? 'accepted_plan' : 'current_canonical', disposition === 'recompute' ? planningOwners[rel] : ''));
   }
-  items.push(item('追踪/private-short-extension/section-title-lock.json', titleLock.status === 'confirmed' ? 'keep' : 'recompute', 'section_plan_lock', titleLock.status === 'confirmed' ? '' : 'section_plan_lock'));
+  items.push(item(resolveShortStateRelative(root, 'section-title-lock.json'), titleLock.status === 'confirmed' ? 'keep' : 'recompute', 'section_plan_lock', titleLock.status === 'confirmed' ? '' : 'section_plan_lock'));
   for (const index of affected) {
     const suffix = String(index).padStart(3, '0');
     items.push(item(`写作Brief_第${suffix}节.md`, 'invalidated', 'planning_changed', index === 1 ? 'first_section_brief' : 'next_section_brief'));
-    items.push(item(`追踪/private-short-extension/section-${suffix}-anchor.json`, 'recheck', 'accepted_prose_preserved', 'quality_gate'));
+    items.push(item(resolveShortStateRelative(root, `section-${suffix}-anchor.json`), 'recheck', 'accepted_prose_preserved', 'quality_gate'));
     items.push(item(`正文/第${suffix}节.md`, 'recheck', 'accepted_prose_preserved', 'quality_gate'));
   }
   if (affected.size || changed.has('小节大纲.md')) items.push(item('正文.md', 'recompute', 'downstream_structure_changed', 'full_story_assembly'));

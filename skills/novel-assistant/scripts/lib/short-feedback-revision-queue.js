@@ -2,8 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
-
-const SHORT_WORKFLOWS = new Set(['short_write', 'short_startup', 'private_short_startup']);
+const { readShortProjectState, shortStateFile } = require('./short-project-state');
+const { SHORT_WORKFLOW_TYPES: SHORT_WORKFLOWS } = require('./short-workflow-types');
 
 function initializeShortFeedbackRevisionQueue(task = {}, result = {}, policy = {}) {
   if (SHORT_WORKFLOWS.has(String(task.workflow_type || ''))
@@ -211,8 +211,8 @@ function initializeAssemblyIntegrityRevisionQueue(task = {}, findings = {}) {
 function reconcileShortRevisionQueueWithTitleLock(projectRoot, task = {}) {
   if (!SHORT_WORKFLOWS.has(String(task.workflow_type || ''))) return { status: 'not_applicable', queue: null };
   const root = path.resolve(projectRoot || '');
-  const titleLock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
-  const projectState = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
+  const titleLock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
+  const projectState = readShortProjectState(root) || {};
   if (String(titleLock.status || '') !== 'confirmed') return { status: 'not_applicable', queue: task.feedback_revision_queue || null };
   const acceptedTitles = new Map((Array.isArray(projectState.accepted_sections) ? projectState.accepted_sections : [])
     .map(item => [Number((item || {}).section_index || 0), normalizeTitle((item || {}).title)]));
@@ -224,11 +224,12 @@ function reconcileShortRevisionQueueWithTitleLock(projectRoot, task = {}) {
     })
     .map(item => Number(item.section_index));
   if (!affectedSections.length) return { status: 'title_lock_revision_queue_current', queue: task.feedback_revision_queue || null };
-  return mergeStructureImpactIntoRevisionQueue(task, {
-    stage_id: 'short_structure_impact_audit',
-    step_status: 'completed',
-    affected_sections: affectedSections,
-  });
+  return {
+    status: 'title_lock_metadata_sync_required',
+    queue: task.feedback_revision_queue || null,
+    title_sync_sections: affectedSections,
+    message: '仅标题发生变化；同步标题元数据即可，不得据此重写 Brief 或正文。',
+  };
 }
 
 function activeShortFeedbackRevision(task = {}) {

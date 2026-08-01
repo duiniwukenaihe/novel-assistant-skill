@@ -7,7 +7,7 @@ const VISIBLE_STAGE_LABELS = {
   range_lock: '锁定审阅范围', evidence_scan: '扫描审阅证据', classify_findings: '归类审阅发现', repair_plan: '生成修复计划',
   user_scope_choice: '确认修复范围', repair_execution_plan: '生成修复执行方案', staged_repair_candidate: '准备修复草稿',
   repair_machine_gate: '检查修复草稿', execute_repair: '执行已确认修复方案', recheck: '复检修复结果', closure: '生成审阅总报告',
-  material_card: '确认素材卡', short_setting: '确认短篇设定', section_outline: '确认小节大纲', section_brief: '生成当前小节写作说明',
+  material_card: '确认素材卡', short_setting: '确认短篇设定', section_outline: '确认小节大纲', section_plan_lock: '确认总节数与小节标题', section_brief: '生成当前小节写作说明',
   draft_section: '写当前小节正文', section_machine_gate: '检查当前小节', section_repair_loop: '修复当前小节',
   prose: '写当前章节正文', chapter_machine_gate: '检查当前章节', drift_gate: '检查剧情连续性', handoff: '保存章节交接',
 };
@@ -117,6 +117,51 @@ function buildPendingAction(tpl, stageDef) {
       },
     ],
     free_text_enabled: true,
+  });
+}
+
+function buildShortSettingCandidatePendingAction(task = {}) {
+  const candidate = task.short_setting_candidate && typeof task.short_setting_candidate === 'object'
+    ? task.short_setting_candidate
+    : {};
+  const migrated = candidate.migrated_from_unconfirmed_canonical === true;
+  return decoratePendingAction({
+    id: `pa-short-setting-candidate-${String(task.workflow_id || 'short')}-${String(candidate.revision || 1)}`,
+    question: '请确认人物与剧情设定候选',
+    options: [
+      {
+        action_id: 'accept_short_setting_candidate',
+        label: migrated ? '确认当前人物与剧情设定' : '确认当前人物与剧情设定（推荐）',
+        description: '确认后才扩写并受控写入设定.md；后续平台、节奏和小节大纲只能引用这个版本。',
+        target_stage: 'short_setting',
+        risk_level: 'medium',
+        requires_user_confirm: true,
+        recommended: !migrated,
+        execution_mode: 'accept_staged_setting_candidate',
+        completion_boundary: 'stop_after_stage',
+      },
+      {
+        action_id: 'inspect_short_setting_candidate',
+        label: migrated ? '查看旧版设定候选与依据（推荐）' : '查看设定候选与依据',
+        risk_level: 'low',
+        requires_user_confirm: false,
+        recommended: migrated,
+      },
+      {
+        action_id: 'request_short_setting_revision_input',
+        label: '调整人物、关系或剧情方向',
+        risk_level: 'low',
+        requires_user_confirm: false,
+      },
+      {
+        action_id: 'pause',
+        label: '暂停并保存断点',
+        risk_level: 'low',
+        requires_user_confirm: false,
+      },
+    ],
+    free_text_enabled: true,
+    compact_options: true,
   });
 }
 
@@ -324,7 +369,7 @@ function buildShortRevisionTaskOverview(task = {}, sectionTitles = [], plannedSe
       ];
       return groupLines;
     }),
-    preserved.length ? `＝ 未受影响小节：${sectionRangeLabel(preserved)}沿用现稿，最终全篇复检时检查承接` : '',
+    preserved.length ? `＝ 未受影响小节：${sectionRangeLabel(preserved)}：沿用现稿，最终全篇复检时检查承接` : '',
     `○ ${progress.groups.length + 2}. 全篇收束：重新合稿 → 全篇审阅 → 去 AI 味 → 终检`,
     '',
     current
@@ -364,6 +409,25 @@ const WORKFLOW_ROLE_LABELS = {
   handoff_and_next: '收束与下一步',
 };
 
+const AUTHOR_PHASE_GOALS = {
+  '资讯 / 素材 / 脑洞卡': '找到并确认一个值得写、能落地的故事入口。',
+  '设定与人物': '确认人物欲望、关系压力、核心冲突、反转和结局承诺。',
+  '节奏与全篇小节大纲': '确认全篇节奏、总小节、每节功能、钩子、爆点和承接。',
+  '确认总节数与小节标题': '确认全篇总节数、每节标题、完稿边界和扩容缩容规则。',
+  '当前节 Brief': '把当前节写成可直接执行且不临场改剧情的写作提要。',
+  '只写当前节': '只完成当前节正文，不越过小节边界。',
+  '双门验收与采用': '检查当前节的确定性质量和故事价值，通过后形成采用锚点。',
+  '合稿 / 精修 / 发布检查': '完成全篇合稿、连续性审阅、表达精修和发布检查。',
+  '故事核心': '确认作品承诺、人物发动机、世界规则和持续剧情引擎。',
+  '总纲': '确认全书主线、阶段推进、成长与终局兑现。',
+  '卷纲': '确认当前卷目标、阻力、代价、人物变化和跨卷接口。',
+  '阶段细纲': '把当前剧情阶段拆成连续、可写、可承接的章节规划。',
+  '章节 Brief': '锁定当前章视角、目标、阻力、动作、信息和章末承接。',
+  '正文与验收': '只写当前章并完成机器质量门与创作质量门。',
+  '人物 / 伏笔 / 时间线提交': '原子接受正文和事实增量，更新人物、伏笔、时间线与记忆。',
+  '复盘与跨卷交接': '完成阶段复盘、卷级验收或跨卷交接。',
+};
+
 function buildWorkflowTaskOverview(task = {}, template = {}) {
   const stages = Array.isArray(template.stages) ? template.stages : [];
   if (!stages.length) return null;
@@ -379,10 +443,16 @@ function buildWorkflowTaskOverview(task = {}, template = {}) {
     const stageId = String(stageDef.stage_id || '');
     const status = completed.has(stageId) ? 'completed' : stageId === currentStageId ? 'current' : 'pending';
     const role = String(roleMap[stageId] || 'workflow_stage');
+    const authorPhase = (((stageDef || {}).interaction_contract || {}).author_phase) || {};
+    const authorPhaseLabel = userFacingAuthorPhaseLabel(stageId, authorPhase.label || WORKFLOW_ROLE_LABELS[role] || visibleStageLabel(stageDef));
     return {
       id: stageId,
       order: index + 1,
-      label: visibleStageLabel(stageDef),
+      label: String(authorPhase.label || visibleStageLabel(stageDef)),
+      internal_label: String(stageDef.label || VISIBLE_STAGE_LABELS[stageId] || stageId),
+      author_phase_id: String(authorPhase.id || role),
+      author_phase_label: authorPhaseLabel,
+      author_phase_order: Number(authorPhase.order || index + 1),
       role,
       status,
       completion_conditions: Array.isArray(stageDef.completion_conditions) ? stageDef.completion_conditions.slice() : [],
@@ -393,48 +463,64 @@ function buildWorkflowTaskOverview(task = {}, template = {}) {
   });
   const phases = [];
   for (const row of stageRows) {
-    const previous = phases[phases.length - 1];
-    if (!previous || previous.role !== row.role) {
-      phases.push({
+    let phase = phases.find(item => item.author_phase_id === row.author_phase_id);
+    if (!phase) {
+      phase = {
         id: `phase-${String(phases.length + 1).padStart(2, '0')}`,
-        order: phases.length + 1,
+        order: row.author_phase_order,
+        author_phase_id: row.author_phase_id,
         role: row.role,
-        label: WORKFLOW_ROLE_LABELS[row.role] || row.label,
+        label: row.author_phase_label,
         stages: [row],
-      });
+      };
+      phases.push(phase);
     } else {
-      previous.stages.push(row);
+      phase.stages.push(row);
     }
   }
+  phases.sort((left, right) => left.order - right.order);
+  phases.forEach((phase, index) => {
+    phase.order = index + 1;
+  });
+  const currentRow = stageRows.find(item => item.status === 'current') || stageRows.find(item => item.status === 'pending') || null;
+  const currentPhaseForLabel = currentRow
+    ? phases.find(item => item.author_phase_id === currentRow.author_phase_id)
+    : null;
+  if (currentPhaseForLabel && currentRow.author_phase_label) currentPhaseForLabel.label = currentRow.author_phase_label;
+  const currentPhaseId = currentRow ? currentRow.author_phase_id : '';
+  const currentPhaseOrder = phases.find(item => item.author_phase_id === currentPhaseId)?.order || phases.length;
   for (const phase of phases) {
     phase.completed = phase.stages.filter(item => item.status === 'completed').length;
     phase.total = phase.stages.length;
-    phase.status = phase.completed === phase.total
-      ? 'completed'
-      : phase.stages.some(item => item.status === 'current') ? 'current' : 'pending';
+    phase.status = phase.author_phase_id === currentPhaseId
+      ? 'current'
+      : phase.order < currentPhaseOrder ? 'completed' : 'pending';
   }
-  const current = stageRows.find(item => item.status === 'current') || stageRows.find(item => item.status === 'pending') || null;
+  const current = currentRow;
+  const currentPhase = phases.find(item => item.status === 'current') || phases.find(item => item.status === 'pending') || null;
+  const executionPoint = task.author_execution_point && typeof task.author_execution_point === 'object'
+    ? task.author_execution_point
+    : null;
   const taskTitle = String(task.task_display_title || task.working_title || task.user_goal || task.scope || task.workflow_type || '当前工作流');
-  const completedCount = stageRows.filter(item => item.status === 'completed').length;
+  const completedCount = phases.filter(item => item.status === 'completed').length;
   const lines = [
     `当前任务：${taskTitle}`,
-    `总进度：${completedCount}/${stageRows.length} 个阶段已完成`,
+    `总进度：${completedCount}/${phases.length} 个创作阶段已完成`,
     '',
     '任务阶段：',
-    ...phases.flatMap(phase => [
-      `${phase.status === 'completed' ? '✓' : phase.status === 'current' ? '▶' : '○'} ${phase.order}. ${phase.label}（${phase.completed}/${phase.total}）`,
-      `   ${phase.stages.map(item => `${item.status === 'completed' ? '已完成' : item.status === 'current' ? '当前' : '待处理'}：${item.label}`).join('；')}`,
-    ]),
+    ...phases.map(phase => `${phase.status === 'completed' ? '✓' : phase.status === 'current' ? '▶' : '○'} ${phase.order}. ${phase.label}`),
     '',
-    current ? `当前子任务：${current.label}` : '当前子任务：等待任务收束',
-    current && current.description ? `完成目标：${current.description}` : '',
-    '交互原则：进入当前子任务后再显示该阶段选项；重复执行只产生新尝试，已接受快照不会被静默覆盖。',
+    currentPhase ? `当前阶段：${currentPhase.label}` : '当前阶段：等待任务收束',
+    executionPoint && executionPoint.label ? `当前执行：${String(executionPoint.label)}` : '',
+    currentPhase ? `完成目标：${AUTHOR_PHASE_GOALS[currentPhase.label] || '完成当前作者阶段并进入自然下一步。'}` : '',
+    '交互原则：每次只推进当前作者阶段；内部检查自动执行，只有需要你决定时才显示数字选项。',
   ].filter(Boolean);
   return {
     status: String(task.status || 'running'),
     workflow_id: String(task.workflow_id || ''),
     workflow_type: String(task.workflow_type || ''),
     task_title: taskTitle,
+    execution_point: executionPoint,
     task_form: String((((task || {}).scheduling_contract || {}).task_form) || (((template || {}).scheduling_contract || {}).task_form) || ''),
     phases,
     current_subtask: current,
@@ -443,6 +529,11 @@ function buildWorkflowTaskOverview(task = {}, template = {}) {
       : { menu_style: 'numbered_1_4', expose_as_top_level_task: false, parent_task_first: true },
     text: lines.join('\n'),
   };
+}
+
+function userFacingAuthorPhaseLabel(stageId, fallback) {
+  if (String(stageId || '') === 'section_plan_lock') return '确认总节数与小节标题';
+  return String(fallback || '');
 }
 
 function revisionQueueGroups(queue, items) {
@@ -533,6 +624,9 @@ function buildShortSectionDecisionPendingAction(tpl, task) {
 
 function visibleStageLabel(stageDef) {
   if (!stageDef) return '当前步骤';
+  if (String(stageDef.stage_id || '') === 'section_plan_lock') return VISIBLE_STAGE_LABELS.section_plan_lock;
+  const authorPhase = (((stageDef || {}).interaction_contract || {}).author_phase) || {};
+  if (authorPhase.label) return String(authorPhase.label);
   return String(stageDef.label || VISIBLE_STAGE_LABELS[stageDef.stage_id] || stageDef.stage_id);
 }
 
@@ -587,7 +681,8 @@ function normalizeVisibleOptions(input, freeTextEnabled, compactOptions = false)
   const options = [primary, ...business];
 
   if (options.length >= 3 && options.length < 4 && existingPause) options.push(existingPause);
-  if (options.length < 4) options.push(existingInspect || {
+  const primaryAction = String(primary.action_id || primary.action || '');
+  if (options.length < 4 && primaryAction !== 'inspect_current_state') options.push(existingInspect || {
     action_id: 'inspect_current_state', label: '查看当前进度与依据', risk_level: 'low', requires_user_confirm: false,
   });
   if (options.length < 4) options.push(existingPause || {
@@ -682,10 +777,12 @@ function projectTaskActionView(taskCard, intro = '') {
     if (['pause', 'free_text'].includes(actionId)) return { ...item, interaction_mode: 'semantic_only' };
     return item;
   });
+  const boundaryHint = visibleExecutionBoundaryHint(card.execution_boundary || null);
   const summary = String(intro || '').trim() || [
     `当前任务：${String(card.title || '继续当前任务')}`,
     card.visible_stage ? `当前阶段：${String(card.visible_stage)}` : '',
     card.stop_reason ? `当前停靠：${String(card.stop_reason)}` : '',
+    boundaryHint,
     card.last_trusted_artifact ? `最后可信产物：${String(card.last_trusted_artifact)}` : '',
   ].filter(Boolean).join('\n');
   const pending = {
@@ -701,11 +798,23 @@ function projectTaskActionView(taskCard, intro = '') {
       stop_reason: String(card.stop_reason || ''),
       last_trusted_artifact: String(card.last_trusted_artifact || ''),
       status: String(card.status || ''),
+      execution_boundary: card.execution_boundary || null,
     },
+    execution_boundary: card.execution_boundary || null,
     next_actions: options,
     visible_menu: options.map((item, index) => `${index + 1}. ${String(item.label || `选项 ${index + 1}`)}`),
     visible_response: renderPendingActionText(pending, summary),
   };
+}
+
+function visibleExecutionBoundaryHint(boundary) {
+  if (!boundary || typeof boundary !== 'object') return '';
+  const mode = String(boundary.visible_execution_mode || '');
+  if (mode === '协作模式' && boundary.stream_abort === false) {
+    return '协作模式：可保存断点；不能中止宿主隐藏思考。';
+  }
+  if (mode) return `${mode}：按当前宿主能力执行。`;
+  return '';
 }
 
 module.exports = {
@@ -718,6 +827,7 @@ module.exports = {
   buildReviewBatchPendingAction,
   buildReviewBatchReacceptancePendingAction,
   buildShortSectionDecisionPendingAction,
+  buildShortSettingCandidatePendingAction,
   decoratePendingAction,
   normalizeRecommendations,
   normalizeSelectedAction,

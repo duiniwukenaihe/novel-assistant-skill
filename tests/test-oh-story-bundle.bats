@@ -139,7 +139,8 @@ setup() {
         grep -q "无需二次确认" "$route_file"
         grep -q "不要再次询问" "$route_file"
         grep -q "脑洞卡片" "$route_file"
-        grep -q "6-10" "$route_file"
+        grep -q "默认 3 张高差异脑洞卡" "$route_file"
+        grep -q "最多 5 张" "$route_file"
         grep -q "Evidence Gate" "$route_file"
         grep -q "workflow-registry.json" "$route_file"
         grep -q "owner_module=private-short-extension" "$route_file"
@@ -225,10 +226,12 @@ if (JSON.stringify(material.allowed_next) !== JSON.stringify(['project_seed'])) 
 	if (!setting.allowed_next.includes('platform_genre_lock')) process.exit(6);
 	if (!platformGenreLock.required_inputs.includes('short_setting')) process.exit(38);
 	if (!platformGenreLock.allowed_next.includes('rhythm_pattern_selection')) process.exit(39);
-	if (platformGenreLock.requires_user_confirm !== true) process.exit(40);
+		if (platformGenreLock.requires_user_confirm !== false) process.exit(40);
+		if (!platformGenreLock.description.includes('不形成新的作者停靠点')) process.exit(41);
 	if (!rhythm.required_inputs.includes('platform_genre_lock')) process.exit(28);
 	if (!rhythm.allowed_next.includes('section_outline')) process.exit(29);
-	if (rhythm.requires_user_confirm !== true) process.exit(30);
+		if (rhythm.requires_user_confirm !== false) process.exit(30);
+		if (!rhythm.description.includes('不单独停靠')) process.exit(42);
 	if (!rhythm.description.includes('节奏') || !rhythm.description.includes('爽点') || !rhythm.description.includes('打脸') || !rhythm.description.includes('反转') || !rhythm.description.includes('火葬场')) process.exit(31);
 	if (!outline.required_inputs.includes('rhythm_pattern_selection')) process.exit(32);
 	if (!outline.allowed_next.includes('section_plan_lock')) process.exit(33);
@@ -266,8 +269,8 @@ NODE
         grep -q "卡池分析" "$route_file"
         grep -q "横向对比" "$route_file"
         grep -q "推荐排序" "$route_file"
-        grep -q "选择单张卡片" "$route_file"
-        grep -q "回复选 N" "$route_file"
+        grep -q "卡池屏只有一套数字语义" "$route_file"
+        grep -q "1,3,5" "$route_file"
         grep -q "未选择脑洞卡" "$route_file"
         grep -q "不得进入设定" "$route_file"
         grep -q "不得进入小节大纲" "$route_file"
@@ -617,31 +620,22 @@ MD
 }
 
 @test "README documents single-directory installation" {
-    grep -q "单目录安装" "$README"
+    grep -q "一个入口" "$README"
     grep -q "skills/novel-assistant" "$README"
-    grep -q "src/internal-skills" "$README"
-    grep -q "~/.codex/skills/novel-assistant" "$README"
-    grep -q ".claude/skills/novel-assistant" "$README"
-    grep -q "https://github.com/duiniwukenaihe/novel-assistant-skill.git" "$README"
+    grep -q "npx skills add" "$README"
+    grep -q "/novel-assistant" "$README"
+    ! grep -q "192.168." "$README"
     ! grep -q "npx skills add worldwonderer/oh-story-claudecode" "$README"
-    ! grep -q "更新时重新执行同一条命令即可" "$README"
 }
 
 @test "README explains upstream differences, production rationale, and correct usage" {
     grep -q "novel-assistant" "$README"
-    grep -q "本项目更偏生产写作工作台" "$README"
-    grep -q "上游只作为输入源" "$README"
-    grep -q "长篇拆书中途等待继续" "$README"
-    grep -q "source-grounding" "$README"
-    grep -q "Trellis 启发的任务持久化" "$README"
-    grep -q "任务需求与读者承诺文档" "$README"
-    grep -q "spec / task / workspace journal" "$README"
-    grep -q "Trellis-Inspired Task Persistence" "$README_EN"
-    grep -q "Requirement and Reader Promise Document" "$README_EN"
-    grep -q "正确使用方式" "$README"
-    grep -q "/novel-assistant 准备写书" "$README"
-    grep -q "/novel-assistant 继续拆" "$README"
-    grep -q "不要直接调用 /story-long-write" "$README"
+    grep -q "worldwonderer/oh-story-claudecode" "$README"
+    grep -q "Workflow 保存任务、阶段、断点和下一步" "$README"
+    grep -q "Memory 只召回当前步骤需要的事实" "$README"
+    grep -q "短篇" "$README"
+    grep -q "长篇" "$README"
+    grep -q "公开版与本地增强" "$README"
     ! grep -q "Star History" "$README"
     ! grep -q "Telegram 群" "$README"
     ! grep -q "GitHub Discussions" "$README"

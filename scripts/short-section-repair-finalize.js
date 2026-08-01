@@ -116,7 +116,7 @@ function main() {
   if (!args.apply) return finish({ status: 'packet_ready', workflow_id: workflowId, result_packet: packetRel }, 0, args.json);
   const applied = spawnSync(process.execPath, [
     path.join(__dirname, 'workflow-state-machine.js'),
-    'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json',
+    'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json',
   ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(applied);
   const result = outcome.result;

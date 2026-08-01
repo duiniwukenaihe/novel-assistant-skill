@@ -35,7 +35,7 @@ function writeResult() {
   const assertions = packet.scenario.assertions.map((name) => {
     const relative = path.posix.join('artifacts', `${name}.txt`);
     const target = path.join(root, relative);
-    const contents = `${packet.scenario.id}:${name}:${attempt}\n`;
+    const contents = `${packet.scenario.id}:${name}:${host}:${attempt}\n`;
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, contents, { mode: 0o600 });
     return {

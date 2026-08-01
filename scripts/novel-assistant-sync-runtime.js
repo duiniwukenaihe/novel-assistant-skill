@@ -7,6 +7,7 @@ const { loadBundleFileManifest } = require('./lib/bundle-version');
 const { resolveProjectRoot } = require('./lib/project-root-resolver');
 const { applyManagedSync, planManagedSync } = require('./lib/runtime-managed-files');
 const { createRuntimeSafeFs } = require('./lib/runtime-safe-fs');
+const { isManagedShortProject } = require('./lib/canonical-write-policy');
 
 const USAGE = `Usage: node scripts/novel-assistant-sync-runtime.js [--project-root .] [--skill-dir /absolute/novel-assistant] [--dry-run] [--confirm-conflicts] [--json]
 
@@ -74,8 +75,8 @@ const result = {
   skillDir,
   bundleId: manifest.bundleId || 'unknown',
   sourceCommit: manifest.sourceCommit || 'unknown',
-  agentsVersion: Number(manifest.agentsVersion || 18),
-  setupSkillVersion: String(manifest.setupSkillVersion || '1.4.5'),
+  agentsVersion: Number(manifest.agentsVersion || 19),
+  setupSkillVersion: String(manifest.setupSkillVersion || '1.4.6'),
   copied: managedPreviewItems().concat(plan.filter(item => item.type !== 'managed-files')).map(item => ({
     type: item.type,
     target: path.relative(projectRoot, item.target),
@@ -88,7 +89,13 @@ const result = {
     ? managedApplyResult.runtime_safe_fs
     : { status: 'not_checked' },
   writePolicy: effectiveWritePolicy(plan.find(item => item.type === 'write-policy')),
+  writePolicyMigrationCommand: writePolicyMigrationCommand(plan.find(item => item.type === 'write-policy')),
+  shortStateStorage: shortStateStorageStatus(projectRoot),
+  shortStateStorageMigrationCommand: shortStateStorageMigrationCommand(projectRoot),
   protectedContent: ['正文', '大纲', '细纲', '设定', '追踪正文资产'],
+  confirmation_command: confirmationRequired
+    ? 'node scripts/novel-assistant-sync-runtime.js --project-root . --json --confirm-conflicts'
+    : '',
 };
 
 if (args.json) {
@@ -264,13 +271,20 @@ function addCanonicalGuardHook(groups, templateGroups) {
 
 function writePolicyOp() {
   const target = path.join(projectRoot, '追踪', 'story-system', 'write-policy.json');
-  const mode = isExistingStoryProject(projectRoot) ? 'legacy' : 'strict';
+  const existing = readJsonIfExists(target);
+  const existingMode = existing && ['strict', 'legacy'].includes(existing.mode) ? existing.mode : '';
+  const mode = existingMode || (fs.existsSync(target)
+    ? 'invalid'
+    : isExistingStoryProject(projectRoot)
+      ? 'migration_required'
+      : 'strict');
   return {
     type: 'write-policy',
     target,
     mode,
     count: 1,
     apply(safeFs) {
+      if (mode !== 'strict') return;
       safeFs.writeFileIfMissing(
         '追踪/story-system/write-policy.json',
         Buffer.from(`${JSON.stringify({ schemaVersion: '1.0.0', mode }, null, 2)}\n`),
@@ -281,8 +295,9 @@ function writePolicyOp() {
 }
 
 function isExistingStoryProject(root) {
-  if (fs.existsSync(path.join(root, '.story-deployed'))) return true;
+  if (isManagedShortProject(root)) return false;
   return ['正文', '大纲', '细纲', '设定', '追踪', '正文.md', '设定.md', '小节大纲.md']
+    .filter(relative => relative !== '追踪')
     .some(relative => hasExistingStoryEvidence(path.join(root, relative)));
 }
 
@@ -303,6 +318,26 @@ function effectiveWritePolicy(operation) {
   return operation.mode;
 }
 
+function writePolicyMigrationCommand(operation) {
+  return operation && operation.mode === 'migration_required'
+    ? 'node scripts/book-write-policy-migrate.js preview --project-root . --json'
+    : '';
+}
+
+function shortStateStorageStatus(root) {
+  const canonical = path.join(root, '追踪', 'story-system', 'short', 'project-state.json');
+  const legacy = path.join(root, '追踪', 'private-short-extension', 'project-state.json');
+  if (fs.existsSync(canonical)) return 'canonical';
+  if (fs.existsSync(legacy)) return 'legacy_compatible';
+  return 'not_initialized';
+}
+
+function shortStateStorageMigrationCommand(root) {
+  return shortStateStorageStatus(root) === 'legacy_compatible'
+    ? 'node scripts/short-state-storage-migrate.js --project-root . --json'
+    : '';
+}
+
 function writeSentinelOp() {
   const target = path.join(projectRoot, '.story-deployed');
   return {
@@ -312,7 +347,7 @@ function writeSentinelOp() {
     apply(safeFs) {
       const lines = [
         `deployed_at: ${new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')}`,
-        `agents_version: ${Number(manifest.agentsVersion || 18)}`,
+        `agents_version: ${Number(manifest.agentsVersion || 19)}`,
         `setup_skill_version: ${String(manifest.setupSkillVersion || '1.4.5')}`,
         'target_cli: claude-code',
         'resolver_strategy: global-skill-with-project-agent-references',

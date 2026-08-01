@@ -21,12 +21,18 @@ const ROLE_CATALOG = [
     dimensions: ['canon'],
     focus: '设定/时间线/一致性',
   },
+  {
+    subagent_type: 'professional-reader',
+    dimensions: ['reader_experience'],
+    focus: '盲读留存/人物印象/期待兑现',
+  },
 ];
 
 const HIGH_CONFLICT_ROLES = ['story-explorer', 'narrative-writer', 'consistency-checker'];
 
-function planReviewRoles({ requiredDimensions, evidenceSignals, availableAgents, budgetPolicy }) {
+function planReviewRoles({ requiredDimensions, evidenceSignals, availableAgents, budgetPolicy, reviewTargetKind }) {
   const dimensions = uniqueStrings(requiredDimensions);
+  if (needsReaderPass(reviewTargetKind) && !dimensions.includes('reader_experience')) dimensions.push('reader_experience');
   const signals = new Set(uniqueStrings(evidenceSignals).map(normalizeSignal));
   const available = normalizeAvailableAgents(availableAgents);
   const highConflict = hasHighConflict(signals);
@@ -36,6 +42,7 @@ function planReviewRoles({ requiredDimensions, evidenceSignals, availableAgents,
   if (dimensions.includes('canon') || highConflict) wanted.add('consistency-checker');
   if (dimensions.includes('character') && (hasCharacterRisk(signals) || highConflict)) wanted.add('character-designer');
   if (dimensions.includes('prose') && (hasProseRisk(signals) || highConflict)) wanted.add('narrative-writer');
+  if (dimensions.includes('reader_experience') || needsReaderPass(reviewTargetKind)) wanted.add('professional-reader');
   if (highConflict) for (const role of HIGH_CONFLICT_ROLES) wanted.add(role);
 
   const roleOrder = highConflict
@@ -53,6 +60,10 @@ function planReviewRoles({ requiredDimensions, evidenceSignals, availableAgents,
     deferredDimensions,
     retryPolicy: 'missing_dimension_once',
   };
+}
+
+function needsReaderPass(reviewTargetKind) {
+  return ['short_story', 'milestone', 'volume', 'book'].includes(String(reviewTargetKind || '').trim());
 }
 
 function acceptReviewResults({ dispatchPlan, primaryChapterKeys, result }) {

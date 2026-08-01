@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { compactToTokens, estimateTokens } = require('./context-budget');
+const { checkLongCharacterContract } = require('./long-character-contract');
 const { atomicWriteJson, atomicWriteText } = require('./workflow-state-store');
 
 const LONG_STAGES = new Set(['chapter_brief', 'brief_review', 'prose', 'prose_acceptance', 'chapter_commit']);
@@ -14,6 +15,18 @@ function buildLongStageContextPacket({ projectRoot, task, stage, options = {} } 
   const stageId = String(stage || (task || {}).current_stage || '');
   if (!root || !fs.existsSync(root) || String((task || {}).workflow_type || '') !== 'long_write' || !LONG_STAGES.has(stageId)) {
     return { status: 'not_applicable', reason: 'not_long_chapter_stage' };
+  }
+  const characterContract = checkLongCharacterContract(root);
+  if (characterContract.status !== 'pass') {
+    return {
+      status: 'blocked_long_character_contract_upgrade_required',
+      blocking: true,
+      reason: '人物设定尚不足以支撑稳定的章节写作；请先补全人物目标、缺陷、能力边界、压力角色和关系债。',
+      resume_stage: 'story_bible',
+      source_files: characterContract.source_files,
+      findings: characterContract.findings,
+      advisories: characterContract.advisories,
+    };
   }
   const chapter = inferLongChapter(root, task, stageId);
   if (!chapter) return { status: 'not_applicable', reason: 'chapter_identity_missing' };

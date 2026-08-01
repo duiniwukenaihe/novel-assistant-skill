@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { deriveSectionLengthPolicy } = require('./lib/short-section-length-policy');
+const { readShortProjectState } = require('./lib/short-project-state');
 
 function parseArgs(argv) {
   const args = { projectRoot: '', sectionIndex: 0, actual: 0, plannedTarget: 0, sectionRole: 'normal', exceptionReason: '', json: false };
@@ -27,10 +28,9 @@ function parseArgs(argv) {
 
 function readProjectState(projectRoot) {
   const root = fs.realpathSync(path.resolve(projectRoot));
-  const statePath = path.join(root, '追踪', 'private-short-extension', 'project-state.json');
-  const realState = fs.realpathSync(statePath);
-  if (!realState.startsWith(`${root}${path.sep}`)) throw new Error('project state escapes project root');
-  return JSON.parse(fs.readFileSync(realState, 'utf8'));
+  const state = readShortProjectState(root);
+  if (!state) throw new Error('short project state is unavailable');
+  return state;
 }
 
 try {

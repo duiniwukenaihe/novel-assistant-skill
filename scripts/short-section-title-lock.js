@@ -8,7 +8,8 @@ const { spawnSync } = require('child_process');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { mutateTaskAuthority, resolveTaskAuthority } = require('./lib/workflow-task-authority');
-const { advanceShortPlanRevision } = require('./lib/short-project-state');
+const { advanceShortPlanRevision, resolveShortStateRelative } = require('./lib/short-project-state');
+const { isShortWorkflowType } = require('./lib/short-workflow-types');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -34,7 +35,7 @@ function main() {
     }, 0, args.json);
   }
   const digest = sha256(JSON.stringify(sections));
-  const lockRel = '追踪/private-short-extension/section-title-lock.json';
+  const lockRel = resolveShortStateRelative(root, 'section-title-lock.json', { forWrite: true });
   const authority = args.workflowId ? resolveTaskAuthority(root, args.workflowId) : null;
   const task = authority && authority.status === 'ok' ? authority.task : null;
   if (task && String(task.current_stage || '') === 'section_plan_lock') {
@@ -102,7 +103,7 @@ function main() {
   if (confirmedAuthority.status !== 'ok') {
     return finish({ status: confirmedAuthority.status, instruction: confirmedAuthority.message || '找不到可信的短篇任务快照。' }, 2, args.json);
   }
-  if (!['short_write', 'short_startup', 'private_short_startup'].includes(String(confirmedAuthority.task.workflow_type || ''))) {
+  if (!isShortWorkflowType(confirmedAuthority.task.workflow_type)) {
     return finish({ status: 'blocked_short_title_lock_wrong_workflow', workflow_id: args.workflowId }, 2, args.json);
   }
   if (!args.digest || args.digest !== digest) return finish({ status: 'short_section_title_digest_changed', expected_digest: digest, actual_digest: args.digest || '', sections, instruction: '大纲已变化，请重新展示标题清单并确认。' }, 0, args.json);
@@ -173,7 +174,7 @@ function completeSectionPlanLock({ root, args, task, sections, digest, lockRel, 
     owner_module: String(execution.owner_module || task.workflow_owner || ''),
     step_status: 'completed',
     outputs: [lockRel],
-    changed_files: [lockRel, '追踪/private-short-extension/project-state.json'],
+    changed_files: [lockRel, resolveShortStateRelative(root, 'project-state.json', { forWrite: true })],
     created_files: [],
     evidence: [{
       title_lock_digest: digest,
@@ -190,7 +191,7 @@ function completeSectionPlanLock({ root, args, task, sections, digest, lockRel, 
     memory_updates: [],
     result_packet_path: packetRel,
   });
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', String(task.workflow_id || ''), '--result', packetFile, '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', String(task.workflow_id || ''), '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(applied);
   return finish({
     status: outcome.applied ? 'section_plan_locked' : 'section_plan_lock_apply_blocked',
@@ -241,7 +242,7 @@ function renderTitleConfirmation(sections, options) {
 function parseSectionTitles(text) {
   const rows = [];
   for (const line of String(text || '').split(/\r?\n/)) {
-    const match = line.trim().match(/^#{2,4}\s*第\s*0*(\d+)\s*节(?:\s*[:：·-]\s*(.*))?$/u);
+    const match = line.trim().match(/^#{2,4}\s*第\s*0*(\d+)\s*节(?:\s*[:：·｜-]\s*(.*))?$/u);
     if (!match) continue;
     rows.push({ section_index: Number(match[1]), title: String(match[2] || '').trim() });
   }
@@ -273,10 +274,10 @@ function validateSectionTitles(sections) {
 function validateSectionPlanBoundary(outline, sections, task = {}) {
   const text = String(outline || '');
   const findings = [];
-  const totalMatch = text.match(/总小节数\s*[：:]\s*(\d+)\s*节?/u);
+  const totalMatch = text.match(/(?:总小节数|总节数|全篇小节数|规划小节数)\s*[：:]\s*(\d+)\s*节?/u);
   if (!totalMatch) findings.push({ code: 'planned_section_count_missing', message: '缺少“总小节数”。' });
   else if (Number(totalMatch[1]) !== sections.length) findings.push({ code: 'planned_section_count_mismatch', message: `总小节数写为 ${totalMatch[1]}，实际标题清单为 ${sections.length} 节。` });
-  if (!/(?:目标总字数|全篇目标字数|目标字数带)\s*[：:]/u.test(text)) findings.push({ code: 'target_length_band_missing', message: '缺少全篇目标字数带。' });
+  if (!/(?:目标总字数|全篇目标字数|目标字数带|总字数预算|字数预算)\s*(?:[：:]|\s)\s*[\d一二三四五六七八九十]/u.test(text)) findings.push({ code: 'target_length_band_missing', message: '缺少全篇目标字数带。' });
   if (!hasPublicationShape(text, task)) findings.push({ code: 'publication_shape_missing', message: '缺少发布形态。' });
   const sectionBlocks = splitSectionBlocks(text);
   for (const section of sections) {
@@ -290,21 +291,32 @@ function validateSectionPlanBoundary(outline, sections, task = {}) {
 
 function hasPublicationShape(text, task = {}) {
   if (/(?:发布形态|成稿形态|交付形态)\s*[：:]/u.test(String(text || ''))) return true;
-  return ['short_write', 'short_startup', 'private_short_startup'].includes(String(task.workflow_type || ''));
+  return isShortWorkflowType(task.workflow_type);
 }
 
 function hasExecutableSectionFunction(block) {
   const text = String(block || '');
   if (/(?:结构功能|本节功能|小节职责)\s*[：:]/u.test(text)) return true;
-  const hasScene = /(?:承接与场景动作|场景动作|关键动作|因果推进)\s*[：:]/u.test(text);
-  const hasChoice = /(?:主角选择与兑现|主角选择|角色选择|决定性行动)\s*[：:]/u.test(text);
-  const hasOutcome = /(?:本节兑现|关系后果|关系收束|代价与钩子|终局兑现|主题回扣(?:与结尾钩子)?)\s*[：:]/u.test(text);
-  return hasScene && hasChoice && hasOutcome;
+  const hasScene = hasHeadingOrField(text, ['承接与场景动作', '场景动作', '关键动作', '因果推进']);
+  const hasChoice = hasHeadingOrField(text, ['主角选择与兑现', '主角选择', '角色选择', '决定性行动']);
+  const hasOutcome = hasHeadingOrField(text, ['本节兑现', '关系后果', '关系收束', '代价与钩子', '终局兑现', '主题回扣', '新钩子']);
+  const hasPressure = hasHeadingOrField(text, ['压力变化', '可见阻力', '节奏定位']);
+  return hasScene && hasChoice && hasOutcome && hasPressure;
+}
+
+function hasHeadingOrField(text, names) {
+  const escaped = names.map((name) => escapeRegExp(name)).join('|');
+  const pattern = new RegExp(`(?:^|\\n)\\s*(?:[-*]\\s*)?(?:#{2,6}\\s*)?(?:${escaped})(?:[^：:\\n]{0,24})?(?:\\s*[：:]|[ \\t]*(?:\\r?\\n|$))`, 'u');
+  return pattern.test(String(text || ''));
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function splitSectionBlocks(text) {
   const map = new Map();
-  const matches = [...String(text || '').matchAll(/^#{2,4}\s*第\s*0*(\d+)\s*节(?:\s*[:：·-]\s*.*)?$/gmu)];
+  const matches = [...String(text || '').matchAll(/^#{2,4}\s*第\s*0*(\d+)\s*节(?:\s*[:：·｜-]\s*.*)?$/gmu)];
   for (let index = 0; index < matches.length; index += 1) {
     const start = matches[index].index;
     const end = index + 1 < matches.length ? matches[index + 1].index : String(text || '').length;

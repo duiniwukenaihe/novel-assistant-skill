@@ -82,7 +82,7 @@ function readPrivateInternalSourceDirs(repoRoot) {
 
 function checkDocs(repoRoot, findings) {
   const docs = [
-    ['README.md', ['skills/novel-assistant', 'src/internal-skills', '不要直接调用 /story-long-write']],
+    ['README.md', ['skills/novel-assistant', '/novel-assistant', '内部自动路由']],
     ['docs/skill-directory-policy.md', [
       'only recommended user install target',
       'src/internal-skills',

@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { buildShortMemorySnapshot } = require('./short-memory-snapshot');
+const { readShortProjectState, resolveShortStateRelative } = require('./short-project-state');
 
 const REQUIRED_DEPENDENCIES = Object.freeze([
   ['素材卡.md', 'material_digest'],
@@ -30,8 +31,9 @@ function digestProjectFile(projectRoot, relativePath, optional = false) {
   return sha256(fs.readFileSync(file));
 }
 
-function sidecarRelativePath(sectionIndex) {
-  return `追踪/private-short-extension/briefs/section-${String(sectionIndex).padStart(3, '0')}.json`;
+function sidecarRelativePath(sectionIndex, projectRoot = '') {
+  const leaf = `briefs/section-${String(sectionIndex).padStart(3, '0')}.json`;
+  return projectRoot ? resolveShortStateRelative(projectRoot, leaf, { forWrite: true }) : leaf;
 }
 
 function invalidatedBrief(text) {
@@ -44,7 +46,7 @@ function buildBriefFreshnessSnapshot({ projectRoot, briefPath, sectionIndex, acc
   if (!Number.isInteger(section) || section < 1) throw new Error('sectionIndex must be a positive integer');
   const brief = String(briefPath || '').trim();
   const missing = [];
-  const projectState = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
+  const projectState = readShortProjectState(root) || {};
   const snapshot = {
     schema_version: '1.0.0',
     section_index: section,
@@ -91,7 +93,7 @@ function buildBriefFreshnessSnapshot({ projectRoot, briefPath, sectionIndex, acc
 
   return {
     status: missing.length ? 'missing_dependency' : 'snapshot_ready',
-    sidecar: sidecarRelativePath(section),
+    sidecar: sidecarRelativePath(section, root),
     missing_dependencies: missing,
     snapshot,
   };
@@ -115,6 +117,9 @@ function checkBriefFreshness({ projectRoot, briefPath, sectionIndex, acceptedAnc
       status: 'missing',
       sidecar: built.sidecar,
       stale_dependencies: ['brief_freshness_snapshot'],
+      changed_dimensions: ['identity'],
+      affects_current_section: true,
+      recovery: 'rebuild_current_brief_once',
       missing_dependencies: built.missing_dependencies,
       invalidated_marker: false,
     };
@@ -128,6 +133,9 @@ function checkBriefFreshness({ projectRoot, briefPath, sectionIndex, acceptedAnc
       status: 'missing',
       sidecar: built.sidecar,
       stale_dependencies: ['brief_freshness_snapshot'],
+      changed_dimensions: ['identity'],
+      affects_current_section: true,
+      recovery: 'rebuild_current_brief_once',
       missing_dependencies: [`invalid sidecar: ${error.message}`],
       invalidated_marker: false,
     };
@@ -135,28 +143,61 @@ function checkBriefFreshness({ projectRoot, briefPath, sectionIndex, acceptedAnc
 
   const current = built.snapshot;
   const stale = [];
+  const changedDimensions = new Set();
+  // Each comparison is tagged with a semantic dimension so callers can classify
+  // why a brief went stale (planning / material / memory / anchor / identity /
+  // brief) instead of only getting a flat list of file labels. The legacy
+  // stale_dependencies string array is preserved for backward compatibility.
   const comparisons = [
-    ['project-state.project_id', 'project_id'],
-    ['project-state.plan_revision', 'plan_revision'],
-    ['素材卡.md', 'material_digest'],
-    ['设定.md', 'setting_digest'],
-    ['小节大纲.md', 'outline_digest'],
-    ['当前作品记忆', 'memory_revision'],
-    [String(acceptedAnchorPath || 'accepted_anchor'), 'accepted_anchor_digest'],
-    [String(briefPath || 'Brief'), 'brief_digest'],
+    { label: 'project-state.project_id', field: 'project_id', dimension: 'identity' },
+    { label: 'project-state.plan_revision', field: 'plan_revision', dimension: 'planning' },
+    { label: '素材卡.md', field: 'material_digest', dimension: 'material' },
+    { label: '设定.md', field: 'setting_digest', dimension: 'planning' },
+    { label: '小节大纲.md', field: 'outline_digest', dimension: 'planning' },
+    { label: '当前作品记忆', field: 'memory_revision', dimension: 'memory' },
+    { label: String(acceptedAnchorPath || 'accepted_anchor'), field: 'accepted_anchor_digest', dimension: 'anchor' },
+    { label: String(briefPath || 'Brief'), field: 'brief_digest', dimension: 'brief' },
   ];
-  for (const [label, field] of comparisons) {
-    if (String(previous[field] || '') !== String(current[field] || '')) stale.push(label);
+  for (const { label, field, dimension } of comparisons) {
+    if (String(previous[field] || '') !== String(current[field] || '')) {
+      stale.push(label);
+      changedDimensions.add(dimension);
+    }
   }
   const briefFile = safeProjectPath(projectRoot, briefPath);
   const marker = Boolean(briefFile && fs.existsSync(briefFile) && invalidatedBrief(fs.readFileSync(briefFile, 'utf8')));
-  if (marker && !stale.includes(String(briefPath))) stale.push(String(briefPath));
-  for (const missing of built.missing_dependencies) if (!stale.includes(missing)) stale.push(missing);
+  if (marker && !stale.includes(String(briefPath))) {
+    stale.push(String(briefPath));
+    changedDimensions.add('brief');
+  }
+  for (const missing of built.missing_dependencies) {
+    if (!stale.includes(missing)) stale.push(missing);
+    // Missing dependencies are structural gaps; tag as identity so callers see
+    // the brief cannot be trusted rather than silently treating it as current.
+    changedDimensions.add('identity');
+  }
+
+  // affects_current_section: whether the detected change can influence the
+  // brief for THIS section.
+  //  - memory_revision drift is already section-aware: selectFacts and
+  //    selectPlanningConstraints filter by sectionIndex, so a future-section
+  //    fact/constraint cannot move the revision. A change here is real.
+  //  - planning (设定/小节大纲) and material (素材卡) are whole-file digests
+  //    with no per-section breakdown available in the snapshot; treat them as
+  //    potentially affecting the current section (conservative default).
+  //  - identity changes (project_id / plan_revision) always affect the section.
+  //  - anchor / brief / pure-identity marker changes are about THIS section's
+  //    accepted artifact, so they also count.
+  const DIMENSIONS_AFFECTING_CURRENT = new Set(['planning', 'material', 'memory', 'identity', 'anchor', 'brief']);
+  const affectsCurrentSection = [...changedDimensions].some(key => DIMENSIONS_AFFECTING_CURRENT.has(key));
 
   return {
     status: stale.length ? 'stale' : 'current',
     sidecar: built.sidecar,
-    stale_dependencies: stale,
+    stale_dependencies: stale, // backward-compatible flat list of labels
+    changed_dimensions: [...changedDimensions], // semantic dimension classification
+    affects_current_section: affectsCurrentSection,
+    recovery: stale.length ? 'rebuild_current_brief_once' : null,
     missing_dependencies: built.missing_dependencies,
     invalidated_marker: marker,
     snapshot: previous,

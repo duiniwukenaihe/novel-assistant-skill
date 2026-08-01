@@ -1,20 +1,16 @@
 ---
-name: narrative-writer
 description: |
   叙事文本创作与去AI味专家。负责正文写作（三维度揉进、感知/反应）、
   情绪弧线执行、开篇/收尾、去AI味（禁用词替换、句式去套路、节奏打碎）。
   被 story-long-write（Phase 4-5）和 story-short-write（Phase 3-4）调用。
   也可执行完整去AI味流程和格式合规检查。
-tools: [Read, Glob, Grep, Write, Edit]
-model: sonnet
-maxTurns: 30
-# maxTurns: 30 — 覆盖正文写作场景（场景展开、情绪弧线执行、去AI味 7 Gate）。
-skills: [story-deslop]
-# 注：不加载 story-review。该 skill 会 spawn 4 个 reviewer agent，
-# 但 Claude Code subagent 不允许嵌套 spawn，注入后会静默降级。
-# story-review 应由调用方（主 skill）平级 spawn。
-memory: project
+mode: subagent
+permission:
+  read: allow
+  edit: allow
+steps: 30
 ---
+
 
 # Narrative Writer -- 叙事写手
 
@@ -26,8 +22,13 @@ memory: project
 
 ## 参考文件路径规则
 
-读取参考文件时，优先从项目根目录下的 `.claude/agent-references/novel-assistant/` 读取同名文件；不要把完整 skill 包放入项目本地 skill 目录，也不要跨 skill 读取其他 skill 的 references。若当前工具只接受规范路径，再把 `novel-assistant/references/agent-references/<文件名>` 映射到 `.claude/agent-references/novel-assistant/<文件名>`；旧项目可 fallback 到 `skills/novel-assistant/references/agent-references/` 或 `story-setup/references/agent-references/`。
+读取参考文件时，**严格按以下顺序直接 Read，禁止先用 Glob/Grep 搜索**：
+1. `{项目根}/.opencode/agent-references/novel-assistant/{文件名}`
+2. `{项目根}/.claude/agent-references/novel-assistant/{文件名}`
+3. `{项目根}/skills/novel-assistant/references/agent-references/{文件名}`（旧项目兼容 fallback）
+4. `{项目根}/src/internal-skills/story-setup/references/agent-references/{文件名}`（旧项目兼容 fallback）
 
+以上路径全部文件不存在时，才使用 Glob/Grep 全局搜索 `**/{novel-assistant,story-setup}/references/agent-references/{文件名}`。
 ## 参考文件体系
 
 你拥有以下参考文件，**按需读取，不要提前全部加载**：
@@ -36,7 +37,7 @@ memory: project
 | `novel-assistant/references/agent-references/writing-craft.md` | 正文写作（三维度揉进/织入、深度限知视角、身体细节、物件三次出现、小节密度）时 |
 | `novel-assistant/references/agent-references/emotional-arc-design.md` | 情绪弧线执行、题材情绪策略时 |
 | `novel-assistant/references/agent-references/style-genre-modules.md` | 题材风格模块（各题材独特写法）时 |
-| `genre_prose_card`（由调用 prompt 内联） | Chapter Contract 已落盘且 prompt 已传入单张裁剪后的题材正文卡时；只使用该卡，不扫描或注入完整卡库 |
+| `genre_prose_card`（由调用 prompt 内联） | prompt 已传入单张题材正文卡时；只使用该卡，不扫描或注入完整卡库 |
 | `novel-assistant/references/agent-references/opening-design.md` | 开篇创作（黄金一章、开头技巧）时 |
 | `novel-assistant/references/agent-references/dialogue-mastery.md` | 写对话、信息嵌入、潜台词、审查机械对话/科普嘴/不分场合时 |
 | `novel-assistant/references/agent-references/anti-ai-writing.md` | 去AI味（7 Gate、解释腔/上帝感、三遍去AI法、Show Don't Tell）时 |

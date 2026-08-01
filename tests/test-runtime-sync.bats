@@ -56,6 +56,47 @@ teardown() {
     cmp "$TMP_DIR/outline.before" "$PROJECT/大纲/a.md"
     cmp "$TMP_DIR/setting.before" "$PROJECT/设定/a.md"
     cmp "$TMP_DIR/tracking.before" "$PROJECT/追踪/a.md"
+
+    node - "$TMP_DIR/out.json" "$PROJECT" <<'NODE'
+const fs=require('fs'),path=require('path');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const root=process.argv[3];
+if(out.writePolicy!=='migration_required') throw new Error(JSON.stringify(out));
+if(fs.existsSync(path.join(root,'追踪/story-system/write-policy.json'))) throw new Error('existing story project must not be silently pinned to legacy');
+if(!String(out.writePolicyMigrationCommand||'').includes('book-write-policy-migrate.js preview')) throw new Error(JSON.stringify(out));
+NODE
+}
+
+@test "runtime sync initializes an empty new project with strict canonical writes" {
+    local empty="$TMP_DIR/empty-book"
+    mkdir -p "$empty"
+
+    node "$SCRIPT" --project-root "$empty" --skill-dir "$SKILL_DIR" --json > "$TMP_DIR/empty.json"
+
+    node - "$TMP_DIR/empty.json" "$empty" <<'NODE'
+const fs=require('fs'),path=require('path');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const policy=JSON.parse(fs.readFileSync(path.join(process.argv[3],'追踪/story-system/write-policy.json'),'utf8'));
+if(out.writePolicy!=='strict'||policy.mode!=='strict') throw new Error(JSON.stringify({out,policy}));
+NODE
+}
+
+@test "runtime sync repairs a managed short project that predates write-policy initialization" {
+    local short_book="$TMP_DIR/managed-short"
+    mkdir -p "$short_book/追踪/story-system/short"
+    printf '%s\n' '{"workflow_id":"wf-short","selected_material":{"card_id":"card-1"}}' > "$short_book/追踪/story-system/short/material-snapshot.json"
+    printf '%s\n' '{"project_id":"short-1","active_write_workflow_id":"wf-short"}' > "$short_book/追踪/story-system/short/project-state.json"
+    printf '%s\n' '# 旧版已生成设定' > "$short_book/设定.md"
+    printf '%s\n' 'novel_assistant_bundle_id: bundle-old' > "$short_book/.story-deployed"
+
+    node "$SCRIPT" --project-root "$short_book" --skill-dir "$SKILL_DIR" --json > "$TMP_DIR/managed-short.json"
+
+    node - "$TMP_DIR/managed-short.json" "$short_book" <<'NODE'
+const fs=require('fs'),path=require('path');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const policy=JSON.parse(fs.readFileSync(path.join(process.argv[3],'追踪/story-system/write-policy.json'),'utf8'));
+if(out.writePolicy!=='strict'||policy.mode!=='strict') throw new Error(JSON.stringify({out,policy}));
+NODE
 }
 
 @test "runtime sync refreshes an existing deployment sentinel to the installed bundle" {
@@ -171,6 +212,7 @@ NODE
       const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
       if (result.status !== "confirmation_required") process.exit(1);
       if (!result.conflicts.some(conflict => conflict.path === ".claude/hooks/session-start.sh")) process.exit(2);
+      if (result.confirmation_command !== "node scripts/novel-assistant-sync-runtime.js --project-root . --json --confirm-conflicts") process.exit(3);
     ' "$TMP_DIR/conflict.json"
     cmp "$TMP_DIR/session-start.before" "$PROJECT/.claude/hooks/session-start.sh"
     test ! -e "$PROJECT/.story-runtime-managed.json"

@@ -48,7 +48,11 @@ if [ -f "$ROOT/.claude/.agents-pending-restart" ]; then
   rm -f "$ROOT/.claude/.agents-pending-restart" 2>/dev/null || true
 fi
 
-# 部署自检：.story-deployed 存在但 hooks 文件被误删时发出警告
+# 部署自检：.story-deployed 存在但 hooks 文件被误删时发出警告。
+# 所有「更新写作协作环境」类提醒先收集到 UPDATE_REMINDER，最后统一经 24h 负缓存节流
+# （见下方）——避免每个会话起点都重复刷同一屏更新提醒。HARD 结构性损坏（hook 文件缺失）
+# 仍即时输出，不参与节流。
+UPDATE_REMINDER=""
 if sentinel_exists "$ROOT/.story-deployed"; then
   MISSING_HOOKS=""
   for hook in session-start.sh session-end.sh detect-story-gaps.sh pre-compact.sh post-compact.sh validate-story-commit.sh guard-outline-before-prose.sh lib/common.sh lib/sentinel.sh; do
@@ -65,21 +69,18 @@ if sentinel_exists "$ROOT/.story-deployed"; then
   AGENTS_VERSION=$(read_sentinel_field agents_version "$ROOT/.story-deployed")
   case "$AGENTS_VERSION" in
     ''|*[!0-9]*)
-      OUTPUT+="[WARN] 写作协作环境版本信息不完整。运行 /novel-assistant 更新写作协作环境。\n\n"
-      HAS_CONTENT=true
+      UPDATE_REMINDER+="[WARN] 写作协作环境版本信息不完整。运行 /novel-assistant 更新写作协作环境。\n\n"
       ;;
     *)
-      if [ "$AGENTS_VERSION" -lt 18 ]; then
-        OUTPUT+="[WARN] 写作协作环境版本偏旧（agents v${AGENTS_VERSION}，低于 v18）。运行 /novel-assistant 更新写作协作环境。\n\n"
-        HAS_CONTENT=true
+      if [ "$AGENTS_VERSION" -lt 19 ]; then
+        UPDATE_REMINDER+="[WARN] 写作协作环境版本偏旧（agents v${AGENTS_VERSION}，低于 v19）。运行 /novel-assistant 更新写作协作环境。\n\n"
       fi
       ;;
   esac
 
   for field in setup_skill_version novel_assistant_bundle_id novel_assistant_source_commit target_cli resolver_strategy references_dir; do
     if [ -z "$(read_sentinel_field "$field" "$ROOT/.story-deployed")" ]; then
-      OUTPUT+="[WARN] 写作协作环境元信息不完整：缺少 $field。运行 /novel-assistant 更新写作协作环境。\n\n"
-      HAS_CONTENT=true
+      UPDATE_REMINDER+="[WARN] 写作协作环境元信息不完整：缺少 $field。运行 /novel-assistant 更新写作协作环境。\n\n"
     fi
   done
 
@@ -87,13 +88,32 @@ if sentinel_exists "$ROOT/.story-deployed"; then
   if [ -n "$REFERENCES_DIR" ]; then
     REFERENCES_PATH=$(resolve_project_path "$REFERENCES_DIR")
     if [ ! -d "$REFERENCES_PATH" ] || ! find "$REFERENCES_PATH" -maxdepth 1 -type f -name "*.md" -print -quit 2>/dev/null | grep -q .; then
-      OUTPUT+="[WARN] 写作协作环境参考资料包缺失或为空：${REFERENCES_DIR}。运行 /novel-assistant 更新写作协作环境。\n\n"
-      HAS_CONTENT=true
+      UPDATE_REMINDER+="[WARN] 写作协作环境参考资料包缺失或为空：${REFERENCES_DIR}。运行 /novel-assistant 更新写作协作环境。\n\n"
     fi
   fi
 else
-  OUTPUT+="[WARN] 写作协作环境未部署。运行 /novel-assistant 更新写作协作环境。\n\n"
-  HAS_CONTENT=true
+  UPDATE_REMINDER+="[WARN] 写作协作环境未部署。运行 /novel-assistant 更新写作协作环境。\n\n"
+fi
+
+# 更新提醒 24h 负缓存节流：同一项目内，若过去 24h 已提示过「更新写作协作环境」，
+# 本会话不再重复刷屏（避免每次会话起点都弹同一屏提醒）。戳文件位于 .claude/ 下，
+# 仅记录上一次提醒的 epoch 秒，不含任何业务信息。无戳 / 戳过期 / 读取失败都按「可提醒」处理。
+if [ -n "$UPDATE_REMINDER" ]; then
+  STAMP_FILE="$ROOT/.claude/.update-notify.stamp"
+  NOW_TS=$(date +%s 2>/dev/null || echo 0)
+  LAST_TS=0
+  if [ -f "$STAMP_FILE" ]; then
+    LAST_TS=$(LC_ALL=C tr -dc '0-9' < "$STAMP_FILE" 2>/dev/null | head -c 12)
+    [ -n "$LAST_TS" ] || LAST_TS=0
+  fi
+  # 24h = 86400s。LAST_TS 为 0（无戳/首次/读失败）时差值必然 > 86400 → 放行提醒。
+  if [ $((NOW_TS - LAST_TS)) -ge 86400 ]; then
+    OUTPUT+="$UPDATE_REMINDER"
+    HAS_CONTENT=true
+    # 写入新戳（失败不致命：最坏情况是下个会话再提醒一次）。
+    mkdir -p "$ROOT/.claude" 2>/dev/null || true
+    printf '%s\n' "$NOW_TS" > "$STAMP_FILE" 2>/dev/null || true
+  fi
 fi
 
 # 显示分支和最近 commit（仅在有 git 历史时）
@@ -129,9 +149,16 @@ if book_state_exists "$ROOT"; then
     fi
 fi
 
-# 未完成拆文（阈值 > 0 才报告）
+# 未完成拆文（阈值 > 0 才报告）。只统计「最终状态」非 completed / completed_with_errors
+# 的 _progress.md；已完成（含 completed_with_errors）不再误报为未完成。见 lib/common.sh
+# is_progress_completed。
 if [ -d "$ROOT/拆文库" ]; then
-  PROGRESS_COUNT=$(find "$ROOT/拆文库" -name "_progress.md" 2>/dev/null | wc -l | tr -d ' ')
+  PROGRESS_COUNT=0
+  while IFS= read -r -d '' progress_file; do
+    if ! is_progress_completed "$progress_file"; then
+      PROGRESS_COUNT=$((PROGRESS_COUNT + 1))
+    fi
+  done < <(find "$ROOT/拆文库" -name "_progress.md" -print0 2>/dev/null || true)
   if [ "$PROGRESS_COUNT" -gt 0 ]; then
     OUTPUT+="[INFO] 拆文库/ 中有 $PROGRESS_COUNT 个未完成拆文。运行 /novel-assistant 继续拆文。\n"
     HAS_CONTENT=true

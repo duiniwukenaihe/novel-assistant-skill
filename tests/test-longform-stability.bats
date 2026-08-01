@@ -389,8 +389,8 @@ setup() {
 }
 
 @test "story-setup bumps agents version for stability-aware agents" {
-    grep -q "agents_version: 18" "$SETUP/SKILL.md"
-    grep -q "agents_version: 18" "$SETUP/UPGRADING.md"
+    grep -q "agents_version: 19" "$SETUP/SKILL.md"
+    grep -q "agents_version: 19" "$SETUP/UPGRADING.md"
     grep -q "长篇目录迁移" "$SETUP/UPGRADING.md"
     grep -q "check-ai-patterns.js" "$SETUP/SKILL.md"
     grep -q "story-project-migrate.js" "$SETUP/SKILL.md"

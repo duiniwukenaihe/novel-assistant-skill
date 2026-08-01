@@ -1,0 +1,11 @@
+{
+  "schema_version": "2.0.0",
+  "project_id": "short-superseded",
+  "project_title": "果汁事件",
+  "active_write_workflow_id": "wf-new-task",
+  "plan_revision": 1,
+  "current_section_index": 2,
+  "accepted_sections": [{ "section_index": 1 }],
+  "status": "writing",
+  "narrative": { "planned_sections": 9 }
+}

@@ -6,11 +6,11 @@ const path = require('path');
 const { atomicWriteJson } = require('./workflow-state-store');
 const { isCanonicalTarget, normalizeTargets } = require('./canonical-write-policy');
 const { readTaskFamily } = require('./task-family-store');
+const { SHORT_WORKFLOW_TYPES } = require('./short-workflow-types');
 
 const BASELINE_FILE = 'canonical-write-baseline.json';
 const AUDIT_FILE = 'write-audit.json';
-const SHORT_WRITE_FORMAL_ASSETS = ['素材卡.md', '设定.md', '小节大纲.md', '正文.md'];
-const SHORT_WORKFLOW_TYPES = new Set(['short_write', 'short_startup', 'private_short_startup']);
+const SHORT_WRITE_FORMAL_ASSETS = ['素材卡.md', '设定.md', '小节大纲.md', '正文.md', '正文/**'];
 
 function captureCanonicalBaseline(projectRoot, task) {
   const root = path.resolve(projectRoot);

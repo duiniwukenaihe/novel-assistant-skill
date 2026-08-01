@@ -30,7 +30,9 @@ class LocalStorageBackend {
     const identityPath = '追踪/storage/project-identity.json';
     const existing = this.readJson(identityPath);
     if (existing && existing.project_id && existing.project_instance_id) return sanitizeIdentity(existing);
-    const projectState = this.readJson('追踪/private-short-extension/project-state.json') || {};
+    const projectState = this.readJson('追踪/story-system/short/project-state.json')
+      || this.readJson('追踪/private-short-extension/project-state.json')
+      || {};
     const bookState = this.readJson('.book-state.json') || {};
     const projectId = String(projectState.project_id || bookState.projectId || bookState.bookId || '').trim();
     if (!projectId) return { status: 'missing', project_id: '', project_instance_id: '' };

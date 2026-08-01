@@ -29,6 +29,22 @@ NODE
   [ "$status" -eq 0 ]
 }
 
+@test "prepared planning transaction can be deterministically rolled back after a blocked accept" {
+  BOOK="$BATS_TEST_TMPDIR/prepared-rollback-book"
+  mkdir -p "$BOOK/追踪/story-system/transactions/tx-orphan"
+  printf '%s\n' '{"schemaVersion":"1.0.0","transaction_id":"tx-orphan","status":"prepared","project_root":"placeholder","workflow_id":"wf-short","volume":"短篇规划","chapter":2,"artifacts":[]}' > "$BOOK/追踪/story-system/transactions/tx-orphan/transaction.json"
+  run node - "$REPO/scripts/lib/chapter-commit-store.js" "$BOOK" <<'NODE'
+const fs=require('fs'),path=require('path');
+const api=require(process.argv[2]);const root=process.argv[3];
+const file=path.join(root,'追踪/story-system/transactions/tx-orphan/transaction.json');
+const transaction=JSON.parse(fs.readFileSync(file,'utf8'));transaction.project_root=root;fs.writeFileSync(file,JSON.stringify(transaction));
+const result=api.rollbackPreparedTransaction(root,'tx-orphan','test blocked accept');
+const saved=JSON.parse(fs.readFileSync(file,'utf8'));
+if(result.status!=='rolled_back'||saved.status!=='rolled_back'||saved.rollback_reason!=='test blocked accept') throw new Error(JSON.stringify({result,saved}));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 @test "short brief freshness is bound to project identity and plan revision" {
   BOOK="$BATS_TEST_TMPDIR/brief-revision-book"
   mkdir -p "$BOOK/追踪/private-short-extension"
@@ -372,6 +388,15 @@ const publicTemplates = registry.buildEffectiveTemplates('', true).templates;
 const privateTemplates = registry.buildEffectiveTemplates('', false).templates;
 if (publicTemplates.short_write.production_kernel !== 'short-section-production-v2') throw new Error(JSON.stringify(publicTemplates.short_write));
 if (privateTemplates.short_write.production_kernel !== 'short-section-production-v2') throw new Error(JSON.stringify(privateTemplates.short_write));
+const publicStages=publicTemplates.short_write.stages.map((item)=>item.stage_id);
+const privateStages=privateTemplates.short_write.stages.map((item)=>item.stage_id);
+for (const stage of ['freshness_window','info_source_pool','material_learning','project_seed']) {
+  if (!privateStages.includes(stage)) throw new Error(`private workflow missing information prelude ${stage}`);
+  if (publicStages.includes(stage)) throw new Error(`public workflow leaked private information stage ${stage}`);
+}
+for (const stage of ['short_setting','platform_genre_lock','rhythm_pattern_selection','section_outline','section_machine_gate','section_accept_anchor','full_story_assembly','final_check']) {
+  if (!publicStages.includes(stage) || !privateStages.includes(stage)) throw new Error(`shared production kernel missing ${stage}`);
+}
 for (const stage of ['section_machine_gate', 'section_accept_anchor', 'full_story_assembly']) {
   if (!privateTemplates.short_write.stages.some((item) => item.stage_id === stage)) throw new Error(`private workflow missing ${stage}`);
 }
@@ -389,10 +414,13 @@ NODE
 const { classifyWorkflowApply } = require(process.argv[2]);
 const blocked = classifyWorkflowApply({ status: 0, stdout: '{"status":"blocked_stale_visible_choice"}' });
 if (blocked.applied || blocked.exitCode !== 0 || blocked.workflowStatus !== 'blocked_stale_visible_choice') throw new Error(JSON.stringify(blocked));
-const started = classifyWorkflowApply({ status: 0, stdout: JSON.stringify({ status:'stage_started', stage_execution:{ status:'running', stage_id:'next_stage', execution_command:'node next.js', context_read_command:'node context.js', stage_context_packet:{ huge:'x'.repeat(20000) }, memory_context:{ huge:'y'.repeat(20000) } }, visible_response:{ selection_contract:'resume_running_stage' }, interaction_contract:'continue_confirmed_internal_stage' }) });
+const started = classifyWorkflowApply({ status: 0, stdout: JSON.stringify({ status:'stage_started', stage_execution:{ status:'running', stage_id:'next_stage', execution_command:'node next.js', stage_completion_command:'node next.js', current_required_action:'edit_write_set', after_write_action:{type:'execute_command',command:'node next.js'}, context_read_command:'node context.js', stage_context_packet:{ huge:'x'.repeat(20000) }, memory_context:{ huge:'y'.repeat(20000) } }, visible_response:{ selection_contract:'resume_running_stage' }, interaction_contract:'continue_confirmed_internal_stage' }) });
 if (!started.applied || started.exitCode !== 0 || started.workflowStatus !== 'stage_started') throw new Error(JSON.stringify(started));
 if ((started.presentation.stage_execution||{}).stage_id !== 'next_stage') throw new Error(JSON.stringify(started.presentation));
 if ((started.presentation.stage_execution||{}).execution_command !== 'node next.js') throw new Error(JSON.stringify(started.presentation));
+if ((started.presentation.stage_execution||{}).stage_completion_command !== 'node next.js') throw new Error(JSON.stringify(started.presentation));
+if ((started.presentation.stage_execution||{}).current_required_action !== 'edit_write_set') throw new Error(JSON.stringify(started.presentation));
+if (((started.presentation.stage_execution||{}).after_write_action||{}).command !== 'node next.js') throw new Error(JSON.stringify(started.presentation));
 if ('stage_context_packet' in started.presentation.stage_execution || 'memory_context' in started.presentation.stage_execution) throw new Error(JSON.stringify(started.presentation));
 if ((started.presentation.visible_response||{}).selection_contract !== 'resume_running_stage') throw new Error(JSON.stringify(started.presentation));
 const failed = classifyWorkflowApply({ status: 2, stdout: '', stderr: 'process failed' });
@@ -410,6 +438,11 @@ if ((recovery.visible_response||{}).selection_contract !== 'resume_running_stage
 if (recovery.interaction_contract !== 'continue_confirmed_internal_stage') throw new Error(JSON.stringify(recovery));
 if (recovery.completion_required_before_reply !== true || (recovery.visible_response||{}).completion_required_before_reply !== true) throw new Error(JSON.stringify(recovery));
 if (!((recovery.stage_execution||{}).execution_sequence||[]).includes('execute_completion_command')) throw new Error(JSON.stringify(recovery));
+if ((recovery.stage_execution||{}).stage_completion_command !== 'node finalize.js') throw new Error(JSON.stringify(recovery));
+if ((recovery.stage_execution||{}).current_required_action !== 'edit_write_set') throw new Error(JSON.stringify(recovery));
+if ((((recovery.stage_execution||{}).after_write_action)||{}).command !== 'node finalize.js') throw new Error(JSON.stringify(recovery));
+if (recovery.presentation_allowed !== false || (recovery.visible_response||{}).user_visible !== false) throw new Error(JSON.stringify(recovery));
+if ('text' in (recovery.visible_response||{}) || 'instruction' in recovery) throw new Error(JSON.stringify(recovery));
 const outline = '# 第 1 节\n\n场景行动：第一次。\n\n# 第 1 节\n\n场景行动：修订版。\n';
 const checked = analyzeShortOutlineNarrativeQuality(outline, 1);
 const duplicates = checked.findings.filter((item) => item.code === 'duplicate_section_outline' && item.section === 1);
@@ -417,6 +450,50 @@ if (duplicates.length !== 1 || duplicates[0].occurrences !== 2) throw new Error(
 if (checked.section_roles.filter((item) => item.section === 1).length !== 1) throw new Error(JSON.stringify(checked.section_roles));
 NODE
   [ "$status" -eq 0 ]
+}
+
+@test "short outline validation stops before an automatic whole-outline rewrite" {
+  BOOK="$BATS_TEST_TMPDIR/outline-retry-book"
+  mkdir -p "$BOOK/追踪/story-system" "$BOOK/追踪/workflow"
+  node "$REPO/scripts/workflow-state-machine.js" create --workflow-type short_write --project-root "$BOOK" --scope "新短篇" --user-goal "创建短篇" --no-private-registry --json > "$BATS_TEST_TMPDIR/outline-retry-create.json"
+  WORKFLOW_ID="$(node -e 'console.log(require(process.argv[1]).task.workflow_id)' "$BATS_TEST_TMPDIR/outline-retry-create.json")"
+  cat > "$BOOK/设定.md" <<'EOF'
+# 设定
+- 叙事方式：第一人称女主有限视角。
+- 目标长度：5000字，共2节。
+- 主节奏：发现秘密 -> 公开追责。
+
+## 主要人物
+### 林栖｜主角
+林栖，29岁广告文案。目标是查清私密倾诉被盗用；软肋是害怕真人评判，误信沉默就不会受伤。能力边界是只能使用公开广告、本地导出与合法录音。她最终主动拒绝封口并提交证据。
+
+### 周叙｜主要压力角色
+周叙，31岁技术公司负责人。目标是保住发布项目和公司估值；他相信匿名训练能惠及更多用户。可用资源是法务、公关和平台解释权，行动边界是不能删除林栖的本地证据或威胁家人。
+
+## 人物关系与责任债
+林栖与周叙从产品信任走向公开对抗；周叙欠她被滥用的表达权。
+EOF
+  node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
+const taskFile=path.join(root,'追踪/workflow/tasks',id,'task.json');const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const staged=`${task.task_dir}/artifacts/planning/section_outline/sa-outline/小节大纲.md`;
+fs.mkdirSync(path.dirname(path.join(root,staged)),{recursive:true});
+fs.writeFileSync(path.join(root,staged),`# 小节大纲\n\n## 第1节：秘密出现\n- 开篇钩子：广告出现她的原话。\n- 故事承诺：她要查清表达如何被盗用。\n- 场景动作：她保存广告截图并打开本地导出。\n- 主角选择：她决定留下证据。\n- 因果事件：看见广告 → 保存截图。\n- 情绪目标：震惊到警觉。\n- 节尾钩子：公司要求她签保密协议。\n\n## 第2节：公开追责\n- 承接上节：公司要求她签保密协议。\n- 场景动作：她整理材料。\n- 现实后果：广告暂停。\n- 关系收束：她不再信任公司。\n- 主题回扣：理解不等于拥有。\n- 因果事件：整理材料 → 广告暂停。\n- 情绪目标：害怕到承担。\n- 节尾钩子：她给朋友打电话。\n`);
+task.current_stage='section_outline';task.current_step='section_outline';task.status='running';task.pending_action=null;
+task.stage_execution={status:'running',stage_attempt_id:'sa-outline',stage_id:'section_outline',step_id:'section_outline',owner_module:'story-short-write',expected_result_packet:`${task.task_dir}/result-packets/section_outline.result.json`,planning_target:staged,planning_canonical_target:'小节大纲.md',write_set:[staged],execution_command:'node scripts/short-planning-stage-finalize.js --project-root . --workflow-id '+JSON.stringify(id)+' --apply --json'};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+
+  run node "$REPO/scripts/short-planning-stage-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  node -e 'const x=JSON.parse(process.argv[1]); if(x.status!=="workflow_choice_required"||!x.pending_action||x.pending_action.options.length!==4||x.pending_action.options[0].action_id!=="inspect_current_state"||!String((x.visible_response||{}).text||"").includes("未自动改写")) { console.error(JSON.stringify(x)); process.exit(1); }' "$output"
+  node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
+const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));
+if(task.stage_execution.status!=='awaiting_user_decision') throw new Error(JSON.stringify(task.stage_execution));
+if((task.stage_execution.validation_recovery||{}).attempts!==1) throw new Error(JSON.stringify(task.stage_execution));
+if((task.stage_execution.validation_recovery||{}).max_automatic_attempts!==0) throw new Error(JSON.stringify(task.stage_execution));
+NODE
 }
 
 @test "strict short planning writes a staged material card through a canonical transaction" {
@@ -449,12 +526,65 @@ NODE
 const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
 const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));
 if(task.current_stage!=='short_setting') throw new Error(JSON.stringify(task));
-const state=JSON.parse(fs.readFileSync(path.join(root,'追踪/private-short-extension/project-state.json'),'utf8'));
+const state=JSON.parse(fs.readFileSync(path.join(root,'追踪/story-system/short/project-state.json'),'utf8'));
 if(!state.project_id || state.active_write_workflow_id!==id || state.schema_version!=='2.0.0') throw new Error(JSON.stringify(state));
 const events=fs.readFileSync(path.join(root,'追踪/integration/outbox.jsonl'),'utf8').trim().split(/\n/).map(JSON.parse);
 if(events.length!==1 || events[0].event_type!=='material_accepted' || events[0].project_id!==state.project_id) throw new Error(JSON.stringify(events));
 const commits=fs.readdirSync(path.join(root,'追踪/story-system/commits')).map((name)=>JSON.parse(fs.readFileSync(path.join(root,'追踪/story-system/commits',name),'utf8')));
 if(!commits.some((commit)=>(commit.artifacts||[]).some((artifact)=>artifact.target==='素材卡.md'))) throw new Error(JSON.stringify(commits));
+NODE
+}
+
+@test "short setting first produces an author-review candidate without writing canonical setting" {
+  BOOK="$BATS_TEST_TMPDIR/setting-candidate-book"
+  mkdir -p "$BOOK/追踪/story-system" "$BOOK/追踪/workflow"
+  printf '%s\n' '{"schemaVersion":"1.0.0","mode":"strict"}' > "$BOOK/追踪/story-system/write-policy.json"
+  node "$REPO/scripts/workflow-state-machine.js" create --workflow-type short_write --project-root "$BOOK" --scope "新短篇" --user-goal "创建短篇" --no-private-registry --json > "$BATS_TEST_TMPDIR/setting-create.json"
+  WORKFLOW_ID="$(node -e 'console.log(require(process.argv[1]).task.workflow_id)' "$BATS_TEST_TMPDIR/setting-create.json")"
+  node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
+const taskFile=path.join(root,'追踪/workflow/tasks',id,'task.json');const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const staged=`${task.task_dir}/artifacts/planning/short_setting/sa-setting/设定.md`;
+fs.mkdirSync(path.dirname(path.join(root,staged)),{recursive:true});
+fs.writeFileSync(path.join(root,staged),`# 人物与剧情设定候选\n\n### 林栖｜主角\n林栖，女主，29岁广告文案，第一人称。目标：查清私密话语被盗用。软肋与缺陷：害怕真人评判，误信沉默就不会受伤。能力边界：只能合法保存公开广告和本地记录。主动选择：拒绝封口并建立证据链。\n\n### 周叙｜主要压力角色\n周叙，31岁技术公司负责人。目标：保住发布项目与公司估值；他认为匿名训练可以惠及更多用户。可用资源是法务、公关和平台解释权。行动边界：不能删除林栖本地证据，也不能威胁家人；他利用旧情逼她沉默。\n\n### 唐禾｜支撑角色\n唐禾，29岁自由制片。目标：帮助朋友保全公开广告版本，也要守住自己的行业信誉。行动边界：不能替林栖决定是否公开，也不能伪造内部证据。\n\n## 人物关系与责任债\n林栖与周叙存在亲密知识被滥用的关系债，关系从信任走向公开对抗；林栖欠唐禾一次真实求助。\n\n## 核心冲突\n私密倾诉被前男友公司用于广告。\n\n## 三级升级\n第一层公开否认；第二层高额封口；第三层发布会前删除记录并反咬炒作。\n\n## 关键反转\n审稿记录揭示周叙主动要求模仿她的语气。\n\n## 结局兑现\n广告下架、责任人停职，林栖拒绝复合并重新向真人朋友求助。\n`);
+task.current_stage='short_setting';task.current_step='short_setting';task.status='running';task.pending_action=null;
+task.stage_execution={status:'running',stage_attempt_id:'sa-setting',stage_id:'short_setting',step_id:'short_setting',owner_module:'story-short-write',expected_result_packet:`${task.task_dir}/result-packets/short_setting.result.json`,planning_target:staged,planning_canonical_target:'设定.md',write_set:[staged]};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+
+  run node "$REPO/scripts/short-planning-stage-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --context --json
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  node -e 'const x=JSON.parse(process.argv[1]); if(x.status!=="short_planning_context_ready"||!x.assets.some(a=>a.role==="staged_target")) { console.error(JSON.stringify(x)); process.exit(1); }' "$output"
+
+  run node "$REPO/scripts/short-planning-stage-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --json
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  node -e 'const x=JSON.parse(process.argv[1]); if(x.status!=="short_setting_candidate_ready") { console.error(JSON.stringify(x)); process.exit(1); }' "$output"
+  [ ! -f "$BOOK/设定.md" ]
+  node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
+const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));
+if(task.current_stage!=='short_setting'||task.stage_execution.status!=='awaiting_author_confirmation') throw new Error(JSON.stringify(task));
+if((task.pending_action.options||[])[0].action_id!=='accept_short_setting_candidate') throw new Error(JSON.stringify(task.pending_action));
+if((task.short_setting_candidate||{}).author_decision!=='pending') throw new Error(JSON.stringify(task.short_setting_candidate));
+NODE
+
+  run node "$REPO/scripts/workflow-state-machine.js" resolve-action --project-root "$BOOK" --input 1 --bind-current --json
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  node -e 'const x=JSON.parse(process.argv[1]); if(x.status!=="stage_started"||x.target_stage!=="short_setting") { console.error(JSON.stringify(x)); process.exit(1); }' "$output"
+
+  run node "$REPO/scripts/short-planning-stage-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  node -e 'const x=JSON.parse(process.argv[1]); if(x.status!=="applied"||x.workflow_status!=="stage_started"||x.next_stage!=="platform_genre_lock"||x.stage_execution.stage_id!=="platform_genre_lock") { console.error(JSON.stringify(x)); process.exit(1); }' "$output"
+  node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
+const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));
+const packet=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'result-packets/short_setting.result.json'),'utf8'));
+if(task.current_stage!=='platform_genre_lock') throw new Error(JSON.stringify(task));
+if(task.stage_execution.status!=='running'||task.pending_action) throw new Error(JSON.stringify(task));
+if(!packet.chapter_commit||packet.chapter_commit.mode!=='transactional'||!packet.chapter_commit.accepted_commit_id) throw new Error(JSON.stringify(packet));
+if(JSON.stringify(packet).includes('占位第 1 节')||JSON.stringify(packet).includes('最小占位')) throw new Error(JSON.stringify(packet));
+const cast=JSON.parse(fs.readFileSync(path.join(root,'追踪/memory/active-cast.json'),'utf8'));
+if(!cast.characters.林栖||!cast.characters.周叙||!cast.characters.唐禾) throw new Error(JSON.stringify(cast));
 NODE
 }
 
@@ -469,6 +599,19 @@ NODE
 计划 2 节
 叙事方式：第一人称
 主节奏：揭露后承担现实代价
+
+## 主要人物
+### 林照，22岁，女主
+第一人称“我”。她要查清直播事故并保护被甩锅的员工，最怕失去家人的爱；误区是把哥哥的保证当成事实。她不懂生产、财务和法律，最终必须亲自撤回错误背书并推动召回。
+### 林建川，37岁，哥哥
+集团负责人。他要保住公司、订单和员工工资，认为隐瞒能救企业；拥有经营权限，但不能无成本伤人，也必须承担错误决策的职位代价。
+## 角色锁定卡
+| 角色名 | 性别/称谓/视角身份 | 年龄/职业 | 与主角关系 | 本篇目标 | 行动边界 |
+|---|---|---|---|---|---|
+| 林照 | 女，第一人称“我” | 22岁，毕业生 | 妹妹 | 查清事故并保护员工 | 不突然精通商业与法律 |
+| 林建川 | 男，称“哥” | 37岁，负责人 | 哥哥/压力角色 | 保住公司与控制权 | 不调用神秘关系解决危机 |
+## 人物关系与责任债
+- 林照欠哥哥保护家庭的现实债；哥哥欠林照被滥用的公众信用，两人的关系从保护与依赖走向公开冲突。
 EOF
   cat > "$BOOK/小节大纲.md" <<'EOF'
 # 小节大纲
@@ -522,6 +665,19 @@ task.stage_execution={status:'running',stage_attempt_id:attempt,stage_id:'feedba
 fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
 NODE
 
+  node - "$BOOK" "$WORKFLOW_ID" "$REPO/scripts/lib/workflow-stage-context-packet.js" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,id,packetModule]=process.argv.slice(2);
+const {buildStageContextPacket}=require(packetModule);
+const taskFile=path.join(root,'追踪/workflow/tasks',id,'task.json');
+const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const packet=buildStageContextPacket({projectRoot:root,task,stage:'feedback_apply_patch'});
+if(packet.status!=='assembled'||!packet.memory_read_receipt) throw new Error(JSON.stringify(packet));
+task.stage_execution.stage_context_packet={status:packet.status,packet_md:packet.packet_md,packet_json:packet.packet_json,section_index:packet.section_index};
+task.stage_execution.memory_context={context_source:'stage_context',memory_contract:packet.memory_contract,memory_read_receipt:packet.memory_read_receipt};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+
   run node "$REPO/scripts/short-planning-stage-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
   [ "$status" -eq 0 ]
   node -e 'const x=JSON.parse(process.argv[1]); if(x.status!=="applied"||x.planning_assets.length!==2||x.next_stage!=="section_plan_lock") { console.error(JSON.stringify(x)); process.exit(1); }' "$output"
@@ -566,6 +722,6 @@ NODE
   [ "$status" -eq 0 ]
   node -e 'const x=JSON.parse(process.argv[1]); if(x.status!=="applied") { console.error(JSON.stringify(x)); process.exit(1); }' "$output"
   node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
-const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));if(task.current_stage!=='short_setting') throw new Error(JSON.stringify(task));if(!fs.readFileSync(path.join(root,'素材卡.md'),'utf8').includes('果汁生产证据')) throw new Error('material card missing');const state=JSON.parse(fs.readFileSync(path.join(root,'追踪/private-short-extension/project-state.json'),'utf8'));if(!state.project_id||state.active_write_workflow_id!==id) throw new Error(JSON.stringify(state));
+const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));if(task.current_stage!=='short_setting') throw new Error(JSON.stringify(task));if(!fs.readFileSync(path.join(root,'素材卡.md'),'utf8').includes('果汁生产证据')) throw new Error('material card missing');const state=JSON.parse(fs.readFileSync(path.join(root,'追踪/story-system/short/project-state.json'),'utf8'));if(!state.project_id||state.active_write_workflow_id!==id) throw new Error(JSON.stringify(state));
 NODE
 }

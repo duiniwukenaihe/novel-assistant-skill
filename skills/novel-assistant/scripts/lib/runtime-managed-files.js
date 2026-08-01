@@ -167,6 +167,10 @@ function rollbackManagedSync({ projectRoot, snapshotId, confirmConflicts = false
     safeFs.deleteFile(file.path);
   }
   for (const file of snapshot.files) {
+    if (file.existedBefore === false) {
+      safeFs.deleteFile(file.path);
+      continue;
+    }
     safeFs.copyFile(snapshotFileRelativePath(snapshotId, file.path), file.path, file.mode === null ? 0o644 : file.mode);
   }
   writeManifest(safeFs, previous);
@@ -191,6 +195,7 @@ function prepareSnapshot(plan, operations) {
 function createSnapshot(plan, preparedSnapshot, safeFs) {
   const { snapshotId, snapshot } = preparedSnapshot;
   for (const file of snapshot.files) {
+    if (file.existedBefore === false) continue;
     safeFs.copyFile(file.path, snapshotFileRelativePath(snapshotId, file.path), file.mode);
   }
   safeFs.writeFile(snapshotManifestRelativePath(snapshotId), Buffer.from(`${JSON.stringify(snapshot, null, 2)}\n`), 0o644);
@@ -208,10 +213,11 @@ function buildSnapshot(plan, operations, snapshotId) {
       const targetState = inspectTarget(plan.projectRoot, operation.file.path);
       return {
         path: operation.file.path,
+        existedBefore: targetState.exists,
         beforeHash: targetState.hash,
         afterHash: operationDeletesTarget(operation) ? null : operation.file.sourceHash,
-        mode: targetState.stat.mode & 0o777,
-        size: targetState.stat.size,
+        mode: targetState.stat ? targetState.stat.mode & 0o777 : null,
+        size: targetState.stat ? targetState.stat.size : 0,
       };
     }),
   };

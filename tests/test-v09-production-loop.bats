@@ -226,6 +226,43 @@ EOF_HANDOFF
     ' "$WORKDIR/book/追踪/context-pack/第002章.json"
 }
 
+@test "context-pack-build recalls only characters relevant to the current chapter" {
+    mkdir -p "$WORKDIR/book/大纲" "$WORKDIR/book/追踪/章节契约" "$WORKDIR/book/追踪/交接包" "$WORKDIR/book/追踪/memory"
+    cat > "$WORKDIR/book/大纲/细纲_第002章.md" <<'EOF_OUTLINE'
+# 第002章细纲
+- 江临要查清异常水印，必须拒绝导师的私下交易。
+EOF_OUTLINE
+    cat > "$WORKDIR/book/追踪/章节契约/第002章.md" <<'EOF_CONTRACT'
+# 第002章契约
+- 江临本章不能突然信任导师。
+EOF_CONTRACT
+    cat > "$WORKDIR/book/追踪/交接包/第001章_to_第002章.md" <<'EOF_HANDOFF'
+# 交接包
+- 江临已经拿到带水印的文件。
+EOF_HANDOFF
+    cat > "$WORKDIR/book/追踪/memory/active-cast.json" <<'EOF_CAST'
+{
+  "schema_version": "1.0.0",
+  "source_kind": "canonical_story_bible",
+  "characters": {
+    "江临": {"role":"主角","goal":"查清异常水印","capability_boundary":"不能直接调取导师账户"},
+    "莫青山": {"role":"主要对手","goal":"控制宗门资源","capability_boundary":"不能公开违背门规"}
+  }
+}
+EOF_CAST
+
+    node "$REPO_ROOT/scripts/context-pack-build.js" "$WORKDIR/book" --chapter 2 --write --json > "$WORKDIR/context-pack.json"
+
+    node - "$WORKDIR/book/追踪/context-pack/第002章.json" <<'NODE'
+const fs = require('fs');
+const pack = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const state = pack.summary.characterState.join('\n');
+if (!state.includes('江临')) throw new Error(JSON.stringify(pack.summary.characterState));
+if (state.includes('莫青山')) throw new Error(JSON.stringify(pack.summary.characterState));
+if (pack.sourceFiles.activeCast !== '追踪/memory/active-cast.json') throw new Error(JSON.stringify(pack.sourceFiles));
+NODE
+}
+
 @test "scan-artifact-build converts markdown scan report into v0.8 artifacts" {
     mkdir -p "$WORKDIR/scan"
 

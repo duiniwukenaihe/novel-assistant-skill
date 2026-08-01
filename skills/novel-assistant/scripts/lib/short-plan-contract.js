@@ -2,22 +2,24 @@
 
 const fs = require('fs');
 const path = require('path');
+const { analyzeShortCharacterContract } = require('./short-character-contract');
+const { readShortProjectState } = require('./short-project-state');
 
 const REQUIRED_ASSETS = Object.freeze(['素材卡.md', '设定.md', '小节大纲.md']);
 const REQUIRED_SECTION_SIGNALS = Object.freeze([
-  ['structure', /结构功能|结构段|五段功能|承接与场景动作|场景行动/],
+  ['structure', /结构功能|结构段|五段功能|主事件|承接与场景动作|场景动作|场景行动/],
   ['emotion', /情绪目标|目标情绪|情绪：|可见阻力与压力变化|压力变化/],
-  ['causality', /因果链|因果推进|因果：/],
-  ['handoff', /节尾钩子|承接钩子|结尾承接|节尾：|结尾回扣|结尾兑现|代价收束|关系后果、代价与钩子|承接上节/],
+  ['causality', /因果链|因果推进|因果事件|因果：/],
+  ['handoff', /节尾钩子|停顿钩|接力入|承接钩子|结尾承接|节尾：|结尾回扣|结尾兑现|代价收束|关系后果、代价与钩子|承接上节/],
 ]);
 
 const COMMON_STORY_SIGNALS = Object.freeze([
-  ['scene_action', /场景动作|可见行动|关键动作/],
-  ['protagonist_choice', /角色选择|主角选择|主动选择/],
+  ['scene_action', /场景动作|场景行动|可见行动|关键动作|动作链/],
+  ['protagonist_choice', /角色选择|主角选择|主动选择|主角决定/],
 ]);
 
 const MIDDLE_STORY_SIGNALS = Object.freeze([
-  ['handoff_in', /承接上节|上节承接/],
+  ['handoff_in', /接力入|承接上节|上节承接|承接钩/],
   ['pressure_shift', /压力变化|局势起伏|情绪起伏/],
   ['visible_opposition', /可见阻力|对手施压|场景阻力/],
   ['section_payoff', /本节兑现|信息兑现|反转兑现|局势变化/],
@@ -26,18 +28,18 @@ const MIDDLE_STORY_SIGNALS = Object.freeze([
 ]);
 
 const OPENING_STORY_SIGNALS = Object.freeze([
-  ['opening_hook', /开篇钩子|入场钩子/],
+  ['opening_hook', /开篇钩|开场钩|入场钩子/],
   ['story_promise', /故事承诺|核心承诺/],
 ]);
 
 const CLIMAX_STORY_SIGNALS = Object.freeze([
-  ['core_payoff', /核心承诺兑现|核心爆点兑现|高潮兑现/],
-  ['decisive_action', /决定性行动|高潮行动/],
+  ['core_payoff', /核心兑现|核心承诺兑现|核心爆点兑现|高潮兑现/],
+  ['decisive_action', /决定性动作|决定性行动|高潮行动/],
   ['immediate_cost', /即时代价|高潮代价|选择代价/],
 ]);
 
 const ENDING_STORY_SIGNALS = Object.freeze([
-  ['handoff_in', /承接上节|上节承接/],
+  ['handoff_in', /接力入|承接上节|上节承接|承接钩/],
   ['consequences', /现实后果|责任分配|代价收束/],
   ['relationship_closure', /关系收束|人物关系收束/],
   ['theme_callback', /主题回扣|结尾回扣|意义落点/],
@@ -104,7 +106,8 @@ function checkShortPlanContract(projectRoot) {
 
   const settingText = readText(path.join(root, '设定.md'));
   const outlineText = readText(path.join(root, '小节大纲.md'));
-  const state = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
+  const characterContract = analyzeShortCharacterContract(settingText);
+  const state = readShortProjectState(root) || {};
   const sections = outlineSections(outlineText);
   const outlined = Array.from(new Set(sections.map((item) => item.number))).sort((a, b) => a - b);
   const legacyOutlined = legacyOutlineSectionNumbers(outlineText);
@@ -132,9 +135,12 @@ function checkShortPlanContract(projectRoot) {
       user_confirmed_sections: [],
       remaining_sections: Array.isArray(state.remaining_sections) ? state.remaining_sections : [],
       narrative_quality: { status: 'not_run', findings: [], advisories: [] },
+      character_contract: characterContract,
       findings,
     };
   }
+
+  findings.push(...characterContract.findings);
 
   if (!Number.isInteger(planned) || planned < 1) {
     findings.push({ code: 'missing_planned_section_count', message: '设定或项目状态未锁定总小节数。' });
@@ -149,7 +155,9 @@ function checkShortPlanContract(projectRoot) {
   }
 
   for (const section of sections) {
-    const missingSignals = REQUIRED_SECTION_SIGNALS.filter(([, pattern]) => !pattern.test(section.body)).map(([name]) => name);
+    const missingSignals = REQUIRED_SECTION_SIGNALS
+      .filter(([name, pattern]) => !hasRequiredBlueprintSignal({ name, pattern, section, outlineText }))
+      .map(([name]) => name);
     if (missingSignals.length > 0) {
       findings.push({ code: 'section_blueprint_underfilled', section: section.number, missing_signals: missingSignals, message: `第 ${section.number} 节缺少可写蓝图字段。` });
     }
@@ -161,7 +169,7 @@ function checkShortPlanContract(projectRoot) {
       .map((item) => Number(item.section_index || 0))
       .filter((item) => Number.isInteger(item) && item > 0),
   );
-  const narrative = analyzeShortOutlineNarrativeQuality(outlineText, planned, { preservedSections });
+  const narrative = analyzeShortOutlineNarrativeQuality(outlineText, planned, { preservedSections, settingText });
   findings.push(...narrative.findings);
 
   if (settingText && !/(第一人称|第三人称|叙事方式|视角)/.test(settingText)) {
@@ -183,8 +191,23 @@ function checkShortPlanContract(projectRoot) {
     user_confirmed_sections: [...preservedSections].sort((a, b) => a - b),
     remaining_sections: Array.isArray(state.remaining_sections) ? state.remaining_sections : [],
     narrative_quality: narrative,
+    character_contract: characterContract,
     findings,
   };
+}
+
+function hasRequiredBlueprintSignal({ name, pattern, section, outlineText }) {
+  const body = String(section.body || '');
+  if (pattern.test(body)) return true;
+  if (name === 'structure') return Boolean(labeledValue(body, ['结构功能', '节奏定位']));
+  if (name === 'emotion') return Boolean(labeledValue(body, ['情绪目标', '目标情绪', '情绪', '压力变化']));
+  if (name === 'causality') return numberedEvents(body).length >= 2;
+  if (name === 'handoff') {
+    if (section.number === 1) return Boolean(labeledValue(body, ['新钩子', '节尾钩子', '停顿钩', '结尾回扣']));
+    return hasDeclaredHandoff(outlineText, section.number - 1, section.number)
+      || Boolean(labeledValue(body, ['承接上节', '上节承接', '接力入', '承接钩子']));
+  }
+  return false;
 }
 
 function analyzeShortOutlineNarrativeQuality(outlineText, plannedSections = 0, options = {}) {
@@ -211,6 +234,7 @@ function analyzeShortOutlineNarrativeQuality(outlineText, plannedSections = 0, o
   const preservedSections = options.preservedSections instanceof Set
     ? options.preservedSections
     : new Set(Array.isArray(options.preservedSections) ? options.preservedSections.map(Number) : []);
+  const globalContext = String(options.globalContext || options.settingText || '');
   for (const [sectionNumber, group] of sectionGroups) {
     if (group.length <= 1) continue;
     findings.push({
@@ -234,7 +258,10 @@ function analyzeShortOutlineNarrativeQuality(outlineText, plannedSections = 0, o
     ];
     const events = numberedEvents(section.body);
     const previous = sections.find((item) => item.number === section.number - 1) || null;
-    const resolved = required.map(([name, pattern]) => ({ name, ...resolveNarrativeSignal({ name, pattern, section, previous, outlineText, events }) }));
+    const resolved = required.map(([name, pattern]) => ({
+      name,
+      ...resolveNarrativeSignal({ name, pattern, section, previous, outlineText, events, globalContext }),
+    }));
     const missing = resolved.filter((item) => !item.matched).map((item) => item.name);
     signalMappings.push({
       section: section.number,
@@ -271,51 +298,59 @@ function analyzeShortOutlineNarrativeQuality(outlineText, plannedSections = 0, o
   };
 }
 
-function resolveNarrativeSignal({ name, pattern, section, previous, outlineText, events }) {
+function resolveNarrativeSignal({ name, pattern, section, previous, outlineText, events, globalContext = '' }) {
   const body = String(section.body || '');
   if (pattern.test(body)) return { matched: true, source: 'exact_field' };
-  const structure = labeledValue(body, ['结构功能']);
-  const mainEvent = labeledValue(body, ['主事件']);
-  const emotion = labeledValue(body, ['情绪', '情绪目标', '目标情绪']);
-  const causality = labeledValue(body, ['因果链', '因果推进']);
-  const choice = labeledValue(body, ['角色选择', '主角选择', '主动选择']);
+  const structure = labeledValue(body, ['结构功能', '节奏定位']);
+  const mainEvent = labeledValue(body, ['主事件', '场景动作', '场景行动']);
+  const emotion = labeledValue(body, ['情绪目标', '目标情绪', '情绪', '压力变化']);
+  const causality = labeledValue(body, ['因果链', '因果推进', '因果事件', 'causal_events', '压力变化']);
+  const choice = labeledValue(body, ['主角选择', '角色选择', '主动选择']);
+  const payoff = labeledValue(body, ['本节兑现', '信息兑现', '反转兑现', '核心兑现', '主角选择与兑现', '选择与兑现']);
+  const relationship = labeledValue(body, ['关系变化', '人物关系变化', '关系收束', '人物关系收束']);
+  const cost = labeledValue(body, ['代价', '代价升级', '选择代价', '即时代价', '现实后果']);
+  const hook = labeledValue(body, ['开篇钩子', '开篇钩', '开场钩', '入场钩子', '新钩子', '节尾钩子']);
   const eventText = events.join('；');
-  const combined = `${structure}；${mainEvent}；${causality}；${choice}；${eventText}`;
+  const combined = `${structure}；${mainEvent}；${causality}；${choice}；${payoff}；${relationship}；${cost}；${eventText}`;
   switch (name) {
     case 'scene_action':
       return result(Boolean(mainEvent || events.length >= 2), mainEvent ? '主事件' : '子事件');
     case 'protagonist_choice':
       return result(/(?:她|他|主角)[^。；\n]{0,36}(?:选择|拒绝|提交|投票|公开|承认|追查|保留|暂不|不接|撤回|启动)/u.test(combined), '角色行动');
     case 'opening_hook':
-      return result(/黄金开篇|开篇/u.test(structure) && events.length >= 1, '结构功能+子事件');
+      return result(Boolean(hook && (events.length >= 1 || mainEvent)) || (/触发|开场|开篇/u.test(`${section.body}\n${structure}`) && Boolean(mainEvent)), '首节场景+钩子');
     case 'story_promise':
-      return result(/核心路线|核心判断翻转|故事核|核心承诺/u.test(outlinePreamble(outlineText)), '全篇核心路线');
+      return result(/核心路线|核心判断翻转|故事核|核心承诺|故事承诺/u.test(`${outlinePreamble(outlineText)}\n${globalContext}`), '全篇核心路线');
     case 'handoff_in': {
-      const previousHook = previous ? labeledValue(previous.body, ['节尾钩子', '结尾回扣', '代价收束']) : '';
+      const previousHook = previous ? labeledValue(previous.body, ['节尾钩子', '停顿钩', '结尾回扣', '代价收束', 'handoff_out']) : '';
       const incoming = `${causality}；${events[0] || ''}`;
-      return result(Boolean(previousHook && storySignalOverlap(previousHook, incoming) >= 0.08), '前节钩子+本节因果');
+      return result(
+        Boolean(previousHook && storySignalOverlap(previousHook, incoming) >= 0.08)
+          || hasDeclaredHandoff(outlineText, previous && previous.number, section.number),
+        '前节钩子+本节因果',
+      );
     }
     case 'pressure_shift':
       return result(Boolean(emotion && /->|→|到|转为|转向|骤然|逐渐|后/u.test(emotion)), '情绪变化');
     case 'visible_opposition':
       return result(/逼|要求|拒绝|质问|施压|阻止|停用|撤回|围住|交换|控制|迫使|断播|不让|威胁/u.test(combined), '事件冲突');
     case 'section_payoff':
-      return result(/发现|确认|承认|公开|揭露|证明|闭合|落地|暴露|认错|兑现|击穿|查到|看见/u.test(combined), '事件兑现');
+      return result(Boolean(payoff) && /发现|确认|承认|公开|揭露|证明|闭合|落地|暴露|认错|兑现|击穿|查到|看见|交付|拒绝/u.test(combined), '事件兑现');
     case 'relationship_change':
-      return result(/关系后果|关系收束/u.test(body) || (/(?:哥哥|母亲|唐禾|家人|员工)/u.test(body) && /信任|控制|牺牲|拒绝|决裂|裂痕|逼|交换|知情|沉默|甩锅|心寒|保护/u.test(body)), '关系后果/人物碰撞');
+      return result(Boolean(relationship) || /关系后果|关系收束/u.test(body), '关系后果/人物碰撞');
     case 'cost_escalation':
     case 'immediate_cost':
-      return result(/选择代价|现实后果|责任分配|失去|停用|取消|缩水|辞去|决裂|承担|追究|退款|问询|责任|风险|损失|工资压力/u.test(body), '代价/后果');
+      return result(Boolean(cost) || /选择代价|现实后果|责任分配|失去|停用|取消|缩水|辞去|决裂|承担|追究|退款|问询|责任|风险|损失|工资压力/u.test(body), '代价/后果');
     case 'core_payoff':
-      return result(/高潮|公开纠错|核心.*兑现|核心不是/u.test(`${structure}；${mainEvent}`) && /公开|提交|撤回|召回|认错/u.test(eventText), '高潮结构+决定性事件');
+      return result(/高潮|公开纠错|核心.*兑现|公开反证|反转/u.test(`${section.body}；${structure}；${payoff}`) && /公开|提交|撤回|召回|认错|反证|证据/u.test(`${eventText}；${payoff}`), '高潮结构+决定性事件');
     case 'decisive_action':
-      return result(/提交|公开|投票|召回|撤回|拒绝|暂停|启动|认错/u.test(`${choice}；${eventText}`), '角色选择+子事件');
+      return result(/提交|公开|投票|召回|撤回|拒绝|暂停|启动|认错|坚持|交付/u.test(`${choice}；${eventText}`), '角色选择+子事件');
     case 'consequences':
-      return result(/责任分配|召回|停产|退款|停职|缩水|辞去/u.test(body), '责任/后果');
+      return result(/责任|召回|停产|停售|退款|停职|下架|赔偿|删除|调查/u.test(combined), '责任/后果');
     case 'relationship_closure':
-      return result(/关系收束|保持裂痕|决裂|不.*和解/u.test(body), '关系收束');
+      return result(Boolean(relationship) && /保持|结束|不.*复合|不.*原谅|重新|转为|变成|删除|退出|裂痕|陌生人/u.test(relationship), '关系收束');
     case 'theme_callback':
-      return result(/结尾回扣|意义落点|主题/u.test(body), '结尾回扣');
+      return result(/结尾回扣|意义落点|主题|人物层|全篇钩子关闭/u.test(`${body}；${payoff}`) && /表达|倾诉|理解|拥有|脆弱|真人|边界/u.test(`${body}；${globalContext}`), '结尾回扣');
     default:
       return { matched: false, source: '' };
   }
@@ -343,7 +378,7 @@ function analyzeHookAndPressureChain(sections, preservedSections) {
   const seenPayoffs = new Map();
   for (const section of ordered) {
     const protectedCurrent = preservedSections.has(section.number);
-    const hook = labeledValue(section.body, ['节尾钩子', '结尾回扣', '代价收束']);
+    const hook = labeledValue(section.body, ['节尾钩子', '停顿钩', '结尾回扣', '代价收束', 'handoff_out']);
     const payoff = labeledValue(section.body, ['本节兑现', '信息兑现', '反转兑现', '局势变化']);
     const pressure = labeledValue(section.body, ['压力变化', '局势起伏', '情绪起伏']);
     const hookKey = normalizeStorySignal(hook);
@@ -362,8 +397,8 @@ function analyzeHookAndPressureChain(sections, preservedSections) {
     if (section.number <= 1) continue;
     const previous = ordered.find((item) => item.number === section.number - 1);
     if (!previous) continue;
-    const previousHook = labeledValue(previous.body, ['节尾钩子', '结尾回扣', '代价收束']);
-    const handoff = labeledValue(section.body, ['承接上节', '上节承接']);
+    const previousHook = labeledValue(previous.body, ['节尾钩子', '停顿钩', '结尾回扣', '代价收束', 'handoff_out']);
+    const handoff = labeledValue(section.body, ['承接上节', '上节承接', '接力入', 'handoff_in']);
     if (previousHook && handoff && storySignalOverlap(previousHook, handoff) < 0.2) {
       addChainFinding({ findings, protectedCurrent, finding: {
         code: 'section_hook_handoff_disconnected',
@@ -410,7 +445,13 @@ function numberedEvents(body) {
   }
   if (events.length >= 2) return events;
 
-  const inline = labeledValue(body, ['因果链', '因果事件', '场景事件', '子事件']);
+  const naturalEvents = [
+    ...headingListItems(body, ['因果链', '因果事件', '场景事件', '子事件']),
+    ...headingListItems(body, ['场景动作', '场景行动']),
+  ];
+  if (naturalEvents.length >= 2) return naturalEvents;
+
+  const inline = labeledValue(body, ['因果链', '因果事件', '场景事件', '子事件', 'causal_events']);
   if (!inline) return events;
   const chained = inline
     .split(/\s*(?:→|->|=>|⇒|；|;)\s*/u)
@@ -435,12 +476,78 @@ function longestEvidenceOnlyRun(events) {
 }
 
 function labeledValue(body, labels) {
-  for (const label of labels) {
-    const escaped = label.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-    const match = String(body || '').match(new RegExp(`^\\s*[-*]\\s*${escaped}\\s*[：:]\\s*(.+?)\\s*$`, 'mu'));
-    if (match) return match[1].trim();
+  const parsed = String(body || '').split(/\r?\n/u).map((line) => {
+    const match = line.match(/^\s*(?:[-*]\s+)?(?:\*\*)?(.+?)(?:\*\*)?\s*[：:]\s*(.+?)\s*$/u);
+    if (!match) return null;
+    return { label: normalizeOutlineLabel(match[1]), value: match[2].trim() };
+  }).filter(Boolean);
+
+  // Callers list canonical contract fields first and explanatory aliases later.
+  // Prefer the last occurrence of the highest-priority label so a final contract
+  // block can override an earlier planning note without duplicating machine data.
+  for (const label of labels.map(normalizeOutlineLabel)) {
+    for (let index = parsed.length - 1; index >= 0; index -= 1) {
+      if (parsed[index].label === label) return parsed[index].value;
+    }
+  }
+  for (const label of labels.map(normalizeOutlineLabel)) {
+    const blocks = headingBlocks(body).filter((item) => item.label === label);
+    if (blocks.length) return blocks[blocks.length - 1].value;
   }
   return '';
+}
+
+function headingListItems(body, labels) {
+  const wanted = new Set(labels.map(normalizeOutlineLabel));
+  const blocks = headingBlocks(body).filter((item) => wanted.has(item.label));
+  const items = [];
+  for (const block of blocks) {
+    for (const line of block.raw.split(/\r?\n/u)) {
+      const match = line.match(/^\s*(?:[-*]|\d+[.、)])\s*(?:[^：:]{1,10}[：:])?\s*(\S.*)$/u);
+      if (match) items.push(match[1].trim());
+    }
+  }
+  return items;
+}
+
+function headingBlocks(body) {
+  const lines = String(body || '').split(/\r?\n/u);
+  const blocks = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^\s*(#{2,6})\s+(.+?)\s*$/u);
+    if (!match) continue;
+    const level = match[1].length;
+    const content = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const next = lines[cursor].match(/^\s*(#{1,6})\s+(.+?)\s*$/u);
+      if (next && next[1].length <= level) break;
+      content.push(lines[cursor]);
+    }
+    const raw = content.join('\n').trim();
+    const value = raw
+      .split(/\r?\n/u)
+      .filter((line) => !/^\s*-{3,}\s*$/u.test(line))
+      .map((line) => line.replace(/^\s*(?:[-*]|\d+[.、)])\s*/u, '').trim())
+      .filter(Boolean)
+      .join('；');
+    blocks.push({ label: normalizeOutlineLabel(match[2]), raw, value });
+  }
+  return blocks;
+}
+
+function hasDeclaredHandoff(outlineText, previousSection, currentSection) {
+  if (!Number.isInteger(Number(previousSection)) || !Number.isInteger(Number(currentSection))) return false;
+  const arrow = new RegExp(`(?:^|\\n)\\s*(?:[-*]\\s*)?${Number(previousSection)}\\s*(?:→|->|=>|至)\\s*${Number(currentSection)}\\s*[：:]`, 'u');
+  return arrow.test(String(outlineText || ''));
+}
+
+function normalizeOutlineLabel(value) {
+  return String(value || '')
+    .replace(/\*\*/gu, '')
+    .replace(/[（(][^）)\n]*[）)]/gu, '')
+    .replace(/\s+/gu, '')
+    .trim()
+    .toLowerCase();
 }
 
 function normalizeStorySignal(value) {
@@ -471,4 +578,5 @@ module.exports = {
   outlineSections,
   sectionRole,
   hookAnchorId,
+  labeledValue,
 };

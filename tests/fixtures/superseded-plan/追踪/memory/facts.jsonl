@@ -1,0 +1,2 @@
+{"fact_id":"fact.section-1.summary","subject":"果汁事件","predicate":"本节发生","object":"林照公开质疑宣传。","scope":{"book":"current","section":1},"status":"active","evidence":[{"path":"正文/第001节.md"}]}
+{"fact_id":"fact.character-linzhao","subject":"林照","predicate":"第1节状态","object":"决定查账。","scope":{"book":"current","section":1},"status":"active","evidence":[{"path":"正文/第001节.md"}]}

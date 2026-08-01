@@ -4,8 +4,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { appendJsonl, atomicWriteJson } = require('./workflow-state-store');
-
-const SHORT_WORKFLOWS = new Set(['short_write', 'short_startup', 'private_short_startup']);
+const { readShortProjectState } = require('./short-project-state');
+const { SHORT_WORKFLOW_TYPES: SHORT_WORKFLOWS } = require('./short-workflow-types');
 const PLANNING_ASSET = /(^|\/)(素材卡|设定|小节大纲)\.md$/u;
 
 function acceptShortPlanningDecision(projectRoot, task = {}, selection = {}) {
@@ -122,18 +122,34 @@ function projectAcceptedShortPlanningFeedback(projectRoot, task = {}, result = {
   const wholeStory = /(?:全篇|整篇|全文|通篇|结局|终局)/u.test(`${String(pending.scope_snapshot || '')}\n${String((acceptedPlan || {}).summary || '')}\n${String(pending.text || '')}`);
   const memoryFile = path.join(root, '追踪', 'memory', 'planning-constraints.jsonl');
   const existing = latestBy(readJsonl(memoryFile), row => row.constraint_id);
+  const projectId = String(((readShortProjectState(root) || {}).project_id) || '');
   const now = new Date().toISOString();
   let projected = 0;
 
   for (const item of items) {
     const itemId = String(item.requirement_id || item.feedback_id || digest(item.text).slice(0, 16));
     const constraintId = `constraint.${itemId}`;
+    const previous = existing.get(constraintId);
+    // Book-level constraints now carry project_id / version / supersedes so the
+    // unified validity check (P0.1) can scope them without provenance and so a
+    // re-confirmed plan reads as a new revision of the same constraint rather
+    // than a brand-new row. Missing fields are backfilled, never destructive.
+    const version = previous && Number.isFinite(Number(previous.version))
+      ? Number(previous.version) + 1
+      : 1;
+    const supersedes = unique([
+      ...((previous && Array.isArray(previous.supersedes)) ? previous.supersedes : []),
+      ...((acceptedPlan && Array.isArray(acceptedPlan.supersedes)) ? acceptedPlan.supersedes : []),
+    ].map(String).filter(Boolean));
     const row = {
       schema_version: '1.0.0',
       constraint_id: constraintId,
+      project_id: projectId,
       type: 'planning_constraint',
       content: String(item.text || '').trim(),
       status: 'active',
+      version,
+      supersedes: supersedes.length ? supersedes : undefined,
       source_kind: acceptedPlan ? 'user_confirmed_plan' : 'legacy_user_feedback',
       scope: wholeStory
         ? { book: 'current', whole_story: true }
@@ -157,7 +173,7 @@ function projectAcceptedShortPlanningFeedback(projectRoot, task = {}, result = {
       },
       created_at: now,
     };
-    const previous = existing.get(constraintId);
+    if (!row.supersedes) delete row.supersedes;
     if (previous && digest(stableComparable(previous)) === digest(stableComparable(row))) continue;
     appendJsonl(memoryFile, row);
     existing.set(constraintId, row);
@@ -275,6 +291,7 @@ function stableComparable(row) {
     affected_sections: row.affected_sections,
     affected_assets: row.affected_assets,
     source_refs: row.source_refs,
+    supersedes: row.supersedes,
     feedback_id: ((row.provenance || {}).feedback_id || ''),
     proposal_id: ((row.provenance || {}).proposal_id || ''),
     plan_id: ((row.provenance || {}).plan_id || ''),

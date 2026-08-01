@@ -32,6 +32,8 @@
 |---|---|---|
 | `run-bats-tests.sh` | 优先调用 bats，缺失时自动回退到 lite runner | 本地/CI |
 | `run-bats-lite.sh` | 无 bats 环境下执行本仓库 `.bats` 子集 | 本地/CI fallback |
+| `test-triage-evidence.js` | 用固定 runner 和测试文件列表采集退出码、TAP 失败名、完整日志与 SHA-256；失败测试也会产出证据 JSON | Bats Core/Lite 差异分诊 |
+| `zcode-test-triage.js` | 把一份或多份证据 JSON 压缩为哈希绑定的失败族附件，再交给无可用工具的 ZCode/GLM 分类；校验 run ID、证据哈希、分类枚举和返回 schema | 需要 GLM 消化批量失败日志时 |
 | `test-charcount-portable.sh` | 字数统计跨平台回归 | CI / 改字数逻辑后 |
 | `test-hook-encoding-portable.sh` | hook 编码与中文路径回归 | CI / 改 hook 后 |
 | `memory-index-scale-check.js` | 用同机 500→1000 条事实的相对时间/堆增长检查记忆索引是否出现非线性退化，不使用硬编码毫秒阈值 | 改记忆索引或检索后 |
@@ -52,6 +54,7 @@
 | `node scripts/na-dev.js static` | 静态检查 |
 | `node scripts/na-dev.js bundle` | 重建 `novel-assistant` 默认包和 `oh-story` 兼容包 |
 | `node scripts/na-dev.js install-local-private` | 本地自用安装：强制以 `NOVEL_ASSISTANT_INCLUDE_PRIVATE=1` 构建并同步到 Claude/Codex/zcode，全程验证私有 workflow overlay 已生效 |
+| `node scripts/legacy-short-project-migrate.js --project-root <book>` | 只读预演旧短篇升级；确认后使用 `--write --confirm` 保留旧资产、旧任务反馈与质量断点，建立当前规范副本和正式 `short_write` 继任任务 |
 | `node scripts/short-section-repair-finalize.js --project-root <book> --workflow-id <id> --apply --json` | 收束当前短篇小节修订：验证候选稿确已变化，生成受控回执并自动进入单节机器门，避免宿主猜测状态机参数 |
 | `node scripts/short-section-draft-finalize.js --project-root <book> --workflow-id <id> --apply --json` | 收束当前短篇小节正文：绑定单一候选稿、生成阶段回执并自动进入机器门，禁止手写 workflow 文件或连续多写 |
 | `node scripts/short-section-artifact-migrate.js --project-root <book> --workflow-id <id> --confirm --json` | 把旧版累计正文中的已采用小节迁移为 `正文/第NNN节.md` 事务制品；只复用已有验收证据，不补写正文 |
@@ -64,6 +67,8 @@
 | `node scripts/na-dev.js skill-policy --json` | 检查 `skills/` 顶层目录角色，避免误删源码模块或新增未归类 skill |
 | `node scripts/na-dev.js panlong --candidate benchmarks/panlong/<run>` | 将盘龙候选拆文结果与 `demo/拆文库-盘龙` 基线做结构化对比 |
 | `node scripts/na-dev.js behavior-eval --scenario route-single-entry --hosts claude,codex,zcode` | 三端行为验收 dry-run：输出计划命令、预算和预留报告目录；不会启动宿主或消耗额度 |
+| `node scripts/na-dev.js test-triage-evidence --run-id <id> --runner <bats\|lite> --output /tmp/<file>.json -- tests/<suite>.bats` | 运行确定性测试并生成可哈希验证的原始证据；不调用模型 |
+| `node scripts/na-dev.js zcode-test-triage --evidence /tmp/bats.json --evidence /tmp/lite.json --output /tmp/glm.json` | 让 ZCode/GLM 在 headless 模式比较紧凑证据，所有宿主工具均禁用。GLM 不执行测试、不修改代码；Codex 负责复现、判断、修复与最终验证 |
 
 ## 运行时脚本源
 
@@ -86,6 +91,9 @@
 | `blocked-recovery-template.js` | 模型退化或工具污染后的确定性短回复 |
 | `runtime-guard-validate.js` | 校验长任务 current-task、workflow packet 和 result packet 是否具备 runtime_guard、checkpoint、heartbeat 与输出健康门 |
 | `token-cost-ledger.js` | 记录 workflow 阶段的 proxy token 成本、模型等级、工具噪音、失败重试和浪费信号，写入 `追踪/workflow/token-cost-ledger.jsonl` |
+| `token-efficiency-benchmark.js` | 用固定 fixture 验证任务规模路由、工具压缩、来源复用和质量门覆盖；不调用付费宿主 |
+| `tool-output-compact.js` | 将完整工具输出落盘后提取错误、测试统计、变更路径和关键行，并记录实际压缩率 |
+| `source-ingest.js` | 按稳定来源身份与内容版本摄取原始材料；内容变化生成新制品，重复内容直接复用 |
 | `workflow-entry-guard.js` | runner / 启动器前置守卫，先校正当前任务并领取会话租约，再串联 runtime supervisor、task inbox 和可选输出污染门禁；同一本书的旧会话自动只读，返回 pass 后才允许业务路由 |
 | `workflow-session-id.js` | 从 Claude Code / Codex / ZCode 进程祖先解析稳定会话标识；无法解析时使用终端或进程回退标识 |
 | `workflow-runtime-supervisor.js` | 只读巡检当前 workflow heartbeat/checkpoint，给前端、后端 runner 或新会话返回 continue / pause / resume 决策 |

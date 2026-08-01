@@ -12,8 +12,8 @@ setup() {
     grep -q "OpenCode" "$SETUP/SKILL.md"
     grep -q "opencode" "$SETUP/SKILL.md"
     grep -q "target_cli: claude-code,opencode" "$SETUP/SKILL.md"
-    grep -q "agents_version: 18" "$SETUP/SKILL.md"
-    grep -q "setup_skill_version: 1.4.5" "$SETUP/SKILL.md"
+    grep -q "agents_version: 19" "$SETUP/SKILL.md"
+    grep -q "setup_skill_version: 1.4.6" "$SETUP/SKILL.md"
     grep -q "/novel-assistant" "$SETUP/SKILL.md"
 }
 
@@ -23,6 +23,7 @@ setup() {
     test -f "$SETUP/references/opencode/opencode.json.patch"
     test -f "$SETUP/references/opencode/pre-commit.sh"
     test -f "$SETUP/references/opencode/agents/narrative-writer.md"
+    test -f "$SETUP/references/opencode/agents/professional-reader.md"
     test -f "$SETUP/references/opencode/commands/novel-assistant.md"
     grep -q "novel-assistant" "$SETUP/references/opencode/commands/novel-assistant.md"
     grep -q "volume-local" "$SETUP/references/opencode/plugin.ts"

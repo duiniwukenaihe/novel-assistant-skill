@@ -90,6 +90,8 @@ const manifest = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 const version = require(path.join(repo, 'scripts', 'lib', 'bundle-version.js'));
 const bundle = path.join(repo, 'skills', manifest.bundleName);
 const generated = JSON.parse(fs.readFileSync(path.join(bundle, 'novel-assistant-manifest.json'), 'utf8'));
+const releasePolicy = JSON.parse(fs.readFileSync(path.join(repo, 'config', 'github-public-release-files.json'), 'utf8'));
+if (generated.releaseVersion !== releasePolicy.releaseVersion) throw new Error('public release version drift');
 if (generated.internalSkillCount !== manifest.internalSkills.length) throw new Error('internal count drift');
 if (generated.scriptCount !== manifest.scriptFiles.length) throw new Error('script count drift');
 const layout = version.buildSourceLayout(repo, { includePrivate: true });

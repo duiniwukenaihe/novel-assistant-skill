@@ -32,6 +32,10 @@ Commands:
   behavior-eval-run [args...]
                       Run explicit paid behavior evaluation; requires --execute-paid and confirmation
   supervisor [args...] Run the opt-in workflow supervisor; it never changes host permissions
+  test-triage-evidence [args...]
+                      Capture hash-bound Bats Core/Lite evidence without calling a model
+  zcode-test-triage [args...]
+                      Ask ZCode/GLM to classify compact evidence with every host tool denied
   test [args...]      Run run-bats-tests.sh
   help                Show this help
 `;
@@ -181,6 +185,12 @@ switch (command || 'help') {
     break;
   case 'supervisor':
     run('node', ['scripts/workflow-supervisor.js', ...args]);
+    break;
+  case 'test-triage-evidence':
+    run('node', ['scripts/test-triage-evidence.js', ...args]);
+    break;
+  case 'zcode-test-triage':
+    run('node', ['scripts/zcode-test-triage.js', ...args]);
     break;
   case 'test':
     run('bash', ['scripts/run-bats-tests.sh', ...args]);

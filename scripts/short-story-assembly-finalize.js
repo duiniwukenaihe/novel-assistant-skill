@@ -14,6 +14,7 @@ const { resolvePlannedSectionCount } = require('./lib/short-workflow-state');
 const { mutateTaskAuthority, resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson, atomicWriteText } = require('./lib/workflow-state-store');
+const { readShortProjectState, shortStateFile } = require('./lib/short-project-state');
 
 const ASSEMBLY_VOLUME = '短篇发布稿';
 
@@ -33,9 +34,9 @@ function main() {
     return finish({ status: 'stage_execution_not_ready', instruction: '先由工作流启动全文组装阶段。' }, 0, args.json);
   }
 
-  const stateFile = path.join(root, '追踪/private-short-extension/project-state.json');
-  const state = readJson(stateFile) || {};
-  const titleLock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
+  const stateFile = shortStateFile(root, 'project-state.json', { forWrite: true });
+  const state = readShortProjectState(root) || {};
+  const titleLock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
   const outlineText = readText(path.join(root, '小节大纲.md'));
   const plan = resolvePlannedSectionCount({ projectState: state, titleLock, outlineText });
   if (plan.status !== 'locked') {
@@ -173,6 +174,14 @@ function main() {
       assembly_commit_id: String(commit.commit_id || ''),
       next_stage_id: nextStage,
     },
+    chapter_commit: {
+      mode: 'transactional',
+      accepted_commit_id: String(commit.commit_id || ''),
+      commit_file: path.relative(root, String(commit.commit_file || '')).split(path.sep).join('/'),
+      staged_artifacts: [stagedRel],
+      projection_status: String(commit.projection_status || 'projection_not_required'),
+      projection_debt: String(commit.projection_status || '') === 'projection_failed',
+    },
     checkpoint_state: { current_stage: 'full_story_assembly', completed_range: `第1-${plan.count}节已合稿`, remaining_range: '全篇总编辑验收、表达清理与最终检查', resume_from: nextStage },
     next_stage_id: nextStage,
     next_recommendation: '进入全篇总编辑验收；先检查故事结构、人物弧线与结尾兑现，再做表达层清理。',
@@ -183,7 +192,7 @@ function main() {
 
   const applied = spawnSync(process.execPath, [
     path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root,
-    '--workflow-id', workflowId, '--result', packetFile, '--json',
+    '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json',
   ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(applied);
   const applyResult = outcome.result;

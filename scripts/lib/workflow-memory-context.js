@@ -12,7 +12,7 @@ const { StoryMemoryRepository } = require('./story-memory-repository');
 function prepareMemoryContext(root, task, execution, policy, contextRunId = '') {
   if (policy.mode === 'none') return memoryContextDecision(policy, 'not_applicable');
   const script = path.join(__dirname, '..', 'context-assembler.js');
-  const target = String(task.scope || execution.stage_id || task.user_goal || 'current-task');
+  const target = String(execution.work_unit_scope || task.scope || execution.stage_id || task.user_goal || 'current-task');
   const taskName = `${task.workflow_type}:${execution.stage_id}`;
   const result = spawnSync(process.execPath, [
     script,

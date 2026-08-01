@@ -137,6 +137,9 @@ function recordCost(root, task, execution, options, attemptResult, ownerModule) 
   const health = attemptResult.health || {};
   const failed = health.status === 'blocked' || Number(attemptResult.exit.code || 0) !== 0;
   const usage = attemptResult.usage || { token_source: 'unavailable', duration_ms: attemptResult.duration_ms || 0 };
+  const complexityPolicy = (task.runtime_guard || {}).complexity_policy || {};
+  const outputSummary = attemptResult.tool_output_summary || {};
+  const promptEnvelope = attemptResult.prompt_envelope || {};
   const command = [
     script,
     'append',
@@ -155,9 +158,25 @@ function recordCost(root, task, execution, options, attemptResult, ownerModule) 
     '--event-id',
     attemptResult.run_id || '',
     '--task-complexity',
-    String(((task.runtime_guard || {}).token_estimate || {}).risk_level || 'unknown'),
+    String(complexityPolicy.size_class || 'unknown'),
+    '--model-class',
+    String(complexityPolicy.model_class || 'unknown'),
+    '--input-files',
+    String(((task.runtime_guard || {}).token_estimate || {}).input_files || 0),
+    '--input-chars',
+    String(((task.runtime_guard || {}).token_estimate || {}).input_chars_estimate || 0),
     '--output-chars',
     String(health.total_bytes || 0),
+    '--raw-output-chars',
+    String(outputSummary.raw_chars || health.total_bytes || 0),
+    '--compacted-output-chars',
+    String(outputSummary.compacted_chars || 0),
+    '--tool-output-compression-ratio',
+    String(outputSummary.compression_ratio || 0),
+    '--stable-prefix-digest',
+    String(promptEnvelope.stable_prefix_digest || ''),
+    '--dynamic-context-digest',
+    String(promptEnvelope.dynamic_context_digest || ''),
     '--duration-ms',
     String(usage.duration_ms || attemptResult.duration_ms || 0),
     '--retry-count',

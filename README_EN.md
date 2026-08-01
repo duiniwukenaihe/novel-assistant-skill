@@ -69,6 +69,10 @@ flowchart LR
 
 Local wording changes stay local. Changes to motivation, causality, reversals, or rhythm update the appropriate setting or outline first, then regenerate only affected Briefs.
 
+Platform fit, rhythm selection, structural impact, quality gates, transactional commits, and Memory projection are internal checks inside an author-facing stage. They may block unsafe output, but they must not invent extra workflow layers; the author is asked only when a real ambiguity, risk, or adoption decision exists.
+
+The task overview shows both the current author phase and the concrete execution point. Once section or chapter iteration begins, it displays `section N/total` or the current chapter instead of making the author infer progress from internal stage names.
+
 ### Short-form
 
 ```mermaid

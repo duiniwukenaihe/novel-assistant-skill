@@ -104,6 +104,7 @@ function buildWorkflowReceipt(root, currentRange, scan, options) {
     result_contract_version: 2,
     workflow_id: task.workflow_id,
     workflow_type: task.workflow_type,
+    owner_module: String(execution.owner_module || task.workflow_owner || ''),
     stage_id: 'evidence_scan',
     step_id: 'evidence_scan',
     step_status: 'completed',
@@ -136,7 +137,7 @@ function safeProjectPath(root, relativePath) {
 }
 
 function applyWorkflowReceipt(root, relativePacketPath) {
-  const command = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--result', relativePacketPath, '--json'], {
+  const command = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--result', relativePacketPath, '--compact', '--json'], {
     encoding: 'utf8', shell: false, maxBuffer: 8 * 1024 * 1024,
   });
   const outcome = classifyWorkflowApply(command);

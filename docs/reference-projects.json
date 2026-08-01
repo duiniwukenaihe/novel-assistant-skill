@@ -33,16 +33,16 @@
       "id": "ai-novel-writing-assistant",
       "name": "ExplosiveCoderflome/AI-Novel-Writing-Assistant",
       "repo": "https://github.com/ExplosiveCoderflome/AI-Novel-Writing-Assistant.git",
-      "branch": "master",
+      "branch": "main",
       "priority": "reference-medium",
       "cadenceDays": 45,
       "license": "unknown-check-before-use",
       "absorbMode": "design-triage-only",
       "focusAreas": ["auto_director", "quality_debt", "character_resource_ledger", "style_engine"],
       "lastReviewedCommit": "4f4def1d5dfbcbc168b026723023fd00e497b247",
-      "lastObservedCommit": "4f4def1d5dfbcbc168b026723023fd00e497b247",
-      "lastObservedTag": "v0.4.6",
-      "lastObservedTagSha": "401cd95f1ccf5e356719b1e9f760bc1013bddd52"
+      "lastObservedCommit": "a5be1100d4b6fce4f0299020e774c318e6ceb997",
+      "lastObservedTag": "v0.4.7",
+      "lastObservedTagSha": "024c38304deb1825d69274452b296b842450f14f"
     },
     {
       "id": "humanizer-zh",
@@ -67,7 +67,7 @@
       "absorbMode": "compatible-implementation-review",
       "focusAreas": ["fanqie_font_decode", "ranking_scrape", "book_id_extraction", "anti_scraping_boundary"],
       "lastReviewedCommit": "fb1abf86aceab2a69a0484f7a0ecc5c7927c79c8",
-      "lastObservedCommit": "442a08176825293a8d3f78b45a6121d7db30ce6e"
+      "lastObservedCommit": "2e4992088660d15c524c342de35cdc5e81a9e73d"
     },
     {
       "id": "sillytavern",
@@ -171,7 +171,7 @@
       "absorbMode": "clean-room-design-only",
       "focusAreas": ["scene_chapter_batch_review", "quality_trend"],
       "lastReviewedCommit": "f843c9722d4878a5aefa63f9db326a031aee5a87",
-      "lastObservedCommit": "f843c9722d4878a5aefa63f9db326a031aee5a87"
+      "lastObservedCommit": "163581a7ddece0fd4a75f12e8fa848b81480fdf5"
     },
     {
       "id": "make-ur-agent-writer",
@@ -196,11 +196,11 @@
       "absorbMode": "clean-room-design-only",
       "focusAreas": ["audit_dimensions", "bounded_revision", "snapshot_lock", "structured_delta"],
       "lastReviewedCommit": "f19f428a560b23b54afc45a43ca7785fdc2f5f0d",
-      "lastObservedCommit": "f19f428a560b23b54afc45a43ca7785fdc2f5f0d",
+      "lastObservedCommit": "b0cc9a54fc7ee2c14664d192c2c9d5f65e09dafd",
       "lastReviewedTag": "v1.7.1",
       "lastReviewedTagSha": "851d3a3924081889c87fd94fc051c2667f8bd78d",
-      "lastObservedTag": "v1.7.1",
-      "lastObservedTagSha": "851d3a3924081889c87fd94fc051c2667f8bd78d"
+      "lastObservedTag": "v1.7.2",
+      "lastObservedTagSha": "041e27f3958fe9d3cfec8c3e4382ed9dab81bd6d"
     },
     {
       "id": "novelclaw",

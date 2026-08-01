@@ -104,6 +104,17 @@ run_guard() {
     [[ "$output" == *'blocked_canonical_transaction_required'* ]]
 }
 
+@test "canonical guard ignores host-owned files outside the story project" {
+    sync_book "$NEW_BOOK" >/dev/null
+    local outside="$TMP_DIR/host-plan.md"
+
+    run_guard "$NEW_BOOK" "{\"file_path\":\"$outside\"}"
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"not_applicable"'* ]]
+    [[ "$output" == *'"reason":"target_outside_story_project"'* ]]
+}
+
 @test "strict guard blocks short-form root assets but not similarly named non-book files" {
     sync_book "$NEW_BOOK"
 
@@ -134,6 +145,18 @@ run_guard() {
         [ "$status" -eq 0 ]
         [[ "$output" == *'blocked_direct_workflow_state_edit'* ]]
     done
+}
+
+@test "material learning blocks ad hoc helper scripts in the project" {
+    sync_book "$NEW_BOOK"
+    mkdir -p "$NEW_BOOK/追踪/workflow/tasks/wf-material" "$NEW_BOOK/追踪/workflow"
+    printf '%s\n' '{"workflow_id":"wf-material","task_dir":"追踪/workflow/tasks/wf-material"}' > "$NEW_BOOK/追踪/workflow/current-task.json"
+    printf '%s\n' '{"workflow_id":"wf-material","current_stage":"material_learning","status":"running"}' > "$NEW_BOOK/追踪/workflow/tasks/wf-material/task.json"
+
+    run_guard "$NEW_BOOK" '{"tool_name":"Write","tool_input":{"file_path":"scripts/_gen_material_cards.py","content":"print(1)"}}'
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'blocked_ad_hoc_workflow_helper'* ]]
 }
 
 @test "strict guard accepts only an existing prepared transaction for its exact target" {

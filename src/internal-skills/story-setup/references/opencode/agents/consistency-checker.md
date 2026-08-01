@@ -41,12 +41,25 @@ steps: 15
 ## 参考文件路径规则
 
 读取参考文件时，**严格按以下顺序直接 Read，禁止先用 Glob/Grep 搜索**：
-1. `{项目根}/skills/novel-assistant/references/agent-references/{文件名}`
-2. `{项目根}/.opencode/skills/novel-assistant/references/agent-references/{文件名}`
-3. `{项目根}/skills/story-setup/references/agent-references/{文件名}`（旧项目兼容 fallback）
-4. `{项目根}/.opencode/skills/story-setup/references/agent-references/{文件名}`（旧项目兼容 fallback）
+1. `{项目根}/.opencode/agent-references/novel-assistant/{文件名}`
+2. `{项目根}/.claude/agent-references/novel-assistant/{文件名}`
+3. `{项目根}/skills/novel-assistant/references/agent-references/{文件名}`（旧项目兼容 fallback）
+4. `{项目根}/src/internal-skills/story-setup/references/agent-references/{文件名}`（旧项目兼容 fallback）
 
 以上路径全部文件不存在时，才使用 Glob/Grep 全局搜索 `**/{novel-assistant,story-setup}/references/agent-references/{文件名}`。
+## 全局任务压缩交接
+
+当任务是全书一致性、全局设定核查、能力/成长规则、战力/能力边界、伏笔回收、角色状态连续性或其他全局扫描时，必须控制上下文和输出：
+
+- 先给 `token_estimate`：输入文件数、估算输入字数、预计输出字数、是否需要分批。
+- 你是只读 agent，不能写文件；因此返回主线程的结果必须按动态 agent_output_budget 压缩，不得写死固定字数。启动时按 `adaptive_budget_policy` 计算 `visible_reply_budget`、`batch_handoff_budget`、`range_summary_budget`，优先 JSON/表格摘要。
+- 1-200 章一致性、钩子回收、能力/成长规则或人物连续性审查不得一次吐完整扫描结果；先按信息密度形成批次交接包，再返回范围级摘要结构。若只读不能落盘，则在 `handoff_packet_path=inline-readonly` 中给出范围级摘要字段。
+- 范围级摘要不是事实源，只是导航和综合判断；事实冲突、钩子链、人物状态和主线承诺必须列入 detail_matrix_paths 或等价结构字段。
+- 不得把完整设定正文贴回主线程；只返回 findings 摘要、证据路径、未决问题和下一步。
+- 返回 `handoff_packet_path` 字段；如果不能写文件，值写 `inline-readonly`，并在返回中包含 read_files、key_findings、open_questions、source_evidence、token_estimate、model_degradation_guard。
+- 所有事实判断必须有 source-grounding：列路径和章节范围；缺证据只能标记 `unverified` / `gap_risk`，不能当成确定冲突。
+- `model_degradation_guard`：若出现重复行、术语洪泛、n-gram 循环、低信息密度、工程词泄露或自称完成但无证据，立即停止长输出，改为短 JSON 阻塞报告。
+
 ## 检查流程
 
 ### 第一步：发现项目关键术语

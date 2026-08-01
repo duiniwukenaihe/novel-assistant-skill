@@ -1,0 +1,15 @@
+{
+  "workflow_id": "wf-new-task",
+  "workflow_type": "private_short_startup",
+  "scope": "第2节",
+  "current_stage": "next_section_brief",
+  "task_dir": "追踪/workflow/tasks/wf-new-task",
+  "stage_execution": { "stage_attempt_id": "sa-brief-2" },
+  "feedback_revision_queue": {
+    "status": "running",
+    "feedback_id": "feedback-new",
+    "current_section_index": 2,
+    "affected_sections": [2],
+    "items": [{ "section_index": 2, "status": "pending", "brief_status": "invalidated", "prose_status": "pending_recheck" }]
+  }
+}

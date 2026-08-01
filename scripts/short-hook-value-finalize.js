@@ -10,7 +10,24 @@ const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 
 const STAGES = new Set(['hook_value_gate', 'hook_retention_gate']);
-const CHECKS = ['title_promise', 'opening_pressure', 'plot_spikes', 'golden_reading_map', 'section_breakpoints', 'dropoff_risk', 'protagonist_agency', 'causal_chain'];
+const CHECKS = [
+  'title_promise',
+  'opening_pressure',
+  'plot_spikes',
+  'golden_reading_map',
+  'section_breakpoints',
+  'dropoff_risk',
+  'protagonist_agency',
+  'causal_chain',
+  'golden_opening_disruption',
+  'golden_opening_immediate_stakes',
+  'golden_opening_active_choice',
+  'first_third_power_shift',
+  'supporting_character_agency',
+  'identity_continuity',
+  'finale_title_answer',
+  'ending_payoff_capacity',
+];
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -59,7 +76,7 @@ function main() {
     handoff_summary: String(card.summary || ''), memory_updates: [], result_packet_path: packetRel,
   });
   if (!args.apply) return finish({ status: 'short_hook_value_ready', decision, result_packet: packetRel }, 0, args.json);
-  const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', String(task.workflow_id || ''), '--result', packetFile, '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', String(task.workflow_id || ''), '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(run);
   return finish({ status: outcome.applied ? 'short_hook_value_completed' : 'short_hook_value_apply_blocked', decision, workflow_status: outcome.workflowStatus, ...outcome.presentation, ...(outcome.applied ? {} : { recovery: outcome.result }) }, outcome.exitCode, args.json);
 }

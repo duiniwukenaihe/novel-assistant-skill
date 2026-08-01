@@ -5,6 +5,8 @@
 `novel-assistant` 演化自优秀的上游项目 [worldwonderer/oh-story-claudecode](https://github.com/worldwonderer/oh-story-claudecode)。我们保留它的网文专业能力，并针对真实生产中的任务中断、记忆漂移、Token 浪费、结构扩容和模型退化继续完善。
 
 > 当前版本优先把单个短篇从构思到完稿做稳；长篇、审阅、拆文、扫榜、导入和去 AI 味同样可用。
+>
+> 公开版本：v0.1.0
 
 ## 三分钟开始
 
@@ -18,7 +20,7 @@ npx skills add https://github.com/duiniwukenaihe/novel-assistant-skill.git --pat
 
 ### 使用
 
-进入作品目录，在 Claude Code、Codex 或 ZCode 中调用：
+进入作品目录，在 Claude Code、Codex、ZCode 或 OpenCode 中调用：
 
 ```text
 /novel-assistant
@@ -37,6 +39,8 @@ npx skills add https://github.com/duiniwukenaihe/novel-assistant-skill.git --pat
 ```
 
 新目录只显示新建入口；已有作品先显示未完成任务数量。需要选择时优先使用上下键菜单，无法使用时回退为数字选项，并始终允许直接聊天纠偏。
+
+OpenCode CLI 支持与其他宿主共用单入口 novel-assistant；skill 不接管模型账号、API key 或供应商配置。
 
 ## 为什么用它
 
@@ -68,6 +72,10 @@ flowchart LR
 ```
 
 小的文字修改留在当前正文；人物动机、因果、反转或节奏发生变化时，先更新设定/大纲，再重新生成受影响的 Brief。不会用下游润色掩盖上游规划错误。
+
+平台适配、节奏模型、结构影响、质量门、事务提交和 Memory 投影属于阶段内部检查。它们可以阻止错误产物进入下一步，但不能擅自增加作者工作流层级；只有出现真实歧义、风险或需要采用时才向作者提问。
+
+任务总览同时展示“当前创作阶段”和“当前执行点”。进入逐节/逐章循环后，必须明确显示 `第 N/总数 节` 或当前章节；作者不需要从内部阶段名猜测正在处理什么。
 
 ### 短篇
 
@@ -120,6 +128,8 @@ Memory 不是旧聊天堆积，而是可信的创作事实层：
 4. **采用提交**：只有采用版本才更新正式正文与 Memory。
 
 普通段落走轻量门；高潮、反转、人物转折和设定变更才提高检查强度。
+
+题材设定统一检查“能力/成长规则一致性”，但服从作品自身语义；不得把修真体系机械替换成力量体系，也不得用通用术语抹平现实、科幻或系统题材的原有规则。
 
 ## 能做什么
 

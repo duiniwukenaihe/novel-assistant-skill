@@ -56,7 +56,7 @@ metadata: {"openclaw":{"source":"https://github.com/worldwonderer/oh-story-claud
 - `output_health_result`：可见回复、素材卡、大纲、正文和回炉报告的污染/退化检查结果；命中重复循环、工程词泄露、长篇流程误入或 `No response requested` 这类假完成时，必须回传 blocking 状态而不是当作成功。
 - `next_candidates`：下一步候选必须与当前阶段绑定；不能在素材卡未确认时提示写正文，不能在正文未生成时提示发布。
 - `machine_gate_result` / `blocking_findings`：凡当前阶段是 `section_machine_gate`，必须给出明确 pass/blocking 证据；不能只写 `step_status=completed`。命中 AI 句式、工程词、标点密度、模型复读、格式错误或字数失败时，回传 blocking，并只允许修当前小节。
-- `story_value_result`：短篇质量门必须评价故事是否值得读：人物动机、现实因果、主角主动性、冲突升级、爽点/爆点、情绪债、节尾钩子和平台读者期待。正文干净但不好看时，回传 `revise` 或 `blocked_story_value_weak`，不得进入发布或下一节。
+- `story_value_result`：短篇质量门必须评价故事是否值得读：人物动机、现实因果、主角主动性、冲突升级、爽点/爆点、情绪债、节尾钩子和平台读者期待。正文干净但不好看时，回传 `revise` 或 `blocked_story_value_weak`，不得进入发布或下一节。第 1 节、重大反转/高潮、结尾及作者点名回炉节增加一次 `professional-reader` 里程碑证据；普通小节不增加额外 Agent。
 - `short_full_story_review`：全部小节采用并合稿后，由 `story-review` 生成总编辑审阅卡。必须覆盖每节功能、全篇篇幅曲线、开篇信息负载、重要人物欲望/行动/代价、主角身份效用、高潮跑道、结尾后果与标题兑现；`decision=revise` 时进入反馈影响链，不能把结构问题降级成去 AI 味。
 - `decision=pass` 只是内部兼容值，作者侧统一显示“故事层可进入表达清理”；存在非阻断建议时显示“故事层可进入表达清理（有建议项）”。不得只显示 `pass`，也不得让作者误以为作品已完成。
 - `preservation_result`：短篇去 AI 暂存稿提交前必须比较逐节与全篇中文字变化。小幅删冗正常；显著删损进入一次定向补偿，只恢复被误删的动作、人物反应、后果、钩子和跨节承接，不按差额机械补字。作者确认结构性精简时可记录明确例外理由；无保真回执不得进入最终发布检查。
@@ -122,10 +122,10 @@ metadata: {"openclaw":{"source":"https://github.com/worldwonderer/oh-story-claud
 除了上面的执行规则，构思和写作时遵循：
 
 - **从验证过的模式出发**：有对标书就先拆解，没有就从 `genre-styles/{题材}.md`（核心 10 题材）或 `genre-writing-formulas.md`（冷门题材）找对应的短篇剧情模式
-- **先锁平台和题材，再选节奏**：加载 `references/submission-profile.md` 并调用 `scripts/short-writing-profile.js`。一次只加载 1 张题材卡；确认平台开篇承诺、阅读停顿和结尾契约后，才进入节奏套路选择。未知题材只加载通用公式，不得把全部题材卡注入上下文。
-- **工作流阶段名**：该确认必须通过 `platform_genre_lock` 回传 story-workflow；用户可以在本阶段继续 chat、纠偏或换方向，未确认不得进入 `rhythm_pattern_selection`、小节大纲或正文。
+- **平台与题材是设定阶段的内部合同**：加载 `references/submission-profile.md` 并调用 `scripts/short-writing-profile.js`。一次只加载 1 张题材卡；未知题材只加载通用公式，不得把全部题材卡注入上下文。平台开篇承诺、阅读停顿和结尾契约随“设定与人物”一起确认，不再单独要求作者确认一次。
+- **节奏模型随全篇大纲确认**：`platform_genre_lock` 与 `rhythm_pattern_selection` 仍回传 story-workflow 作为可审计的内部结果，但必须自动进入“节奏与全篇小节大纲”；只有真实歧义或风险才返回作者决策，不能把内部阶段名暴露成连续菜单。
 - **定方向就换风格**：题材方向一旦确定，立刻加载 `references/genre-styles/{题材}.md`。核心 10 题材包括追妻火葬场、复仇打脸、总裁豪门、宅斗宫斗、世情打脸、民俗怪谈、悬疑、甜宠、双男主、沙雕脑洞；冷门题材用 `genre-writing-formulas.md` 兜底。
-- **先锁角色再写剧情**：加载 `references/short-logic-gate.md`，在 `设定.md` 建立角色锁定卡（性别/称谓/视角身份、关系、目标、行动边界、声口、证据物），再写小节大纲。角色锁定卡缺失时不得写正文。
+- **先由作者确认人物与剧情方向**：加载 `references/short-logic-gate.md`，先生成紧凑的设定候选，只展示主角发动机、关键人物独立利益、关系债、核心冲突、三级升级、反转和结局兑现。候选只在 workflow 暂存区；作者可确认、调整人物关系、调整剧情方向或直接 Chat。确认后才扩写 `设定.md`、运行确定性人物合同检查并投影到 `追踪/memory/active-cast.json`。公有 `short_write` 与私有增强流程共用此门，任何私有增强都不得绕过。
 - **先选节奏套路再写小纲**：加载 `references/short-rhythm-patterns.md`。素材卡、人物和角色锁定卡确认后，必须选择主节奏/辅节奏、爽点套路、反转方式和兑现方式，并写入 `设定.md`；例如爽文打脸、公开审判、亲情断亲、追妻火葬场、死人文学、规则怪谈、身份反转、重生复仇、职场反杀等。未选节奏模型，不得进入 `小节大纲.md`。
 - **先验证可行性再追爽点**：每个高价值反转必须通过情节可行性门（动机、渠道、证据、代价）和巧合预算；主题防漂移必须确认“爽点由主角行动完成”，不能让豪门、权威、男人或金钱替主角证明价值。
 - **先有人，再有爽点和去 AI**：加载 `references/human-resonance-gate.md`，确认主角软肋、关系压力、现实共鸣、生活物件、主动选择和情绪债。没有人的情感重量，不能靠去 AI 味、破折号修复或金句补救。
@@ -165,6 +165,22 @@ metadata: {"openclaw":{"source":"https://github.com/worldwonderer/oh-story-claud
 ### Phase 2：构思核心框架
 
 > 如果用户有参考小说，先用 `/story-short-analyze` 拆解。默认输出存入项目根目录 `拆文库/{书名}/`；如用户指定当前短篇引用目录，则可输出/同步到 `{短篇标题}/对标/{书名}/`。写作时会自动查找并读取这些拆文结果，不需要用户手动复制到 prompt。
+
+#### 主动发现本地对标（构思阶段轻量扫描）
+
+新短篇进入构思阶段时，先做一次轻量本地对标发现，**只发现、不重写消费链**——后续写作时的对标上下文加载规则不变。
+
+扫描范围（全部本地、只读、不联网）：
+1. `{短篇标题}/对标/` 目录。
+2. 项目根 `对标/` 目录。
+3. 项目根 `拆文库/{书名}/`（analyze 产出）。
+
+发现后只返回：**1 个主对标候选 + 最多 2 个辅助候选**；每个候选展示用途（结构/情绪/节奏/文风）与不可照搬风险。
+
+执行规则：
+- 找不到本地对标时继续正常构思，**不阻断、不联网、不要求用户先拆文**。
+- 用户明确说"不需要对标 / 跳过对标"时完全跳过本步，不重复询问。
+- 本步只是发现和展示候选；是否采用、采用哪本由用户在后续构思中决定。
 
 #### 对标上下文加载
 
@@ -349,7 +365,7 @@ metadata: {"openclaw":{"source":"https://github.com/worldwonderer/oh-story-claud
 
 当前小节机器门统一运行 `node scripts/short-section-machine-gate.js --project-root <book-root> --workflow-id <workflow_id> --apply --json`。不得在主会话逐个调用检查器、手写 result packet、直接 Edit workflow 状态，或用宿主 TaskCreate/TaskUpdate 再建一套任务。明确的 AI 味、标点、句式、措辞反馈直接修当前节并复跑机器门；只有人物动机、关键因果、反转、结局、节奏规划或小节数量变化才进入完整反馈影响链。
 
-机器门通过后，故事质量门只读取 `stage_execution.stage_context_packet.packet_md`，把角色锁、因果链、标题承诺、主角能动性、人性情感、钩子兑现、故事吸引力、连续性和防漂移九项判断写入 workflow 预建的证据卡；每项必须有 `pass/revise` 和正文证据。随后只运行 workflow 给出的 `short-section-quality-gate.js ... --apply --json`，由脚本推导结论。不得搜索质量门实现、读取完整 workflow/private skill、枚举 scripts、传一个裸 `pass` 或手写 result packet。
+机器门通过后，故事质量门只读取 `stage_execution.stage_context_packet.packet_md`，把角色锁、因果链、标题承诺、主角能动性、人性情感、钩子兑现、故事吸引力、连续性和防漂移等判断写入 workflow 预建的证据卡；每项必须有 `pass/revise` 和正文证据。若当前节被标记为读者里程碑，同一证据卡还必须记录继续阅读意愿、最强拉力、最大阻力和正文引文。随后只运行 workflow 给出的 `short-section-quality-gate.js ... --apply --json`，由脚本推导结论。不得搜索质量门实现、读取完整 workflow/private skill、枚举 scripts、传一个裸 `pass` 或手写 result packet。
 
 进入 `section_repair_loop` 时，只读取当前小节候选稿和当前 Brief 各一次，再 Edit 当前候选稿。若宿主返回 `File has not been read yet`，只补一次目标文件 Read 后重试 Edit；不得因此创建宿主任务、遍历目录、读取检查脚本源码或改用复合 Bash。
 

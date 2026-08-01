@@ -11,6 +11,7 @@ const { inferShortSectionIndex } = require('./lib/short-workflow-state');
 const { deriveSectionLengthPolicy, shouldAskSingleSectionLengthChoice } = require('./lib/short-section-length-policy');
 const { decoratePendingAction } = require('./lib/workflow-action-renderer');
 const { atomicWriteJson, mutateTask } = require('./lib/workflow-state-store');
+const { readShortProjectState } = require('./lib/short-project-state');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -36,7 +37,7 @@ function main() {
     return finish({ status: 'stage_execution_not_ready', workflow_id: workflowId, instruction: '先由工作流启动机器门，再运行本命令。' }, 0, args.json);
   }
 
-  const projectState = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
+  const projectState = readShortProjectState(root) || {};
   const sectionIndex = inferShortSectionIndex({
     projectState,
     stageId: 'section_machine_gate',
@@ -124,7 +125,7 @@ function main() {
   }
   const applied = spawnSync(process.execPath, [
     path.join(__dirname, 'workflow-state-machine.js'),
-    'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json',
+    'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json',
   ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(applied);
   let applyResult = outcome.result;
@@ -231,7 +232,7 @@ function reopenMachineGateForPolicyRecheck(root, task, explicitDraft) {
   }
 
   const sectionIndex = inferShortSectionIndex({
-    projectState: readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {},
+    projectState: readShortProjectState(root) || {},
     stageId: 'section_machine_gate',
     scope: String(task.scope || ''),
   });

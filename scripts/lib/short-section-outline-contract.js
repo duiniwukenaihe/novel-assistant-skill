@@ -9,20 +9,22 @@ const {
   outlineSections,
   sectionRole,
   hookAnchorId,
+  labeledValue,
 } = require('./short-plan-contract');
+const { readShortProjectState } = require('./short-project-state');
 
 const NARRATIVE_FIELDS = Object.freeze([
-  ['Q01', 'handoff_in', ['承接上节', '上节承接', '承接与场景动作']],
+  ['Q01', 'handoff_in', ['承接上节', '上节承接', '接力入', '承接钩', '承接与场景动作', 'handoff_in']],
   ['V01', 'pressure_shift', ['压力变化', '局势起伏', '情绪起伏', '可见阻力与压力变化']],
-  ['A01', 'scene_action', ['场景动作', '可见行动', '关键动作', '承接与场景动作']],
+  ['A01', 'scene_action', ['场景动作', '场景行动', '可见行动', '关键动作', '动作链', '承接与场景动作', 'scene_actions']],
   ['O01', 'visible_opposition', ['可见阻力', '对手施压', '场景阻力', '可见阻力与压力变化']],
   ['P01', 'section_payoff', ['本节兑现', '信息兑现', '反转兑现', '局势变化', '主角选择与兑现']],
   ['R01', 'relationship_change', ['关系变化', '人物关系变化', '关系后果、代价与钩子', '关系后果、代价和钩子']],
   ['K01', 'cost_escalation', ['代价升级', '选择代价', '即时代价', '高潮代价', '关系后果、代价与钩子', '关系后果、代价和钩子']],
-  ['I01', 'opening_hook', ['开篇钩子', '入场钩子']],
+  ['I01', 'opening_hook', ['开篇钩', '开场钩', '入场钩子', 'opening_hook']],
   ['M01', 'story_promise', ['故事承诺', '核心承诺']],
-  ['X01', 'core_payoff', ['核心承诺兑现', '核心爆点兑现', '高潮兑现']],
-  ['D01', 'decisive_action', ['决定性行动', '高潮行动']],
+  ['X01', 'core_payoff', ['核心兑现', '核心承诺兑现', '核心爆点兑现', '高潮兑现', 'core_payoff']],
+  ['D01', 'decisive_action', ['决定性动作', '决定性行动', '高潮行动', 'decisive_action']],
   ['N01', 'consequences', ['现实后果', '责任分配', '代价收束']],
   ['L01', 'relationship_closure', ['关系收束', '人物关系收束']],
   ['T01', 'theme_callback', ['主题回扣', '结尾回扣', '意义落点', '主题回扣与结尾钩子']],
@@ -40,10 +42,10 @@ function buildShortSectionOutlineContract(projectRoot, sectionIndex) {
   if (!section) return invalid('outline_section_missing');
 
   const settingText = readText(path.join(root, '设定.md'));
-  const state = readJson(path.join(root, '追踪/private-short-extension/project-state.json')) || {};
+  const state = readShortProjectState(root) || {};
   const plannedSections = inferPlannedSections(settingText, state, sections);
   const role = sectionRole(index, plannedSections);
-  const narrative = analyzeShortOutlineNarrativeQuality(outlineText, plannedSections);
+  const narrative = analyzeShortOutlineNarrativeQuality(outlineText, plannedSections, { settingText });
   const narrativeFindings = narrative.findings.filter((item) => Number(item.section) === index);
   if (narrativeFindings.length) {
     return {
@@ -54,8 +56,8 @@ function buildShortSectionOutlineContract(projectRoot, sectionIndex) {
     };
   }
 
-  const title = ((section.body.match(/^#{1,6}\s*第\s*0*\d+\s*节[：:]?\s*([^\n]*)$/mu) || [])[1] || '').trim();
-  const sceneAction = labeledValue(section.body, ['场景动作', '可见行动', '关键动作', '承接与场景动作']);
+  const title = ((section.body.match(/^#{1,6}\s*第\s*0*\d+\s*节(?:\s*[：:｜|·-]\s*)?([^\n]*)$/mu) || [])[1] || '').trim();
+  const sceneAction = labeledValue(section.body, ['场景动作', '场景行动', '可见行动', '关键动作', '动作链', '承接与场景动作', 'scene_actions']);
   const opposition = labeledValue(section.body, ['可见阻力', '对手施压', '场景阻力', '可见阻力与压力变化']);
   const choice = labeledValue(section.body, ['角色选择', '主角选择', '主角选择与兑现']);
   const consequence = labeledValue(section.body, ['关系后果', '关系后果、代价与钩子', '关系后果、代价和钩子']);
@@ -65,8 +67,8 @@ function buildShortSectionOutlineContract(projectRoot, sectionIndex) {
   const beats = numberedBeats.length >= 2
     ? numberedBeats
     : [sceneAction, opposition, choice, consequence].filter(Boolean);
-  const hook = labeledValue(section.body, ['节尾钩子', '结尾回扣', '代价收束', '关系后果、代价与钩子', '关系后果、代价和钩子', '主题回扣与结尾钩子']);
-  const causality = labeledValue(section.body, ['因果链', '因果推进']);
+  const hook = labeledValue(section.body, ['新钩子', '节尾钩子', '停顿钩', '结尾回扣', '代价收束', '关系后果、代价与钩子', '关系后果、代价和钩子', '主题回扣与结尾钩子', 'handoff_out']);
+  const causality = labeledValue(section.body, ['因果链', '因果推进', '因果事件', 'causal_events']);
   const obligations = [];
   if (structure) obligations.push(obligation('S00', 'structure', structure, false));
   beats.forEach((text, offset) => obligations.push(obligation(`B${String(offset + 1).padStart(2, '0')}`, 'beat', text, true)));
@@ -214,15 +216,6 @@ function renderOutlineCoverageTemplate(contract) {
 
 function obligation(id, kind, sourceText, requiredInDraft) {
   return { id, kind, source_text: String(sourceText || '').trim(), required_in_draft: Boolean(requiredInDraft) };
-}
-
-function labeledValue(body, labels) {
-  for (const label of labels) {
-    const escaped = label.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-    const match = String(body || '').match(new RegExp(`^\\s*[-*]\\s*${escaped}\\s*[：:]\\s*(.+?)\\s*$`, 'mu'));
-    if (match) return match[1].trim();
-  }
-  return '';
 }
 
 function numberedBlock(body, label) {

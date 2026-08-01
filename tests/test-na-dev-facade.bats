@@ -17,6 +17,8 @@ setup() {
     echo "$output" | grep -q "upstream"
     echo "$output" | grep -q "short-write-sync"
     echo "$output" | grep -q "host-discovery"
+    echo "$output" | grep -q "test-triage-evidence"
+    echo "$output" | grep -q "zcode-test-triage"
 }
 
 @test "na-dev local private install command forces private bundle and verifies overlay" {
@@ -47,4 +49,7 @@ setup() {
 @test "script docs mention na-dev as maintainer facade" {
     grep -q "na-dev.js" "$REPO/scripts/README.md"
     grep -q "维护者统一入口" "$REPO/scripts/README.md"
+    grep -q "test-triage-evidence.js" "$REPO/scripts/README.md"
+    grep -q "zcode-test-triage.js" "$REPO/scripts/README.md"
+    grep -q "GLM 不执行测试、不修改代码" "$REPO/scripts/README.md"
 }

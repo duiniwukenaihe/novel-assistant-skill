@@ -1,0 +1,31 @@
+{
+  "tasks": [
+    {
+      "id": "short-section",
+      "workflowType": "short_write",
+      "stageId": "draft_section",
+      "inputFiles": 4,
+      "inputChars": 18000,
+      "unitCount": 1,
+      "riskLevel": "medium",
+      "independentDomains": []
+    },
+    {
+      "id": "long-review",
+      "workflowType": "review_repair",
+      "stageId": "classify_findings",
+      "inputFiles": 120,
+      "inputChars": 480000,
+      "unitCount": 120,
+      "riskLevel": "high",
+      "independentDomains": ["plot", "character", "canon", "prose"],
+      "maxParallelAgents": 3
+    }
+  ],
+  "source_requests": [
+    { "source_id": "source:web-hot-list", "source_digest": "sha256:one" },
+    { "source_id": "source:web-hot-list", "source_digest": "sha256:one" },
+    { "source_id": "source:web-hot-list", "source_digest": "sha256:two" }
+  ],
+  "required_quality_gates": ["machine_gate", "story_gate", "continuity_gate"]
+}

@@ -46,6 +46,8 @@ write_packet() {
     local protocol_version=""
     local source_digest=""
     local full_range_coverage="null"
+    local owner_module=""
+    owner_module="$(node -e 'const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]);process.stdout.write(String((task.stage_execution||{}).owner_module||task.workflow_owner||""));' "$PROJECT")"
     if [ "$stage" = "evidence_scan" ]; then
         batch_scope="$(node -e 'const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]);process.stdout.write(task.stage_execution.batch_scope || "");' "$PROJECT")"
         scan_json="$(node "$REPO/scripts/review-batch-evidence-scan.js" --project-root "$PROJECT" --range "$batch_scope" --json)"
@@ -60,6 +62,7 @@ write_packet() {
   "workflow_type":"review_repair",
   "stage_id":"$stage",
   "step_id":"$stage",
+  "owner_module":"$owner_module",
   "step_status":"completed",
   "batch_id":"$batch_id",
   "batch_scope":"$batch_scope",
@@ -208,7 +211,7 @@ NODE
     batch_packet="$(current_expected_packet)"
     write_packet "$batch_packet" "$workflow_id" evidence_scan 001
     node "$STATE_MACHINE" apply-result --project-root "$PROJECT" --result "$batch_packet" --json > "$TMP_DIR/first-batch.json"
-    grep -Eq '"status": "(batch_advanced|advanced)"' "$TMP_DIR/first-batch.json"
+    grep -q '"status": "stage_started"' "$TMP_DIR/first-batch.json"
 }
 
 @test "review batches command rejects obsolete fixed batch size input" {
@@ -440,9 +443,10 @@ NODE
 const fs=require('fs');
 const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[3]);
-if(out.status!=='advanced') throw new Error(out.status);
+if(out.status!=='stage_started') throw new Error(out.status);
 if(out.progress!=='50%') throw new Error(JSON.stringify(out));
-if(!String(out.next_user_action||'').includes('继续')) throw new Error(JSON.stringify(out));
+if(out.stage_execution?.status!=='running' || out.stage_execution?.batch_id!=='002') throw new Error(JSON.stringify(out.stage_execution));
+if(out.interaction_contract!=='continue_confirmed_internal_stage') throw new Error(out.interaction_contract);
 if('next_command' in out) throw new Error('internal batch command leaked to visible result');
 if(task.current_stage!=='evidence_scan') throw new Error(task.current_stage);
 if(task.review_batches.batches[0].status!=='completed') throw new Error('batch 001 not complete');
@@ -486,7 +490,7 @@ NODE
     node - "$TMP_DIR/scanner.json" <<'NODE'
       const fs=require('fs');
       const x=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-        if(x.status!=="applied" || x.apply_result?.status!=="advanced") process.exit(1);
+        if(x.status!=="applied" || x.apply_result?.status!=="stage_started") process.exit(1);
         if(!String(x.result_packet_path||"").endsWith("evidence_scan.batch-001.result.json")) process.exit(2);
         if((x.packet?.changed_files||[]).length!==0) process.exit(3);
 NODE
@@ -585,8 +589,9 @@ NODE
 const fs=require('fs');
 const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[3]);
-if(out.status!=='advanced') throw new Error(out.status);
+if(out.status!=='stage_started') throw new Error(out.status);
 if(task.current_stage!=='classify_findings') throw new Error(task.current_stage);
+if(out.stage_execution?.status!=='running' || out.stage_execution?.stage_id!=='classify_findings') throw new Error(JSON.stringify(out.stage_execution));
 if(task.review_batches.aggregate_status!=='completed') throw new Error(task.review_batches.aggregate_status);
 if(!task.machine.completed_stages.includes('evidence_scan')) throw new Error('parent not complete');
 NODE

@@ -29,7 +29,7 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *'"status":"awaiting_section_title_confirmation"'* ]]
   [[ "$output" == *'"section_index":2,"title":""'* ]]
-  [ ! -f "$BOOK/追踪/private-short-extension/section-title-lock.json" ]
+  [ ! -f "$BOOK/追踪/story-system/short/section-title-lock.json" ]
 
   digest="$(printf '%s' "$output" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).digest))')"
   run node "$SCRIPT" --project-root "$BOOK" --workflow-id "wf-short" --digest "$digest" --confirm --json
@@ -40,7 +40,7 @@ teardown() {
   run node "$SCRIPT" --project-root "$BOOK" --workflow-id "wf-short" --digest "$digest" --confirm --json
   [ "$status" -eq 0 ]
   [[ "$output" == *'"status":"section_titles_confirmed_and_bound"'* ]]
-  node - "$BOOK/追踪/private-short-extension/section-title-lock.json" <<'NODE'
+  node - "$BOOK/追踪/story-system/short/section-title-lock.json" <<'NODE'
 const x=require(process.argv[2]);
 if(x.workflow_id!=='wf-short' || x.sections[1].title!=='' || x.sections[1].confirmed!==true) throw new Error(JSON.stringify(x));
 NODE
@@ -64,7 +64,7 @@ JSON
 const fs=require('fs');
 const path=require('path');
 const root=process.argv[2];
-const lock=JSON.parse(fs.readFileSync(path.join(root,'追踪/private-short-extension/section-title-lock.json'),'utf8'));
+const lock=JSON.parse(fs.readFileSync(path.join(root,'追踪/story-system/short/section-title-lock.json'),'utf8'));
 const a=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks/wf-short-a/task.json'),'utf8'));
 const b=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks/wf-short-b/task.json'),'utf8'));
 const focus=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
@@ -102,5 +102,69 @@ MD
   [[ "$output" == *'"status":"awaiting_section_title_confirmation"'* ]]
   [[ "$output" != *'publication_shape_missing'* ]]
   [[ "$output" != *'section_function_missing'* ]]
-  [[ "$output" == *'- 第 1 节：直播拍到空车间'* ]]
+  printf '%s' "$output" | node -e 'let s=""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => { const j = JSON.parse(s); if (!String((j.visible_response || {}).text || "").includes("- 第 1 节：直播拍到空车间")) throw new Error(JSON.stringify(j)); });'
+}
+
+@test "section plan lock accepts markdown headings and compact total budget line" {
+  create_short_task "wf-short" "section_plan_lock"
+  cat > "$BOOK/小节大纲.md" <<'MD'
+# 小节大纲
+
+- 总节数：2 节；总字数预算 3000—4000
+- 每节节拍：开篇钩 → 主体推进 → 证据加 1 → 收束钩
+
+## 第 1 节｜触发（1200—1500 字）
+
+### 节奏定位
+- 主要情绪：惊惧
+
+### 压力变化
+- 起：主角发现 AI 回答像旧人。
+
+### 场景动作
+- 她导出聊天文件并对照广告。
+
+### 可见阻力
+- 平台只承认匿名训练。
+
+### 角色选择
+- 她保存证据，不接受和解。
+
+### 本节兑现
+- 错别字证据第一次出现。
+
+### 新钩子
+- 另一个导出文件被提到。
+
+## 第 2 节｜制度回应（1200—1500 字，收束节）
+
+### 节奏定位
+- 主要情绪：克制胜利
+
+### 压力变化
+- 起：平台试图把责任推回用户授权。
+
+### 场景动作
+- 主角公开证据链。
+
+### 可见阻力
+- 对方仍拒绝承认定向使用。
+
+### 角色选择
+- 她要求删除数据、赔礼和制度整改。
+
+### 本节兑现
+- 证据链被监管采纳。
+
+### 终局兑现
+- 用户可以查到自己的数据如何被使用，故事收束。
+MD
+
+  run node "$SCRIPT" --project-root "$BOOK" --workflow-id "wf-short" --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"status":"awaiting_section_title_confirmation"'* ]]
+  [[ "$output" != *'planned_section_count_missing'* ]]
+  [[ "$output" != *'target_length_band_missing'* ]]
+  [[ "$output" != *'section_function_missing'* ]]
+  printf '%s' "$output" | node -e 'let s=""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => { const j = JSON.parse(s); if (!String((j.visible_response || {}).text || "").includes("触发（1200—1500 字）")) throw new Error(JSON.stringify(j)); });'
 }

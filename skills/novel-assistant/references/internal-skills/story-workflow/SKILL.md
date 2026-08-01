@@ -8,6 +8,8 @@ description: |
 
 `story-workflow` 是 `novel-assistant` 的内部工作流大脑。它只负责编排：把用户目标转成可执行、可恢复、可验证的阶段计划；专业判断、正文生产、审查结论和拆文分析仍由目标模块完成。长篇专业模块只依附 `story-workflow` 的 Workflow Packet 与 Result Packet；模块间不直接调度，也不向用户暴露内部 `story-*` 调用。
 
+审阅阶段由工作流自动分派所需角色；不要把 full/lean 暴露成用户必须理解的选择。用户只确认审阅目标与范围，`review-agent-dispatch-plan.js` 根据风险、证据缺口和成本预算选择审阅角色。
+
 边界必须明确：不得直接写正文，不得替代 story-long-write，不得替代 story-review，不得替代 story-long-analyze，也不得替代 story-deslop、story-import、story-cover 等专业模块。
 
 用户仍只调用 `/novel-assistant`。本 skill 由 `story` router 内部读取，不作为用户需要记住的新命令。
@@ -73,10 +75,11 @@ description: |
 ## 阶段路由
 
 1. 更新确认已收束后，先读取 `task-inbox-protocol.md`，执行 `workflow-entry-guard.js`，并根据真实状态决定首屏、恢复或业务路由。
-2. 需要创建、恢复、推进、阻塞或解析编号时，仍以 `workflow-state-machine.js` 为权威；进入执行前读取 `runner-execution-protocol.md`。
-3. L3 只执行 packet 指定的专业模块。若结果涉及正式资产或短篇根资产，必须先读取 `canonical-write-protocol.md`；事务证据不足不得写入或关闭阶段。
-4. 应用 result packet、处理缺失回执、生成完成声明或下一步候选前，必须读取 `completion-evidence-protocol.md`。
-5. 任何状态不依赖聊天记忆；`追踪/workflow/current-task.json`、任务目录、收件箱和结果回执是恢复依据。
+2. 已有活动任务时，用户输入的自然语言作品意见必须先走 `workflow-state-machine.js resolve-action --project-root . --input <用户原文> --bind-current --json`。不得用 `workflow-task-inbox.js` 代替反馈入账，也不得只把助手摘要留在聊天里。原始意见进入任务反馈证据层；助手归纳形成待确认方案；用户确认后才投影到 memory、设定、大纲、Brief 和修订队列。
+3. 需要创建、恢复、推进、阻塞或解析编号时，仍以 `workflow-state-machine.js` 为权威；进入执行前读取 `runner-execution-protocol.md`。
+4. L3 只执行 packet 指定的专业模块。若结果涉及正式资产或短篇根资产，必须先读取 `canonical-write-protocol.md`；事务证据不足不得写入或关闭阶段。
+5. 应用 result packet、处理缺失回执、生成完成声明或下一步候选前，必须读取 `completion-evidence-protocol.md`。
+6. 任何状态不依赖聊天记忆；`追踪/workflow/current-task.json`、任务目录、收件箱和结果回执是恢复依据。
 
 ### 已授权审阅的连续执行
 

@@ -29,6 +29,10 @@
 
 Agent 间的协调关系由各 Agent 定义文件的职责边界描述，不需要独立协调规则文件。
 
+## 运行时托管
+
+`.story-runtime-managed.json` 记录 setup 已部署的 hooks、rules、agents、references 和运行时脚本。刷新时只更新未被修改的托管文件；同名非托管文件或已修改托管文件必须先展示冲突，再取得明确确认。`追踪/runtime-snapshots/` 保存更新前的托管文件快照；正文、大纲、设定和其他追踪创作资产不属于运行时同步范围。
+
 ## Compact 后恢复上下文
 
 此部分在 compact 后自动生效。AGENTS.md 在每次 compact 后会被重新加载。

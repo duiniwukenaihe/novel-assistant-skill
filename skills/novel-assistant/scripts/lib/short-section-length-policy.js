@@ -97,8 +97,9 @@ function deriveSectionLengthPolicy(input = {}) {
 
 function shouldAskSingleSectionLengthChoice(task, lengthPolicy) {
   if (String((lengthPolicy || {}).verdict || '') !== 'outside_story_band_deferred') return false;
+  const taskScope = String((task || {}).scope || '').trim();
   const originalScope = String((((task || {}).lifecycle || {}).scope) || '').trim();
-  if (!/^第\s*0*\d+\s*节$/u.test(originalScope)) return false;
+  if (!/^第\s*0*\d+\s*节$/u.test(taskScope) && !/^第\s*0*\d+\s*节$/u.test(originalScope)) return false;
   const queue = (task || {}).feedback_revision_queue;
   const queueSections = Array.isArray((queue || {}).affected_sections)
     ? queue.affected_sections

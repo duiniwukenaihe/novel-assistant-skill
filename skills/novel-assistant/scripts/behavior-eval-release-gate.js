@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { sourceCommit } = require('./lib/bundle-version');
@@ -91,6 +92,8 @@ function validateSummary(summary, file, bundle) {
     const assertions = Array.isArray(result.assertions) ? result.assertions : [];
     if (assertions.length === 0 || assertions.some((item) => item.status !== 'pass' || !Array.isArray(item.evidence) || item.evidence.length === 0)) {
       findings.push(`assertion_evidence_missing:${host}`);
+    } else if (assertions.some((item) => item.evidence.some((evidence) => !verifyEvidenceFile(file, host, evidence)))) {
+      findings.push(`assertion_evidence_hash_mismatch:${host}`);
     }
   }
   return {
@@ -100,6 +103,29 @@ function validateSummary(summary, file, bundle) {
     findings,
     updated_at: String(summary.updated_at || ''),
   };
+}
+
+function verifyEvidenceFile(summaryFile, host, evidence) {
+  if (!evidence || typeof evidence.path !== 'string' || !/^[a-f0-9]{64}$/i.test(String(evidence.sha256 || ''))) return false;
+  const relative = String(evidence.path);
+  if (relative.includes('\\') || path.isAbsolute(relative) || !relative.startsWith(`evidence/${host}/`)) return false;
+  const normalized = path.posix.normalize(relative);
+  if (normalized !== relative || normalized.includes('../')) return false;
+  const runRoot = path.dirname(summaryFile);
+  const target = path.resolve(runRoot, ...normalized.split('/'));
+  if (!target.startsWith(`${path.resolve(runRoot)}${path.sep}`)) return false;
+  try {
+    let current = runRoot;
+    for (const segment of normalized.split('/')) {
+      current = path.join(current, segment);
+      if (fs.lstatSync(current).isSymbolicLink()) return false;
+    }
+    if (!fs.statSync(target).isFile()) return false;
+    const digest = crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex');
+    return digest === String(evidence.sha256).toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
 function evaluateGate(repoRoot) {

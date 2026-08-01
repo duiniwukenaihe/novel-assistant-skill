@@ -5,16 +5,70 @@ const fs = require('fs');
 const path = require('path');
 const { atomicWriteJson } = require('./workflow-state-store');
 
-const STATE_REL = '追踪/private-short-extension/project-state.json';
+const CANONICAL_STATE_ROOT_REL = '追踪/story-system/short';
+const LEGACY_STATE_ROOT_REL = '追踪/private-short-extension';
+const STATE_REL = `${CANONICAL_STATE_ROOT_REL}/project-state.json`;
+const LEGACY_STATE_REL = `${LEGACY_STATE_ROOT_REL}/project-state.json`;
 const FINISHED = new Set(['completed', 'complete', 'closed', 'cancelled', 'canceled', 'superseded', 'archived']);
 
 function readShortProjectState(projectRoot) {
-  const file = path.join(path.resolve(projectRoot), STATE_REL);
+  const file = path.join(path.resolve(projectRoot), resolveShortStateRelative(projectRoot, 'project-state.json'));
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (_) {
     return null;
   }
+}
+
+function resolveShortStateRelative(projectRoot, leaf, options = {}) {
+  const root = path.resolve(projectRoot);
+  const safeLeaf = normalizeStateLeaf(leaf);
+  const canonicalRel = `${CANONICAL_STATE_ROOT_REL}/${safeLeaf}`;
+  const legacyRel = `${LEGACY_STATE_ROOT_REL}/${safeLeaf}`;
+  const canonicalFile = path.join(root, canonicalRel);
+  const legacyFile = path.join(root, legacyRel);
+
+  if (!options.forWrite) {
+    if (fs.existsSync(canonicalFile)) return canonicalRel;
+    if (fs.existsSync(legacyFile)) return legacyRel;
+  }
+
+  if (fs.existsSync(path.join(root, STATE_REL)) || fs.existsSync(path.join(root, CANONICAL_STATE_ROOT_REL, '.storage-version.json'))) {
+    return canonicalRel;
+  }
+  if (fs.existsSync(path.join(root, LEGACY_STATE_REL))) return legacyRel;
+  return canonicalRel;
+}
+
+function shortStateFile(projectRoot, leaf, options = {}) {
+  return path.join(path.resolve(projectRoot), resolveShortStateRelative(projectRoot, leaf, options));
+}
+
+function migrateShortStateStorage(projectRoot) {
+  const root = path.resolve(projectRoot);
+  const legacyRoot = path.join(root, LEGACY_STATE_ROOT_REL);
+  const canonicalRoot = path.join(root, CANONICAL_STATE_ROOT_REL);
+  if (!fs.existsSync(path.join(legacyRoot, 'project-state.json'))) {
+    return { status: 'not_needed', copied: [], canonical_root: CANONICAL_STATE_ROOT_REL };
+  }
+
+  fs.mkdirSync(canonicalRoot, { recursive: true });
+  const copied = [];
+  for (const name of fs.readdirSync(legacyRoot)) {
+    if (!isPublicShortStateAsset(name)) continue;
+    const source = path.join(legacyRoot, name);
+    const target = path.join(canonicalRoot, name);
+    if (fs.existsSync(target)) continue;
+    fs.cpSync(source, target, { recursive: true, errorOnExist: false });
+    copied.push(name);
+  }
+  atomicWriteJson(path.join(canonicalRoot, '.storage-version.json'), {
+    schema_version: '1.0.0',
+    status: 'canonical',
+    migrated_from: LEGACY_STATE_ROOT_REL,
+    migrated_at: new Date().toISOString(),
+  });
+  return { status: 'migrated', copied, canonical_root: CANONICAL_STATE_ROOT_REL, legacy_root: LEGACY_STATE_ROOT_REL };
 }
 
 function assertShortProjectOwnership(projectRoot, state, workflowId) {
@@ -44,7 +98,7 @@ function ensureShortProjectState(projectRoot, options = {}) {
   const state = {
     ...current,
     schema_version: '2.0.0',
-    project_id: String(current.project_id || crypto.randomUUID()),
+    project_id: String(current.project_id || options.projectId || crypto.randomUUID()),
     project_title: title,
     active_write_workflow_id: workflowId,
     workflow_history: history,
@@ -53,6 +107,8 @@ function ensureShortProjectState(projectRoot, options = {}) {
     current_section_index: positiveInt(current.current_section_index) || 1,
     accepted_sections: Array.isArray(current.accepted_sections) ? current.accepted_sections : [],
     status: String(current.status || options.status || 'planning'),
+    selected_material: options.selectedMaterial || current.selected_material || null,
+    source_incubator: options.sourceIncubator || current.source_incubator || null,
     created_at: String(current.created_at || now),
     updated_at: now,
     narrative: {
@@ -60,7 +116,7 @@ function ensureShortProjectState(projectRoot, options = {}) {
       planned_sections: planned,
     },
   };
-  atomicWriteJson(path.join(root, STATE_REL), state);
+  atomicWriteJson(shortStateFile(root, 'project-state.json', { forWrite: true }), state);
   return state;
 }
 
@@ -87,13 +143,22 @@ function advanceShortPlanRevision(projectRoot, options = {}) {
     narrative: { ...(state.narrative || {}), planned_sections: planned },
     updated_at: new Date().toISOString(),
   };
-  atomicWriteJson(path.join(root, STATE_REL), next);
+  atomicWriteJson(shortStateFile(root, 'project-state.json', { forWrite: true }), next);
   return next;
 }
 
 function outlineSectionCount(text) {
-  const values = [...String(text || '').matchAll(/^#{1,6}\s*第\s*0*(\d+)\s*节(?:\s*[：:]|\s|$)/gmu)]
-    .map((match) => positiveInt(match[1])).filter(Boolean);
+  const source = String(text || '');
+  const explicit = source.match(/总小节数\s*[：:]\s*(\d+)\s*节?/u);
+  if (explicit) return positiveInt(explicit[1]);
+  const values = [
+    ...source.matchAll(/^#{1,6}\s*第\s*0*(\d+)\s*节(?:\s*[：:｜]|\s|$)/gmu),
+    ...source.matchAll(/^#{1,6}\s*节\s*0*(\d+)(?:\s*[：:｜]|\s|$)/gmu),
+  ].map((match) => positiveInt(match[1])).filter(Boolean);
+  if (/^#{1,6}\s*逐节(?:蓝图|大纲|细纲)/mu.test(source)) {
+    values.push(...[...source.matchAll(/^#{2,6}\s*0*(\d+)\s*[.、]\s*\S/gmu)]
+      .map((match) => positiveInt(match[1])).filter(Boolean));
+  }
   return values.length ? Math.max(...values) : 0;
 }
 
@@ -115,6 +180,19 @@ function safeProjectFile(root, relativePath) {
   return file.startsWith(`${root}${path.sep}`) ? file : '';
 }
 function normalizeRelative(value) { return String(value || '').replace(/\\/g, '/').replace(/^\.\//, ''); }
+function normalizeStateLeaf(value) {
+  const leaf = normalizeRelative(value).replace(/^\/+/, '');
+  if (!leaf || path.isAbsolute(leaf) || leaf.split('/').includes('..')) {
+    throw projectError('SHORT_STATE_PATH_INVALID', `invalid short state path: ${value}`);
+  }
+  return leaf;
+}
+function isPublicShortStateAsset(name) {
+  return name === 'project-state.json'
+    || name === 'section-title-lock.json'
+    || name === 'briefs'
+    || /^section-\d{3}-anchor\.json$/u.test(name);
+}
 function positiveInt(value) { const number = Number(value); return Number.isInteger(number) && number > 0 ? number : 0; }
 function nonNegativeInt(value) { const number = Number(value); return Number.isInteger(number) && number >= 0 ? number : 0; }
 function sha256(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
@@ -122,10 +200,16 @@ function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8'))
 function projectError(code, message) { const error = new Error(message); error.code = code; error.status = code.toLowerCase(); return error; }
 
 module.exports = {
+  CANONICAL_STATE_ROOT_REL,
+  LEGACY_STATE_REL,
+  LEGACY_STATE_ROOT_REL,
   STATE_REL,
   advanceShortPlanRevision,
   assertShortProjectOwnership,
   ensureShortProjectState,
+  migrateShortStateStorage,
   outlineSectionCount,
   readShortProjectState,
+  resolveShortStateRelative,
+  shortStateFile,
 };

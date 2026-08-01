@@ -84,6 +84,21 @@ teardown() {
     rm -rf "$TMP_DIR"
 }
 
+@test "ordinary section quality schema uses four story dimensions" {
+    run node - "$REPO/scripts/short-section-quality-gate.js" <<'NODE'
+const gate=require(process.argv[2]);
+const schema=gate.buildQualityEvidenceSchema({
+  workflowId:'wf-short',sectionIndex:2,draft:process.argv[2],
+  outlineContract:{contract_digest:'sha256:outline',section_role:'normal',obligations:[]},
+  readerMilestone:{required:false}
+});
+const ids=schema.checks.map(row=>row.id);
+if(JSON.stringify(ids)!==JSON.stringify(['causal_progression','protagonist_agency','emotional_tension','reader_pull'])) throw new Error(JSON.stringify(ids));
+if(schema.reader_milestone) throw new Error(JSON.stringify(schema.reader_milestone));
+NODE
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 prepare_valid_quality_evidence() {
     node - "$BOOK" "$WORKFLOW_ID" "$REPO" <<'NODE'
 const fs=require('fs'),path=require('path'),crypto=require('crypto');
@@ -125,7 +140,7 @@ fs.writeFileSync(path.join(root,evidence),JSON.stringify({
 },null,2)+'\n');
 task.current_stage='quality_gate';task.current_step='quality_gate';task.status='running';task.pending_feedback=null;
 task.machine=task.machine||{};task.machine.completed_stages=['section_machine_gate'];task.machine.remaining_stages=['quality_gate','section_accept_anchor','next_section_brief'];
-task.stage_execution={status:'running',stage_id:'quality_gate',step_id:'quality_gate',owner_module:task.workflow_owner||'story-short-write',quality_evidence_target:evidence,expected_result_packet:`${task.task_dir}/result-packets/quality_gate.section-006.result.json`};
+task.stage_execution={status:'running',stage_id:'quality_gate',step_id:'quality_gate',owner_module:task.workflow_owner||'story-short-write',quality_evidence_target:evidence,expected_result_packet:`${task.task_dir}/result-packets/quality_gate.section-006.result.json`,execution_command:`node scripts/short-section-quality-gate.js --project-root . --workflow-id ${JSON.stringify(id)} --apply --json`};
 fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
 NODE
 }
@@ -183,6 +198,14 @@ NODE
     [[ "$output" == *'"checks"'* ]]
     [[ "$output" == *'"outline_coverage"'* ]]
     [[ "$output" == *'"acceptance_metadata"'* ]]
+    printf '%s\n' "$output" > "$TMP_DIR/quality-evidence-required.json"
+    node - "$TMP_DIR/quality-evidence-required.json" <<'NODE'
+const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const execution=out.stage_execution||{},visible=out.visible_response||{};
+if(out.presentation_allowed!==false||visible.user_visible!==false||'text' in visible||'instruction' in out) throw new Error(JSON.stringify(out));
+if(execution.current_required_action!=='edit_write_set') throw new Error(JSON.stringify(execution));
+if(!execution.stage_completion_command||(execution.after_write_action||{}).command!==execution.stage_completion_command) throw new Error(JSON.stringify(execution));
+NODE
 }
 
 @test "quality gate repairs unescaped quotes in an evidence quote once" {
@@ -222,7 +245,7 @@ if(e.repair_target!=='草稿_第006节_候选.md') throw new Error(JSON.stringif
 if(!String(e.execution_command||'').includes('short-section-repair-finalize.js')) throw new Error(JSON.stringify(e));
 if(!String(e.resume_hint||'').includes('只修改 草稿_第006节_候选.md')) throw new Error(JSON.stringify(e));
 const kinds=((e.stage_context_packet||{}).source_files||[]).map((item)=>item.kind);
-if(JSON.stringify(kinds)!==JSON.stringify(['gate_findings','memory_snapshot','outline_contract','repair_constraints','current_draft'])) throw new Error(JSON.stringify(kinds));
+if(JSON.stringify(kinds)!==JSON.stringify(['pending_feedback','current_draft_expression_focus'])) throw new Error(JSON.stringify(kinds));
 NODE
 }
 

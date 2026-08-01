@@ -11,9 +11,17 @@ function main() {
   }
 
   const projectRoot = path.resolve(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+  if (targetOutsideProject(target, projectRoot)) {
+    emit({ status: 'not_applicable', reason: 'target_outside_story_project' });
+    return 0;
+  }
   const workflowStateTarget = directWorkflowStateTarget(target, projectRoot);
   if (workflowStateTarget) {
     return deny('blocked_direct_workflow_state_edit', '禁止使用 Write/Edit 直接修补 workflow 权威状态。请调用 workflow-state-machine.js 或 workflow-stage-controller.js 的受控命令。', { target: workflowStateTarget });
+  }
+  const adHocWorkflowHelper = unmanagedWorkflowHelper(target, projectRoot);
+  if (adHocWorkflowHelper) {
+    return deny('blocked_ad_hoc_workflow_helper', '当前素材学习阶段已有受控执行器，禁止在项目 scripts/ 下创建临时辅助脚本。请逐字执行状态机返回的 context_read_command 和 execution_command。', { target: adHocWorkflowHelper });
   }
   const mutator = unmanagedStoryMutator(target, payload, projectRoot);
   if (mutator) {
@@ -118,12 +126,33 @@ function unmanagedStoryMutator(target, payload, projectRoot) {
   return { target: relativeTarget, canonicalReferences };
 }
 
+function unmanagedWorkflowHelper(target, projectRoot) {
+  const relativeTarget = relativeProjectPath(target, projectRoot);
+  if (!/^scripts\/(?:_|tmp|debug|inspect|list|resolve|generate)[A-Za-z0-9_.-]*\.(?:py|c?js|mjs)$/iu.test(relativeTarget)) return '';
+  const pointer = path.join(projectRoot, '追踪', 'workflow', 'current-task.json');
+  try {
+    const current = JSON.parse(require('fs').readFileSync(pointer, 'utf8'));
+    const taskFile = current.task_dir ? path.join(projectRoot, current.task_dir, 'task.json') : pointer;
+    const task = JSON.parse(require('fs').readFileSync(taskFile, 'utf8'));
+    return String(task.current_stage || '') === 'material_learning' ? relativeTarget : '';
+  } catch (_) {
+    return '';
+  }
+}
+
 function relativeProjectPath(target, projectRoot) {
   const value = String(target || '').replace(/\\/g, path.sep);
   const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(projectRoot, value);
   const relative = path.relative(projectRoot, absolute);
   if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return '';
   return relative.split(path.sep).join('/');
+}
+
+function targetOutsideProject(target, projectRoot) {
+  const value = String(target || '').replace(/\\/g, path.sep);
+  const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(projectRoot, value);
+  const relative = path.relative(projectRoot, absolute);
+  return Boolean(relative && (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)));
 }
 
 function warning(code, message) {

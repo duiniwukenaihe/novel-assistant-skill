@@ -13,8 +13,9 @@ const { deriveSectionLengthPolicy } = require('./lib/short-section-length-policy
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { commitAcceptedSection } = require('./lib/short-section-commit-store');
 const { appendIntegrationEvent } = require('./lib/integration-outbox');
-const { checkShortMemoryStage } = require('./lib/short-memory-stage-policy');
+const { ensureCurrentShortMemoryStage } = require('./lib/short-memory-stage-recovery');
 const { previewShortFeedbackRevisionAcceptance } = require('./lib/short-feedback-revision-queue');
+const { readShortProjectState, resolveShortStateRelative, shortStateFile } = require('./lib/short-project-state');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -23,18 +24,18 @@ function main() {
   const workflowId = String(args.workflowId || focusedWorkflowId(root));
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 2, args.json);
-  const task = authority.task;
+  let task = authority.task;
   if (String(task.current_stage || '') !== 'section_accept_anchor') return finish({ status: 'stage_action_not_applicable', expected: 'section_accept_anchor', actual: task.current_stage || '', instruction: '重新读取当前任务的 execution_command；不要重试旧阶段命令。' }, 0, args.json);
-  const execution = task.stage_execution || {};
+  let execution = task.stage_execution || {};
   if (String(execution.status || '') !== 'running' || String(execution.stage_id || '') !== 'section_accept_anchor') {
     return finish({ status: 'stage_execution_not_ready', workflow_id: workflowId, instruction: '先由工作流启动采用阶段，再运行本命令。' }, 0, args.json);
   }
 
-  const projectStateFile = path.join(root, '追踪/private-short-extension/project-state.json');
-  const projectState = readJson(projectStateFile) || {};
+  const projectStateFile = shortStateFile(root, 'project-state.json');
+  const projectState = readShortProjectState(root) || {};
   const sectionIndex = inferShortSectionIndex({ projectState, stageId: 'section_accept_anchor', scope: String(task.scope || '') });
   if (!sectionIndex) return finish({ status: 'blocked_short_section_identity_missing', instruction: '当前任务没有可靠的小节身份；先由 workflow 恢复当前小节，不得默认写入第1节。' }, 0, args.json);
-  const memoryGate = checkShortMemoryStage({ projectRoot: root, task, execution, sectionIndex, stageId: 'section_accept_anchor' });
+  const memoryGate = ensureCurrentShortMemoryStage({ projectRoot: root, workflowId, task, execution, sectionIndex, stageId: 'section_accept_anchor' });
   if (memoryGate.blocking) {
     return finish({
       status: memoryGate.status,
@@ -45,6 +46,8 @@ function main() {
       instruction: memoryGate.instruction,
     }, 0, args.json);
   }
+  task = memoryGate.task;
+  execution = memoryGate.execution;
   const metadataFile = safeProjectFile(root, args.metadata || `${task.task_dir}/artifacts/section-${String(sectionIndex).padStart(3, '0')}-acceptance.json`);
   let metadata = readJson(metadataFile);
 
@@ -71,7 +74,7 @@ function main() {
   const lengthPolicy = deriveSectionLengthPolicy({ projectState, sectionIndex, actual: cjkChars, sectionRole: metadata.section_role || 'normal', exceptionReason: metadata.exception_reason || '' });
   if (lengthPolicy.blocking) return rerunMachineGate({ root, workflowId, receiptIssue: 'short_length_value_missing', lengthPolicy, args });
 
-  const titleLock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
+  const titleLock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
   const outlineText = readText(path.join(root, '小节大纲.md'));
   const plan = resolvePlannedSectionCount({ projectState, titleLock, outlineText });
   if (plan.status !== 'locked') {
@@ -124,7 +127,7 @@ function main() {
   }
   const acceptedCanonicalRel = String(sectionCommit.canonical_path || '');
   const canonicalHash = String(sectionCommit.canonical_sha256 || '');
-  const anchorRel = `追踪/private-short-extension/section-${String(sectionIndex).padStart(3, '0')}-anchor.json`;
+  const anchorRel = resolveShortStateRelative(root, `section-${String(sectionIndex).padStart(3, '0')}-anchor.json`, { forWrite: true });
   const anchorFile = safeProjectFile(root, anchorRel);
   const acceptedSections = upsertAccepted(projectState.accepted_sections, {
     section_index: sectionIndex,
@@ -294,7 +297,7 @@ function markdownBullets(text, heading) {
     .slice(0, 24);
 }
 function resolveConfirmedSectionTitle(root, sectionIndex, metadata) {
-  const lock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
+  const lock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
   const item = (Array.isArray(lock.sections) ? lock.sections : []).find((entry) => Number((entry || {}).section_index) === sectionIndex);
   if (item && item.confirmed === true) {
     return { title: String(item.title || '').trim() || `第${sectionIndex}节`, confirmed: true };
@@ -376,7 +379,7 @@ function relative(root, file) { return file ? path.relative(root, file).split(pa
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
 function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch (_) { return ''; } }
 function parseJson(text) { try { return JSON.parse(String(text || '').trim()); } catch (_) { return null; } }
-function applyOrFinish({ root, workflowId, packetFile, packetRel, sectionIndex, allCompleted, args }) { if (!args.apply) return finish({ status: 'packet_ready', workflow_id: workflowId, section_index: sectionIndex, result_packet: packetRel }, 0, args.json); const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }); const outcome = classifyWorkflowApply(applied); const result = outcome.result; return finish({ status: outcome.applied ? 'applied' : 'apply_blocked', workflow_status: outcome.workflowStatus, workflow_id: workflowId, section_index: sectionIndex, all_sections_completed: allCompleted, result_packet: packetRel, next_stage: String(result.current_stage || ((result.task || {}).current_stage) || ''), ...outcome.presentation, ...(outcome.applied ? {} : { recovery: result }) }, outcome.exitCode, args.json); }
+function applyOrFinish({ root, workflowId, packetFile, packetRel, sectionIndex, allCompleted, args }) { if (!args.apply) return finish({ status: 'packet_ready', workflow_id: workflowId, section_index: sectionIndex, result_packet: packetRel }, 0, args.json); const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }); const outcome = classifyWorkflowApply(applied); const result = outcome.result; return finish({ status: outcome.applied ? 'applied' : 'apply_blocked', workflow_status: outcome.workflowStatus, workflow_id: workflowId, section_index: sectionIndex, all_sections_completed: allCompleted, result_packet: packetRel, next_stage: String(result.current_stage || ((result.task || {}).current_stage) || ''), ...outcome.presentation, ...(outcome.applied ? {} : { recovery: result }) }, outcome.exitCode, args.json); }
 function parseArgs(argv) { const args = { projectRoot: '', workflowId: '', metadata: '', canonical: '', apply: false, json: false, help: false }; for (let i = 0; i < argv.length; i += 1) { const arg = argv[i]; if (arg === '--project-root') args.projectRoot = argv[++i] || ''; else if (arg === '--workflow-id') args.workflowId = argv[++i] || ''; else if (arg === '--metadata') args.metadata = argv[++i] || ''; else if (arg === '--canonical') args.canonical = argv[++i] || ''; else if (arg === '--apply' || arg === '--write') args.apply = true; else if (arg === '--json') args.json = true; else if (arg === '--help' || arg === '-h') args.help = true; else usage(`unknown argument: ${arg}`); } return args; }
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }
 function usage(message) { process.stderr.write(`${message}\nUsage: node short-section-accept-finalize.js --project-root <book> --workflow-id <id> --metadata <json> [--canonical file] [--apply] [--json]\n`); process.exit(2); }

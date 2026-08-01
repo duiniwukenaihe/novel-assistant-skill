@@ -98,6 +98,58 @@ NODE
     [[ "$output" == *'"new_goal_options"'* ]]
 }
 
+@test "workflow task inbox accepts compact flag used by generated commands" {
+  mkdir -p "$TMP_DIR/book"
+  run node "$REPO/scripts/workflow-task-inbox.js" --project-root "$TMP_DIR/book" --action show_unfinished_tasks --compact --json
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *'"status"'* ]]
+}
+
+@test "focused whole-story revision opens task overview before subtask even after overview was shown" {
+    mkdir -p "$TMP_DIR/book/追踪/workflow/tasks/wf-whole-revision" "$TMP_DIR/book/追踪/private-short-extension"
+    cat > "$TMP_DIR/book/追踪/workflow/current-task.json" <<'JSON'
+{"schemaVersion":"1.0.0","workflow_id":"wf-whole-revision","task_dir":"追踪/workflow/tasks/wf-whole-revision","focused_at":"2026-07-18T00:00:00.000Z","state_version":3}
+JSON
+    cat > "$TMP_DIR/book/追踪/private-short-extension/project-state.json" <<'JSON'
+{"schema_version":"1.0.0","project_id":"short-test","workflow_id":"wf-whole-revision","working_title":"测试短篇","planned_sections":3}
+JSON
+    cat > "$TMP_DIR/book/追踪/workflow/tasks/wf-whole-revision/task.json" <<'JSON'
+{
+  "schemaVersion":"1.0.0",
+  "state_version":3,
+  "workflow_id":"wf-whole-revision",
+  "workflow_type":"short_write",
+  "status":"running",
+  "task_dir":"追踪/workflow/tasks/wf-whole-revision",
+  "user_goal":"整篇回炉",
+  "scope":"全篇",
+  "current_stage":"section_repair_loop",
+  "feedback_revision_queue":{
+    "status":"running",
+    "current_section_index":1,
+    "items":[
+      {"section_index":1,"title":"第一节","status":"pending"},
+      {"section_index":2,"title":"第二节","status":"pending"}
+    ]
+  },
+  "navigation":{"task_overview":{"presented_plan_digest":"already-presented"}},
+  "runtime_guard":{"heartbeat":{"updated_at":"2026-07-18T00:00:00.000Z"},"stall_policy":{"heartbeat_timeout_minutes":999999},"checkpoint_policy":{"resume_from":"section_repair_loop"}}
+}
+JSON
+
+    node "$SCRIPT" --project-root "$TMP_DIR/book" --json --action show_unfinished_tasks > "$TMP_DIR/out.json"
+
+    node - "$TMP_DIR/out.json" <<'NODE'
+const fs=require('fs');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+if(out.status!=='current_task_overview_required') throw new Error(JSON.stringify(out));
+if(!String(out.visible_response||'').includes('进入任务总览')) throw new Error(out.visible_response||'');
+if(String(out.visible_response||'').includes('从断点继续')) throw new Error(out.visible_response||'');
+if(!String(out.visible_response||'').startsWith('当前任务：整篇回炉')) throw new Error(out.visible_response||'');
+if(String(out.visible_response||'').startsWith('1. ')) throw new Error(out.visible_response||'');
+NODE
+}
+
 @test "workflow task inbox ignores an empty legacy review ledger" {
     mkdir -p "$TMP_DIR/book/追踪"
     cat > "$TMP_DIR/book/追踪/review-state.json" <<'JSON'
@@ -156,6 +208,7 @@ JSONL
     "checkpoint_policy":{"resume_from":"platform_genre_lock"}
   }
 }
+
 JSON
     cat > "$TMP_DIR/book/追踪/private-short-extension/project-state.json" <<'JSON'
 {
@@ -180,13 +233,47 @@ const card=out.task_cards[0];
 if(card.title!=='我在集团溯源直播里发现车间没有水果') throw new Error(JSON.stringify(card));
 if(card.project_id!=='short-fruit-001') throw new Error(JSON.stringify(card));
 if(card.selected_material_label!=='NFC果汁事件') throw new Error(JSON.stringify(card));
-if(card.visible_stage!=='锁定平台与题材方法') throw new Error(JSON.stringify(card));
+if(card.visible_stage!=='设定与人物') throw new Error(JSON.stringify(card));
 if(out.workflow_groups.length!==1 || out.workflow_groups[0].workflow_type!=='short_write') throw new Error(JSON.stringify(out.workflow_groups));
 if(out.workflow_groups[0].label!=='短篇创作') throw new Error(JSON.stringify(out.workflow_groups[0]));
 if(out.longform_lifecycle_status!==null) throw new Error('short project must not expose longform lifecycle status');
 if(out.smart_new_task_recommendations.some(item=>item.action==='longform_lifecycle_next')) throw new Error(JSON.stringify(out.smart_new_task_recommendations));
 if(out.smart_new_task_recommendations.some(item=>/没有检测到活跃写作任务/.test(item.reason||''))) throw new Error(JSON.stringify(out.smart_new_task_recommendations));
 if(JSON.stringify(out).includes('外卖站')) throw new Error('stale short setting leaked into visible task card');
+NODE
+}
+
+@test "focused task card exposes collaboration execution limits" {
+    mkdir -p "$TMP_DIR/book/追踪/workflow"
+    write_focused_task "wf-collaboration-boundary" <<'JSON'
+{
+  "schemaVersion":"1.0.0",
+  "state_version":1,
+  "workflow_id":"wf-collaboration-boundary",
+  "workflow_type":"short_write",
+  "status":"running",
+  "task_dir":"追踪/workflow/tasks/wf-collaboration-boundary",
+  "user_goal":"继续短篇",
+  "current_stage":"section_brief",
+  "lifecycle":{"status":"active","user_goal":"继续短篇"},
+  "machine":{"next_stop_reason":"waiting_user_choice"},
+  "execution_boundary":{"host_execution_mode":"cooperative_interactive"},
+  "runtime_guard":{"heartbeat":{"updated_at":"2026-07-18T00:00:00.000Z"},"stall_policy":{"heartbeat_timeout_minutes":999999},"checkpoint_policy":{"resume_from":"section_brief"}}
+}
+JSON
+
+    node "$SCRIPT" --project-root "$TMP_DIR/book" --json --action show_unfinished_tasks > "$TMP_DIR/out.json"
+
+    node - "$TMP_DIR/out.json" <<'NODE'
+const fs=require('fs');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+if(out.status!=='current_task_actions') throw new Error(JSON.stringify(out));
+if(out.execution_boundary?.visible_execution_mode!=='协作模式') throw new Error(JSON.stringify(out.execution_boundary));
+if(out.execution_boundary?.stream_abort!==false) throw new Error(JSON.stringify(out.execution_boundary));
+for (const key of ['streaming_control','unattended','streaming_health','abort_execution']) {
+  if (Object.prototype.hasOwnProperty.call(out.execution_boundary || {}, key)) throw new Error(JSON.stringify(out.execution_boundary));
+}
+if(!String(out.visible_response||'').includes('协作模式：可保存断点；不能中止宿主隐藏思考')) throw new Error(out.visible_response||'');
 NODE
 }
 
@@ -870,6 +957,28 @@ JSON
     grep -q '"task_index_path": "追踪/workflow/task-index.json"' "$TMP_DIR/out.json"
 }
 
+@test "nested legacy short assets are offered a short migration instead of long recovery" {
+    mkdir -p "$TMP_DIR/book/正文" "$TMP_DIR/book/大纲" "$TMP_DIR/book/追踪/private-short-extension/briefs"
+    printf '# 短篇设定\n' > "$TMP_DIR/book/设定.md"
+    printf '# 小节大纲\n## 第1节：开场\n' > "$TMP_DIR/book/大纲/小节大纲.md"
+    printf '# 短篇正文\n' > "$TMP_DIR/book/正文/正文.md"
+    printf '# 第1节 Brief\n' > "$TMP_DIR/book/追踪/private-short-extension/briefs/写作Brief_第001节.md"
+
+    node "$SCRIPT" --project-root "$TMP_DIR/book" --json > "$TMP_DIR/out.json"
+
+    node - "$TMP_DIR/out.json" <<'NODE'
+const out = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+const candidate = (out.candidates || []).find((item) => item.workflow_type === 'legacy_short_recovery');
+if (!candidate) throw new Error(JSON.stringify(out.candidates));
+if (candidate.action !== 'migrate_legacy_short_project') throw new Error(JSON.stringify(candidate));
+if (!String(candidate.execution_command || '').includes('legacy-short-project-migrate.js')) throw new Error(JSON.stringify(candidate));
+if ((out.candidates || []).some((item) => item.workflow_type === 'legacy_long_recovery')) throw new Error(JSON.stringify(out.candidates));
+if ((out.smart_new_task_recommendations || []).some((item) => /创作圣经|卷纲|长篇/.test(String(item.label || '')))) {
+  throw new Error(JSON.stringify(out.smart_new_task_recommendations));
+}
+NODE
+}
+
 @test "workflow task inbox renders internal stage ids as Chinese actions" {
     write_focused_task review-001 <<'JSON'
 {
@@ -1115,12 +1224,12 @@ JSON
     node - "$TMP_DIR/out.json" <<'NODE'
 const fs=require('fs');
 const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-if(out.status!=='current_task_actions'||out.current_task.title!=='整篇回炉《测试短篇》') throw new Error(JSON.stringify(out));
-if(out.current_task.visible_stage!=='整篇回炉（0/2）'||out.current_task.stop_reason!=='等待进入任务总览') throw new Error(JSON.stringify(out));
-if(out.next_actions.length!==4||out.next_actions[0].action_id!=='open_task_overview') throw new Error(JSON.stringify(out.next_actions));
-if(out.next_actions[0].interaction_mode!=='execute_command'||!out.next_actions[0].execution_command.includes(' activate ')) throw new Error(JSON.stringify(out.next_actions));
+if(out.status!=='current_task_overview_required') throw new Error(JSON.stringify(out));
+if(out.options.length!==4||out.options[0].action_id!=='open_task_overview') throw new Error(JSON.stringify(out.options));
+if(out.options[0].interaction_mode!=='execute_command'||!out.options[0].execution_command.includes(' activate ')) throw new Error(JSON.stringify(out.options));
 if(!String(out.visible_response||'').includes('1. 进入任务总览（推荐）')) throw new Error(JSON.stringify(out));
-if(JSON.stringify(out.visible_menu).includes('开始写第1节')) throw new Error(JSON.stringify(out.visible_menu));
+if(!String(out.visible_response||'').includes('整篇回炉《测试短篇》')) throw new Error(JSON.stringify(out));
+if(String(out.visible_response||'').includes('开始写第1节')) throw new Error(JSON.stringify(out.visible_response));
 NODE
 }
 

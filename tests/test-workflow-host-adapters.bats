@@ -239,7 +239,8 @@ fs.writeFileSync(path.join(root, '素材卡.md'), '# 素材\n核心素材：复�
 fs.writeFileSync(path.join(root, '设定.md'), '# 设定\n第三人称。共6节。主节奏：钩子-压力-反转。\n');
 fs.writeFileSync(path.join(root, '小节大纲.md'),
   '# 小节大纲\n' +
-  Array.from({ length: 6 }, (_, i) => `## 第${i + 1}节\n结构功能：起承转合\n情绪目标：紧张\n因果链：A→B\n节尾钩子：悬念${i + 1}\n`).join('\n')
+  Array.from({ length: 5 }, (_, i) => `## 第${i + 1}节\n- 场景动作：主角当面核对第${i + 1}份证据。\n- 角色选择：主角决定保留证据并继续追查。\n- 子事件：\n  1. 主角取得证据。\n  2. 对手阻止她继续核验。\n- 节尾钩子：${i === 4 ? '仓库编号指向真正持有人。' : `第${i + 2}份证据出现。`}\n`).join('\n') +
+  '\n## 第6节\n- 承接上节：仓库编号指向真正持有人。\n- 场景动作：主角在仓库当面对照操作日志与终端编号。\n- 角色选择：主角决定公开可核验证据并承担追查后果。\n- 现实后果：真正持有人被锁定，违规账号停止使用。\n- 关系收束：主角与家人保持边界，不用和解掩盖责任。\n- 主题回扣：只有可核验的事实才能重新建立信任。\n- 子事件：\n  1. 主角对照日志锁定终端。\n  2. 她公开证据并推动停用账号。\n- 节尾钩子：后续处理继续接受公开核验。\n'
 );
 fs.writeFileSync(path.join(root, '写作Brief_第006节.md'),
   '# 写作Brief 第006节\nPOV：第三人称\n主角能动性：反击\n节尾：兑现钩子\n');
@@ -320,7 +321,19 @@ fs.mkdirSync(path.join(root,'追踪/private-short-extension'),{recursive:true});
 fs.writeFileSync(path.join(root,'写作Brief_第006节.md'),`# Brief\n\n## 本节任务\n- 逼问哥哥。\n\n## 因果节拍与字数分配\n### 0-300字：不应进入质量包\n1. 微节拍一。\n\n## 上节承接锁定\n- 档案室对峙。\n\n## 视角与称谓\n- 第一人称。\n\n## 主角动作与关系变化\n- 主动出示证据。\n\n## 禁止漂移\n- 不改人物。\n\n## 节尾钩子\n- 父亲夹页。\n\n## 验收标准\n- 因果成立。\n`);
 fs.writeFileSync(path.join(root,'草稿_第006节_候选.md'),'### 第六节\n\n我把合同推到哥哥面前。\n');
 fs.writeFileSync(path.join(root,'设定.md'),'# 设定\n不应重复注入质量门。\n');
-fs.writeFileSync(path.join(root,'小节大纲.md'),'# 大纲\n不应重复注入质量门。\n');
+fs.writeFileSync(path.join(root,'小节大纲.md'),`# 大纲
+## 第6节
+- 承接上节：仓库编号指向真正持有人。
+- 场景动作：主角在仓库当面对照操作日志与终端编号。
+- 角色选择：主角决定公开可核验证据并承担追查后果。
+- 现实后果：真正持有人被锁定，违规账号停止使用。
+- 关系收束：主角与家人保持边界，不用和解掩盖责任。
+- 主题回扣：只有可核验的事实才能重新建立信任。
+- 子事件：
+  1. 主角对照日志锁定终端。
+  2. 她公开证据并推动停用账号。
+- 节尾钩子：后续处理继续接受公开核验。
+`);
 fs.writeFileSync(path.join(root,'素材卡.md'),'# 素材\n不应重复注入质量门。\n');
 fs.writeFileSync(path.join(root,'追踪/private-short-extension/project-state.json'),JSON.stringify({working_title:'测试',current_section_index:6}));
 fs.writeFileSync(path.join(root,'追踪/private-short-extension/section-005-anchor.json'),JSON.stringify({workflow_id:'wf-quality',section_index:5,status:'accepted',canonical_path:'正文.md'}));

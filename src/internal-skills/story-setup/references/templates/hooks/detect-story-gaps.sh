@@ -85,11 +85,14 @@ for BOOK_DIR in "${BOOK_DIRS[@]}"; do
   fi
 done
 
-# 3. 全局拆文未完成检测（项目级，非书目级）
+# 3. 全局拆文未完成检测（项目级，非书目级）。只对「最终状态」非 completed /
+# completed_with_errors 的 _progress.md 报 WARN；已完成的不误报为未完成。
 GLOBAL_PROGRESS_OUTPUT=""
 if [ -d "$ROOT/拆文库" ]; then
   while IFS= read -r -d '' progress_file; do
-    GLOBAL_PROGRESS_OUTPUT+="[WARN] 拆文未完成：${progress_file#$ROOT/}，运行 /novel-assistant 继续拆文。\n"
+    if ! is_progress_completed "$progress_file"; then
+      GLOBAL_PROGRESS_OUTPUT+="[WARN] 拆文未完成：${progress_file#$ROOT/}，运行 /novel-assistant 继续拆文。\n"
+    fi
   done < <(find "$ROOT/拆文库" -name "_progress.md" -print0 2>/dev/null || true)
 fi
 if [ -n "$GLOBAL_PROGRESS_OUTPUT" ]; then

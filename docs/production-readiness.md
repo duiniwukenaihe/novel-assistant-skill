@@ -47,4 +47,10 @@ git diff --check
 
 账本只展示宿主实际回传的 token 与耗时。没有真实 usage 时，系统可以给预算估算，但不得假装是账单或推导美元费用。
 
+工作流会按当前阶段、输入规模、风险和独立证据域选择单执行者或有限并行；正文、规划回写和正式修复始终保持单写入者。托管 runner 将原始 stdout/stderr 保存为任务制品，只把错误、测试统计、关键路径和短摘要提供给后续阶段，并记录原始/压缩字符数。
+
+来源材料使用稳定 `source_id` 与可变 `source_digest` 分离管理。内容变化只刷新依赖该来源的局部制品，不得把整个任务或全部 Memory 判为过期。同一版本在阶段间通过 `consumed_artifact_ids / produced_artifact_ids` 传递，避免重复联网、重复读取全文或回放历史聊天。
+
+`node scripts/token-efficiency-benchmark.js --fixture-dir tests/fixtures/token-efficiency --json` 提供不调用付费模型的确定性回归；它验证压缩率、来源复用、Agent 上限和质量门覆盖，不冒充真实 Token 账单。
+
 质量门负责拦截重复、工具污染、工程词泄漏和明显格式异常；它们不是“故事质量已保证”的证明。人物动机、情节因果、平台适配、版权和最终成稿仍由作者审阅确认。

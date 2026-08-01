@@ -30,6 +30,11 @@ const SAFE_SCRIPTS = new Set([
   'short-story-deslop-finalize.js',
   'short-story-final-check.js',
   'short-planning-stage-finalize.js',
+  'short-startup-entry.js',
+  'short-startup-scan-finalize.js',
+  'hot-source-capture.js',
+  'short-info-source-finalize.js',
+  'short-material-learning-finalize.js',
   'long-chapter-machine-gate.js',
   'long-chapter-quality-gate.js',
   'novel-assistant-update-check.js',
@@ -44,6 +49,10 @@ function main() {
   const workflowMutation = detectWorkflowMutation(command);
   if (workflowMutation) return deny('禁止直接复制或改写 workflow 状态文件。请使用 scripts/workflow-state-machine.js 的对应动作提交状态。');
 
+  if (isSensitiveCredentialRead(command)) {
+    return deny('禁止写作工作流读取宿主凭据或认证配置。脚本路径必须来自已加载 skill 契约或状态机 execution_command，不得通过 settings、auth、credentials、secrets 或 .env 探查。');
+  }
+
   if (isGeneratedStoryMutator(command)) {
     return deny('不得运行临时修复脚本直接改写正文或设定。请走候选稿 → 质量门 → chapter-commit.js prepare/accept → 复检的受控链路。');
   }
@@ -57,7 +66,7 @@ function main() {
   }
 
   if (isGlobalSkillBundleProbe(command)) {
-    return deny('novel-assistant 已由宿主加载。禁止枚举全局 skill 安装目录；请直接运行当前项目 scripts/ 下的 update-check 或 workflow-entry-guard 确定性入口。');
+    return deny('novel-assistant 已由宿主加载。禁止枚举全局 skill 安装目录；请直接执行已加载 skill 提供的确定性脚本路径，或逐字执行状态机返回的 execution_command。');
   }
 
   const shortStageMismatch = shortStageCommandMismatch(command);
@@ -87,6 +96,12 @@ function isBoundedReadOnlyDiagnostic(command) {
 
 function isGlobalSkillBundleProbe(command) {
   return /\b(?:ls|find|tree|rg|grep)\b[\s\S]*(?:\.claude|\.codex|\.zcode)\/skills\/novel-assistant(?:\/|\s|$)/u.test(String(command || ''));
+}
+
+function isSensitiveCredentialRead(command) {
+  const value = String(command || '');
+  if (!/\b(?:cat|head|tail|sed|awk|grep|rg|find|less|more|node|python\w*)\b/u.test(value)) return false;
+  return /(?:^|[\s"'])(?:~|\/[^\s"']+)?\/(?:\.claude\/settings(?:\.local)?\.json|\.codex\/auth\.json|\.zcode\/(?:settings|auth)\.json|[^\s"']*\.(?:env)|[^\s"']*(?:credentials|secrets)[^\s"']*)(?:[\s"']|$)/iu.test(value);
 }
 
 function detectWorkflowMutation(command) {

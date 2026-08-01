@@ -93,3 +93,49 @@ discover_all_books() {
 discover_book_dir() {
   discover_active_book "$@"
 }
+
+# is_progress_completed <progress_file> — 判断拆文 _progress.md 是否处于完成状态。
+# 完成 = 「最终状态：」字段值精确为 completed 或 completed_with_errors（可带尾随注释，
+# 如 "completed ✅（...）"）。其余一律按未完成：缺字段、空文件、无法读取、pending、
+# paused_after_stage1、模板占位 {pending/paused_after_stage1/completed/completed_with_errors}。
+#
+# 实现：状态值本身是 ASCII（completed/completed_with_errors），但字段名「最终状态：」是
+# 中文 UTF-8。Windows 中文系统若导出 GBK 区域，awk/grep 按多字节解码会让 UTF-8 字面量与
+# UTF-8 内容字节不再相等、误判。本库被未 export LC_ALL=C 的 hook 复用，故 per-command
+# 兜底 LC_ALL=C 走字节匹配（与 discover_active_book 同策略，issue #164 同类）。
+# 不用含全角字符的方括号字符组（[：]）——在 C/GBK 区域会被拆字节、漏匹配（见
+# scripts/check-hook-locale-safety.sh Check 2）。
+#
+# 返回：完成 exit 0；未完成 exit 1。不向 stdout 输出，调用方可安全做管道/赋值。
+#
+# 字节布局：每行先剥离 \r。最终状态：= 最(3)+终(3)+状(3)+态(3)+：(3) = 15 字节。
+# 状态值取该前缀之后到行尾，去前导空白后判断是否以 completed / completed_with_errors
+# 起头并紧跟词界（空格/制表/全角空格/行尾）。awk 的 substr 按字节偏移；index 按字节定位。
+is_progress_completed() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  # key_bytes：「最终状态：」的 UTF-8 字节序列。用 \x.. 转义写到 awk 里，避免本文件被
+  # GBK 终端重编码时字面量损坏（脚本源文件本身仍是 UTF-8，转义序列是纯 ASCII，字节稳定）。
+  # 用 done=1 标记命中，不在规则块里直接 exit——awk 的 END 块总会跑，END 里再 exit 决定
+  # 最终退出码（避免规则块 exit 0 被 END 的 exit 1 覆盖）。
+  LC_ALL=C awk '
+    function prefix_bytes() {
+      # 最终状态： (U+6700 U+7EC8 U+72B6 U+6001 U+FF1A) 的 UTF-8 字节
+      return "\xe6\x9c\x80\xe7\xbb\x88\xe7\x8a\xb6\xe6\x80\x81\xef\xbc\x9a"
+    }
+    {
+      sub(/\r$/, "")
+      key = prefix_bytes()
+      p = index($0, key)
+      if (p == 0) next
+      v = substr($0, p + length(key))
+      sub(/^[ \t]+/, "", v)
+      # 精确匹配：completed 或 completed_with_errors，后接词界（空格/制表/全角空格 U+3000/行尾）
+      # 先判长的 completed_with_errors，否则会被 completed 分支抢先命中。
+      if (v ~ /^completed_with_errors([ \t]|\xe3\x80\x80|$)/) { done=1; exit }
+      if (v ~ /^completed([ \t]|\xe3\x80\x80|$)/) { done=1; exit }
+      exit
+    }
+    END { exit (done ? 0 : 1) }
+  ' "$file" 2>/dev/null
+}

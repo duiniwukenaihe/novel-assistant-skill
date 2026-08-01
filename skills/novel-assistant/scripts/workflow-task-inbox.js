@@ -13,12 +13,15 @@ const {
   listTaskFamilies,
   isUnfinishedFamily,
 } = require('./lib/task-family-store');
+const { isShortWorkflowType } = require('./lib/short-workflow-types');
 const { buildLifecycleStatus } = require('./longform-lifecycle-status');
 const { projectTaskActionView } = require('./lib/workflow-action-renderer');
+const { normalizeExecutionBoundary } = require('./lib/workflow-execution-boundary');
 const {
   taskHasOverview,
   taskOverviewPresentationRequired,
 } = require('./lib/workflow-task-overview-state');
+const { readShortProjectState } = require('./lib/short-project-state');
 
 const REVIEW_EVIDENCE_PROTOCOL_VERSION = '2.0.0';
 const SHORT_WORKFLOW_TYPES = new Set([
@@ -45,7 +48,7 @@ const INBOX_ACTIONS = new Set([
   'show_new_goal_options',
 ]);
 
-const USAGE = `Usage: node scripts/workflow-task-inbox.js [--project-root <book-dir>] [--write] [--json]
+const USAGE = `Usage: node scripts/workflow-task-inbox.js [--project-root <book-dir>] [--write] [--json] [--compact]
   [--action <show_inbox|show_unfinished_tasks|show_current_run|show_smart_recommendations|show_new_goal_options>]
   [--selection <1-4>]
 
@@ -54,11 +57,12 @@ short-form, review, deconstruction, and update/download state files without
 reading chapter prose.`;
 
 function parseArgs(argv) {
-  const args = { projectRoot: '', json: false, write: false, action: '', selection: 0 };
+  const args = { projectRoot: '', json: false, compact: false, write: false, action: '', selection: 0 };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--project-root') args.projectRoot = argv[++i] || '';
     else if (arg === '--json') args.json = true;
+    else if (arg === '--compact') args.compact = true;
     else if (arg === '--write') args.write = true;
     else if (arg === '--selection') args.selection = Number(argv[++i] || 0);
     else if (arg === '--action') {
@@ -173,41 +177,83 @@ const STAGE_LABELS = {
   startup_scan: '扫描短篇状态',
   startup_menu: '选择短篇启动路径',
   freshness_window: '选择热点时间范围',
-  info_source_pool: '选择资讯素材',
+  info_source_pool: '抓取资讯池',
+  info_source_selection: '选择资讯素材',
   material_learning: '生成并选择脑洞卡',
   project_seed: '建立独立短篇项目',
-  short_setting: '整理短篇设定',
-  platform_genre_lock: '锁定平台与题材方法',
-  rhythm_pattern_selection: '选择节奏与爽点套路',
-  section_outline: '整理小节大纲',
-  section_plan_lock: '锁定总小节',
-  short_structure_impact_audit: '检查结构变更影响',
-  hook_value_gate: '检查看点与钩子',
-  hook_retention_gate: '检查钩子保留',
+  short_setting: '设定与人物',
+  platform_genre_lock: '设定与人物',
+  rhythm_pattern_selection: '节奏与全篇小节大纲',
+  section_outline: '节奏与全篇小节大纲',
+  section_plan_lock: '确认总节数与小节标题',
+  short_structure_impact_audit: '节奏与全篇小节大纲',
+  hook_value_gate: '节奏与全篇小节大纲',
+  hook_retention_gate: '节奏与全篇小节大纲',
   section_brief: '生成当前小节 Brief',
   first_section_brief: '生成第 1 节 Brief',
   next_section_brief: '生成下一节 Brief',
   draft_section: '写当前小节',
   draft_first_section: '写第 1 节',
   draft_next_section: '写下一节',
-  section_machine_gate: '检查当前小节机器门',
-  section_repair_loop: '修订当前小节',
-  story_value_gate: '检查故事价值',
+  section_machine_gate: '双门验收与采用',
+  section_repair_loop: '双门验收与采用',
+  story_value_gate: '双门验收与采用',
   feedback_impact_sync: '分析反馈影响',
   feedback_apply_patch: '回写已确认方案',
-  quality_gate: '检查故事质量',
-  section_candidate_compare: '对比候选稿',
-  section_accept_anchor: '确认采用当前小节',
-  full_story_assembly: '组装全篇',
-  full_story_review: '全篇总编辑验收',
-  deslop: '去 AI 味',
-  final_check: '最终检查',
+  quality_gate: '双门验收与采用',
+  section_candidate_compare: '双门验收与采用',
+  section_accept_anchor: '双门验收与采用',
+  full_story_assembly: '合稿 / 精修 / 发布检查',
+  full_story_review: '合稿 / 精修 / 发布检查',
+  short_deslop: '合稿 / 精修 / 发布检查',
+  deslop: '合稿 / 精修 / 发布检查',
+  final_check: '合稿 / 精修 / 发布检查',
+  story_bible: '故事核心',
+  master_outline: '总纲',
+  master_outline_review: '总纲',
+  volume_outline_review: '卷纲',
+  stage_detail_outline: '阶段细纲',
+  detail_outline_review: '阶段细纲',
+  chapter_brief: '章节 Brief',
+  brief_review: '章节 Brief',
+  prose_acceptance: '正文与验收',
+  chapter_commit: '人物 / 伏笔 / 时间线提交',
+  milestone_review: '复盘与跨卷交接',
+  volume_acceptance: '复盘与跨卷交接',
+  book_acceptance: '复盘与跨卷交接',
 };
 
 function humanStepLabel(value) {
   const key = String(value || '').trim();
   if (!key) return '';
   return STAGE_LABELS[key] || key.replace(/_/g, ' ');
+}
+
+const EXECUTION_STAGE_LABELS = {
+  section_machine_gate: '检查当前小节',
+  section_repair_loop: '修订当前小节',
+  quality_gate: '审阅当前小节',
+  story_value_gate: '审阅当前小节',
+  section_candidate_compare: '选择当前小节候选',
+  section_accept_anchor: '采用当前小节',
+  first_section_brief: '生成第 1 节 Brief',
+  next_section_brief: '生成下一节 Brief',
+  section_brief: '生成当前小节 Brief',
+  draft_first_section: '写第 1 节',
+  draft_next_section: '写下一节',
+  draft_section: '写当前小节',
+};
+
+function executionStepLabel(task) {
+  const execution = ((task || {}).stage_execution || {});
+  const key = String(execution.step_id || execution.stage_id || (task || {}).current_step || (task || {}).current_stage || '').trim();
+  return EXECUTION_STAGE_LABELS[key] || humanStepLabel(key);
+}
+
+function visibleStageFromTask(task) {
+  return resumesRunningStage(task)
+    ? executionStepLabel(task)
+    : humanStepLabel((task || {}).current_stage || (task || {}).current_step || '');
 }
 
 function resumesRunningStage(task) {
@@ -226,8 +272,7 @@ function resumesPausedStage(task) {
 }
 
 function runningStageResumeLabel(task) {
-  const execution = task.stage_execution || {};
-  const stage = humanStepLabel(execution.step_id || execution.stage_id || task.current_step || task.current_stage || '');
+  const stage = executionStepLabel(task);
   return `从断点继续${stage || '当前任务'}`;
 }
 
@@ -356,6 +401,7 @@ function addCandidate(candidates, candidate) {
 	    selected_material_id: candidate.selected_material_id || '',
 	    selected_material_label: candidate.selected_material_label || '',
 	    project_status: candidate.project_status || '',
+	    execution_boundary: candidate.execution_boundary || null,
 	    task_overview_required: candidate.task_overview_required === true,
 	    task_overview_label: candidate.task_overview_label || '',
 	  });
@@ -451,7 +497,7 @@ function normalizeNextActions(task, fallbackLabel) {
 }
 
 function requiresTaskOverview(task) {
-  return taskOverviewPresentationRequired(task);
+  return taskHasOverview(task);
 }
 
 function taskOverviewStageLabel(task) {
@@ -479,18 +525,18 @@ function localizedActionLabel(option, index) {
 }
 
 function shortProjectIdentity(root, task) {
-  if (!['short_write', 'short_startup', 'private_short_startup'].includes(String((task || {}).workflow_type || ''))) return null;
+  if (!isShortWorkflowType((task || {}).workflow_type)) return null;
   const embedded = task && task.project_identity && typeof task.project_identity === 'object'
     ? task.project_identity
     : null;
-  const state = embedded || readJson(path.join(root, '追踪', 'private-short-extension', 'project-state.json'));
+  const state = embedded || readShortProjectState(root);
   if (!state || state.__error) return null;
   if (state.workflow_id && String(state.workflow_id) !== String((task || {}).workflow_id || '')) return null;
-  const workingTitle = String(state.working_title || state.title || '').trim();
-  if (!workingTitle) return null;
   const selected = state.selected_material && typeof state.selected_material === 'object'
     ? state.selected_material
     : {};
+  const workingTitle = String(state.working_title || state.title || selected.label || '').trim();
+  if (!workingTitle) return null;
   return {
     project_id: String(state.project_id || ''),
     working_title: workingTitle,
@@ -516,10 +562,63 @@ function projectIdentityCandidateFields(root, task) {
 	  };
 	}
 
+const LEGACY_RESUME_STAGE_LABELS = {
+  hook_retention_gate: '检查钩子保留',
+  hook_value_gate: '检查看点价值',
+  short_structure_impact_audit: '检查结构影响',
+  feedback_impact_sync: '分析反馈影响',
+  feedback_apply_patch: '回写已确认方案',
+  section_repair_loop: '修订当前小节',
+  section_accept_anchor: '采用当前小节',
+};
+
+function legacyResumeStageLabel(stage) {
+  const normalized = String(stage || '').replace(/_revision$/u, '_gate');
+  return LEGACY_RESUME_STAGE_LABELS[normalized] || humanStepLabel(normalized);
+}
+
 function titleFromTask(root, task, fallback) {
   const identity = shortProjectIdentity(root, task);
   const title = String((identity || {}).working_title || task.title || task.user_goal || ((task.lifecycle || {}).user_goal) || fallback || '继续当前任务').trim();
-  return taskHasOverview(task) && (identity || {}).working_title ? `整篇回炉《${title}》` : title;
+  const queue = task && task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
+    ? task.feedback_revision_queue
+    : null;
+  const revisionOverview = Boolean(queue && String(queue.status || '') === 'running'
+    && Array.isArray(queue.items) && queue.items.length > 0);
+  return revisionOverview && (identity || {}).working_title ? `整篇回炉《${title}》` : title;
+}
+
+function executionBoundaryCandidateFields(task) {
+  const raw = task && task.execution_boundary && typeof task.execution_boundary === 'object'
+    ? task.execution_boundary
+    : {};
+  const boundary = normalizeExecutionBoundary({
+    ...raw,
+    host_execution_mode: raw.host_execution_mode || (task || {}).host_execution_mode,
+  });
+  const capabilities = boundary.capabilities || {};
+  const legacyResume = task && task.legacy_resume && typeof task.legacy_resume === 'object'
+    ? task.legacy_resume
+    : null;
+  const legacyStage = legacyResume
+    ? legacyResumeStageLabel(legacyResume.source_stage)
+    : '';
+  const legacyStatus = String((legacyResume || {}).source_status || '');
+  const legacyAction = String((((legacyResume || {}).recommended_action || {}).label) || '');
+  return {
+    execution_boundary: {
+      visible_execution_mode: boundary.visible_execution_mode,
+      stream_abort: capabilities.stream_abort === true,
+      process_liveness: capabilities.process_liveness === true,
+      exact_usage: capabilities.exact_usage === true,
+      token_source: boundary.token_source,
+      visible_cost_source: boundary.visible_cost_source,
+    },
+    detail_lines: [
+      legacyStage ? `旧断点：${legacyStage}${legacyStatus ? `（${legacyStatus}）` : ''}` : '',
+      legacyAction ? `恢复建议：${legacyAction}` : '',
+    ].filter(Boolean),
+  };
 }
 
 function stopReasonFromTask(task) {
@@ -536,6 +635,8 @@ function stopReasonFromTask(task) {
     stage_running_waiting_result_packet: '当前阶段执行中，等待可信回执',
     waiting_result_packet: '等待当前阶段可信回执',
     waiting_user_choice: '等待选择下一步',
+    requires_user_confirm: '等待作者确认',
+    short_setting_author_confirmation_required: '等待确认人物与剧情设定',
     paused: '已暂停并保存断点',
   };
   return visible[raw] || raw;
@@ -612,6 +713,7 @@ function buildTaskCard(candidate, index) {
 	    selected_material_id: candidate.selected_material_id || '',
 	    selected_material_label: candidate.selected_material_label || '',
     project_status: candidate.project_status || '',
+    execution_boundary: candidate.execution_boundary || null,
 	    task_overview_required: candidate.task_overview_required === true,
 	    task_overview_label: candidate.task_overview_label || '',
     display,
@@ -895,6 +997,7 @@ function scanTaskFamilies(root, candidates, suppressedWorkflowIds) {
       && ['paused', 'invalidated'].includes(String(branch.status || '').toLowerCase())).length;
     addCandidate(candidates, {
       ...projectIdentityCandidateFields(root, task),
+      ...executionBoundaryCandidateFields(task),
       id: String(family.task_family_id),
       task_family_id: String(family.task_family_id),
       head_workflow_id: headId,
@@ -902,7 +1005,7 @@ function scanTaskFamilies(root, candidates, suppressedWorkflowIds) {
       workflow_type: task.workflow_type || family.identity?.workflow_class || 'workflow_task',
       label: firstCandidateLabel(task),
       title: titleFromTask(root, task, firstCandidateLabel(task)),
-      visible_stage: humanStepLabel(task.current_stage || task.current_step || ''),
+      visible_stage: visibleStageFromTask(task),
       scope_label: String(task.scope || ((task.lifecycle || {}).scope) || ''),
       last_trusted_artifact: extractTrustedArtifact(task),
       stop_reason: stopReasonFromTask(task),
@@ -945,11 +1048,12 @@ function scanWorkflow(root, candidates, suppressedWorkflowIds) {
   if (!hasUnfinishedStatus(task.status)) return;
   addCandidate(candidates, {
     ...projectIdentityCandidateFields(root, task),
+    ...executionBoundaryCandidateFields(task),
     id: task.workflow_id || 'workflow-current-task',
     workflow_type: task.workflow_type || 'workflow_task',
     label: firstCandidateLabel(task),
     title: titleFromTask(root, task, firstCandidateLabel(task)),
-    visible_stage: humanStepLabel(task.current_stage || task.current_step || ''),
+    visible_stage: visibleStageFromTask(task),
     scope_label: String(task.scope || ((task.lifecycle || {}).scope) || ''),
     last_trusted_artifact: extractTrustedArtifact(task),
     stop_reason: stopReasonFromTask(task),
@@ -979,11 +1083,12 @@ function scanTaskDirectories(root, candidates, suppressedWorkflowIds) {
     if (!hasUnfinishedStatus(task.status)) continue;
     addCandidate(candidates, {
       ...projectIdentityCandidateFields(root, task),
+      ...executionBoundaryCandidateFields(task),
       id: task.workflow_id || entry.name,
       workflow_type: task.workflow_type || 'workflow_task',
       label: firstCandidateLabel(task),
       title: titleFromTask(root, task, firstCandidateLabel(task)),
-      visible_stage: humanStepLabel(task.current_stage || task.current_step || ''),
+      visible_stage: visibleStageFromTask(task),
       scope_label: String(task.scope || ((task.lifecycle || {}).scope) || ''),
       last_trusted_artifact: extractTrustedArtifact(task),
       stop_reason: stopReasonFromTask(task),
@@ -1081,7 +1186,7 @@ function chapterGenerationAllowed(lifecycleStatus) {
 
 function isShortProjectContext(root, candidates) {
   if ((candidates || []).some(candidate => SHORT_WORKFLOW_TYPES.has(String(candidate.workflow_type || '')))) return true;
-  const projectState = readJson(path.join(root, '追踪', 'private-short-extension', 'project-state.json'));
+  const projectState = readShortProjectState(root);
   if (projectState && !projectState.__error) {
     const declaredShortProject = SHORT_WORKFLOW_TYPES.has(String(projectState.workflow_type || ''))
       || Boolean(projectState.project_id && projectState.selected_material);
@@ -1090,13 +1195,25 @@ function isShortProjectContext(root, candidates) {
   // 老项目兼容: 没有活跃任务也没有 project-state.json, 但有短篇创作资产
   // (正文.md + 设定.md + 小节大纲.md 或 写作Brief_第N节.md)时, 识别为短篇项目,
   // 避免误 fallback 到长篇生命周期检测并推荐"补全创作圣经"。
-  const hasShortProse = fs.existsSync(path.join(root, '正文.md'));
+  const legacyAssets = detectLegacyShortAssets(root);
+  const hasShortProse = Boolean(legacyAssets.prose);
   const hasShortSetting = fs.existsSync(path.join(root, '设定.md'));
-  const hasShortOutline = fs.existsSync(path.join(root, '小节大纲.md'));
+  const hasShortOutline = Boolean(legacyAssets.outline);
   const hasShortBrief = fs.existsSync(path.join(root, '追踪', 'private-short-extension', 'current-task.json'))
-    || fs.readdirSync(root).some((name) => /^写作Brief_第\d+节\.md$/.test(name));
+    || fs.readdirSync(root).some((name) => /^写作Brief_第\d+节\.md$/.test(name))
+    || hasAnyMarkdownDeep(path.join(root, '追踪', 'story-system', 'short', 'briefs'))
+    || hasAnyMarkdownDeep(path.join(root, '追踪', 'private-short-extension', 'briefs'));
   if (hasShortProse && hasShortSetting && (hasShortOutline || hasShortBrief)) return true;
   return false;
+}
+
+function detectLegacyShortAssets(root) {
+  const first = (candidates) => candidates.find((relative) => fs.existsSync(path.join(root, relative))) || '';
+  return {
+    prose: first(['正文.md', '正文/正文.md']),
+    outline: first(['小节大纲.md', '大纲/小节大纲.md']),
+    setting: first(['设定.md']),
+  };
 }
 
 function deriveSmartNewTaskRecommendations(root, candidates, postCompletionRecommendations, lifecycleStatus) {
@@ -1330,6 +1447,25 @@ function scanLegacyProjectHints(root, candidates) {
   const deconstructionCount = countChildDirs(deconstructionDir);
 
   if (!hasProse && !hasOutline && !reviewReportCount && !deconstructionCount) return;
+
+  const shortAssets = detectLegacyShortAssets(root);
+  if (shortAssets.prose && shortAssets.outline && shortAssets.setting) {
+    addCandidate(candidates, {
+      id: 'legacy-short-project-recovery',
+      workflow_type: 'legacy_short_recovery',
+      label: '升级旧版短篇项目到当前工作流（需确认）',
+      source: [shortAssets.prose, shortAssets.outline, shortAssets.setting].join(', '),
+      status: 'migration_preview_required',
+      resume_hint: '/novel-assistant 升级并恢复当前短篇项目',
+      risk_level: 'medium',
+      action: 'migrate_legacy_short_project',
+      execution_command: 'node scripts/legacy-short-project-migrate.js --project-root . --json',
+      reconstructed: true,
+      migration: { source: 'legacy_short_project', requires_confirmation: true },
+      detail_lines: ['默认只读预览；确认后建立当前规范副本和 short_write 任务，旧文件保留不覆盖。'],
+    });
+    return;
+  }
 
   const sources = [];
   if (hasProse) sources.push('正文');
@@ -1665,6 +1801,7 @@ function compactTaskCard(card, projectRoot) {
     project_id: card.project_id,
     working_title: card.working_title,
     project_status: card.project_status,
+    execution_boundary: card.execution_boundary || null,
     task_overview_required: card.task_overview_required === true,
     free_text_enabled: card.free_text_enabled !== false,
     interaction_mode: card.interaction_mode || (card.execution_command ? 'execute_command' : 'semantic_only'),
@@ -1678,6 +1815,16 @@ function isFocusedTaskCard(card, focusedWorkflowId) {
   const focused = String(focusedWorkflowId || '');
   if (!focused || !card) return false;
   return String(card.id || '') === focused || String(card.head_workflow_id || '') === focused;
+}
+
+function focusedTaskHeader(card) {
+  if (!card || typeof card !== 'object') return '';
+  return [
+    `当前任务：${card.title || '未命名任务'}`,
+    card.visible_stage ? `当前阶段：${card.visible_stage}` : '',
+    card.stop_reason ? `当前停靠：${card.stop_reason}` : '',
+    card.last_trusted_artifact ? `最后可信产物：${card.last_trusted_artifact}` : '',
+  ].filter(Boolean).join('\n');
 }
 
 function actionView(inbox, action) {
@@ -1694,6 +1841,26 @@ function actionView(inbox, action) {
       ? taskCards[0]
       : null;
     if (focusedCard) {
+      if (focusedCard.task_overview_required === true) {
+        return {
+          ...base,
+          status: 'current_task_overview_required',
+          candidateCount: 1,
+          taskCardCount: 1,
+          focused_workflow_id: inbox.focused_workflow_id,
+          selection_contract: 'execute_command_or_route_intent',
+          render_mode: 'text_numbers',
+          options: focusedCard.next_actions,
+          visible_response: [
+            focusedTaskHeader(focusedCard),
+            '',
+            ...(focusedCard.next_actions || []).map((action) => `${action.number}. ${action.label}`),
+            '',
+            '回复 1/2/3/4，或直接输入你的要求。',
+          ].filter(Boolean).join('\n'),
+          safe_default: '先进入任务总览，再执行当前子任务；不会自动开启其他任务。',
+        };
+      }
       const projection = projectTaskActionView(focusedCard);
       return {
         ...base,
@@ -1800,4 +1967,6 @@ function main() {
   print(inbox, args.json, args.action, args.selection);
 }
 
-main();
+module.exports = { buildInbox, writeInbox, main };
+
+if (require.main === module) main();

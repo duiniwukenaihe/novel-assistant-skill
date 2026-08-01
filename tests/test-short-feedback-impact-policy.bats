@@ -80,7 +80,7 @@ const accepted = policy.resolveShortFeedbackPatch({
   allowedNext: ['section_repair_loop', 'first_section_brief', 'next_section_brief', 'short_setting', 'section_outline', 'section_plan_lock'],
   sectionIndex: 2,
 });
-if (accepted.status !== 'ok' || accepted.next_stage_id !== 'section_plan_lock' || !accepted.invalidates_brief) {
+if (accepted.status !== 'ok' || accepted.next_stage_id !== 'section_plan_lock' || !accepted.invalidates_brief || accepted.requires_structure_audit) {
   throw new Error(JSON.stringify(accepted));
 }
 NODE
@@ -165,7 +165,7 @@ const accepted = policy.resolveShortFeedbackPatch({
   allowedNext,
   sectionIndex: 4,
 });
-if (accepted.status !== 'ok' || accepted.next_stage_id !== 'section_plan_lock' || !accepted.requires_structure_audit || !accepted.cross_section_impact) {
+if (accepted.status !== 'ok' || accepted.next_stage_id !== 'section_plan_lock' || accepted.requires_structure_audit || !accepted.cross_section_impact) {
   throw new Error(JSON.stringify(accepted));
 }
 NODE

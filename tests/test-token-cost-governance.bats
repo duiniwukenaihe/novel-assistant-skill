@@ -297,8 +297,8 @@ NODE
     done
 }
 
-@test "top level and docs explain token governance as system behavior" {
-    for file in "$README" "$DOCS"; do
+@test "workflow docs explain token governance as system behavior" {
+    for file in "$DOCS"; do
         grep -q "Token Cost Governance" "$file"
         grep -q "浪费不可见" "$file"
         grep -q "值得花和该治理分开" "$file"

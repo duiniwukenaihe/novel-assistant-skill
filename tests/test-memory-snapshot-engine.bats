@@ -33,14 +33,14 @@ NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
-@test "short memory stage policy blocks stale receipts but preserves legacy compatibility" {
+@test "short memory stage policy refreshes stale accept receipts and preserves legacy compatibility" {
   run node - "$REPO/scripts/lib/short-memory-stage-policy.js" <<'NODE'
 const api=require(process.argv[2]);
 const current=api.classifyShortMemoryStage({status:'current'},'quality_gate');
 const stale=api.classifyShortMemoryStage({status:'stale',stale_sources:['追踪/memory/facts.jsonl']},'section_accept_anchor');
 const legacy=api.classifyShortMemoryStage({status:'not_recorded'},'quality_gate');
 if(current.status!=='pass'||current.blocking) throw new Error(JSON.stringify(current));
-if(stale.status!=='short_memory_context_refresh_required'||!stale.blocking||stale.resume_stage!=='quality_gate') throw new Error(JSON.stringify(stale));
+if(stale.status!=='short_memory_context_refresh_required'||stale.blocking||stale.resume_stage!=='section_accept_anchor'||stale.refresh_allowed!==true) throw new Error(JSON.stringify(stale));
 if(legacy.status!=='legacy_memory_unverified'||legacy.blocking) throw new Error(JSON.stringify(legacy));
 NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }

@@ -1,5 +1,7 @@
 'use strict';
 
+const { outlineSectionCount } = require('./short-project-state');
+
 const FIRST_SECTION_STAGES = new Set(['draft_first_section', 'first_section_brief']);
 const NEXT_SECTION_STAGES = new Set(['next_section_brief', 'draft_next_section']);
 
@@ -17,16 +19,6 @@ function acceptedSectionHighWater(projectState) {
     highWater = Math.max(highWater, positiveInteger((accepted[index] || {}).section_index) || index + 1);
   }
   return highWater;
-}
-
-function outlineSectionCount(outlineText) {
-  const text = String(outlineText || '');
-  const explicit = text.match(/总小节数\s*[：:]\s*(\d+)\s*节?/u);
-  if (explicit) return positiveInteger(explicit[1]);
-  const indexes = [...text.matchAll(/^#{1,6}\s*第\s*0*(\d+)\s*节(?:\s*[：:]|\s|$)/gmu)]
-    .map((match) => positiveInteger(match[1]))
-    .filter(Boolean);
-  return indexes.length ? Math.max(...indexes) : 0;
 }
 
 function resolvePlannedSectionCount({ projectState = {}, titleLock = {}, outlineText = '' } = {}) {

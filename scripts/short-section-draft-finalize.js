@@ -9,7 +9,7 @@ const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
-const { validateShortStageMemoryReceipt } = require('./lib/short-memory-snapshot');
+const { ensureCurrentShortMemoryStage } = require('./lib/short-memory-stage-recovery');
 
 const DRAFT_STAGES = new Set(['draft_first_section', 'draft_section', 'draft_next_section']);
 
@@ -20,9 +20,9 @@ function main() {
   const workflowId = String(args.workflowId || focusedWorkflowId(root));
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 2, args.json);
-  const task = authority.task;
+  let task = authority.task;
   const stageId = String(task.current_stage || '');
-  const execution = task.stage_execution || {};
+  let execution = task.stage_execution || {};
   if (!DRAFT_STAGES.has(stageId)
     || String(execution.status || '') !== 'running'
     || String(execution.stage_id || '') !== stageId) {
@@ -42,17 +42,26 @@ function main() {
   if (beforeDigest && beforeDigest === afterDigest) {
     return finish({ status: 'awaiting_short_draft_change', workflow_id: workflowId, draft_target: draftRel }, 0, args.json);
   }
-  const memoryCheck = validateShortStageMemoryReceipt(root, task, execution);
-  if (!['current', 'not_recorded'].includes(String(memoryCheck.status || ''))) {
+  const memoryGate = ensureCurrentShortMemoryStage({
+    projectRoot: root,
+    workflowId,
+    task,
+    execution,
+    sectionIndex: sectionIndexFromScope(task.scope),
+    stageId,
+  });
+  if (memoryGate.blocking) {
     return finish({
-      status: 'short_memory_context_refresh_required',
+      status: memoryGate.status,
       workflow_id: workflowId,
-      memory_status: memoryCheck.status,
-      stale_sources: memoryCheck.stale_sources || [],
+      memory_status: memoryGate.memory_status,
+      stale_sources: memoryGate.stale_sources || [],
       draft_target: draftRel,
-      instruction: '候选稿已保留。当前作品事实在本阶段启动后发生变化；重建本小节上下文包并仅复核受影响内容，不得重写整篇。',
+      instruction: memoryGate.instruction,
     }, 0, args.json);
   }
+  task = memoryGate.task;
+  execution = memoryGate.execution;
 
   const packetRel = String(execution.expected_result_packet || `${task.task_dir}/result-packets/${stageId}.result.json`);
   const packetFile = safeProjectFile(root, packetRel);
@@ -81,14 +90,14 @@ function main() {
     next_recommendation: '运行当前小节机器门；不得继续写下一节。',
     handoff_summary: `${String(task.scope || '当前小节')}候选稿已落盘，等待机器门。`,
     memory_updates: [],
-    memory_read_receipt_status: memoryCheck.status,
-    memory_read_receipt: memoryCheck.current_receipt || null,
+    memory_read_receipt_status: memoryGate.memory_status,
+    memory_read_receipt: ((memoryGate.validation || {}).receipt) || null,
     result_packet_path: packetRel,
   });
   if (!args.apply) return finish({ status: 'packet_ready', workflow_id: workflowId, result_packet: packetRel }, 0, args.json);
   const applied = spawnSync(process.execPath, [
     path.join(__dirname, 'workflow-state-machine.js'),
-    'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json',
+    'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json',
   ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(applied);
   const result = outcome.result;
@@ -128,6 +137,10 @@ function safeProjectFile(root, relativePath) { const file = path.resolve(root, S
 function digestFile(file) { return `sha256:${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`; }
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
 function parseJson(text) { try { return JSON.parse(String(text || '').trim()); } catch (_) { return null; } }
+function sectionIndexFromScope(scope) {
+  const match = String(scope || '').match(/第\s*0*(\d+)\s*节/u);
+  return match ? Number(match[1]) : undefined;
+}
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }
 function usage(message) { process.stderr.write(`${message}\nUsage: node short-section-draft-finalize.js --project-root <book> --workflow-id <id> [--draft file] [--apply] [--json]\n`); process.exit(2); }
 

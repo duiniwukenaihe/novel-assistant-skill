@@ -7,8 +7,25 @@ const path = require('path');
 const { acquireProjectLock, atomicWriteJson } = require('./lib/workflow-state-store');
 const { mutateTaskAuthority, readFocusedTask } = require('./lib/workflow-task-authority');
 const { resolveProjectRoot } = require('./lib/project-root-resolver');
+const { isShortWorkflowType } = require('./lib/short-workflow-types');
+// Lightweight project-internal helpers are required in-process instead of
+// spawned, to avoid per-call node startup cost. Each module guards its CLI
+// entry point with `if (require.main === module)` so requiring it is pure.
+const { supervise } = require('./workflow-runtime-supervisor');
+const { resolveAuthoritativeStatus } = require('./workflow-state-validate');
+const { buildInbox, writeInbox } = require('./workflow-task-inbox');
+const { resolveSessionId: resolveSessionIdFromModule } = require('./workflow-session-id');
+const { previewMigration } = require('./task-family-migrate');
 
 const SCHEMA_VERSION = '1.0.0';
+const SHORT_WORKFLOW_CONTRACT_VERSION = 3;
+const SHORT_WHOLE_STORY_STAGES = new Set([
+  'startup_scan', 'startup_menu', 'freshness_window', 'info_source_pool', 'short_review',
+  'info_source_selection', 'material_learning', 'project_seed', 'short_setting', 'platform_genre_lock',
+  'rhythm_pattern_selection', 'section_outline', 'section_plan_lock',
+  'short_structure_impact_audit', 'hook_retention_gate',
+  'full_story_assembly', 'full_story_review', 'short_deslop', 'final_check',
+]);
 const USAGE = `Usage: node workflow-entry-guard.js --project-root <book-dir> [--visible-draft FILE] [--user-intent TEXT] [--session-id ID] [--takeover-session --confirm] [--write] [--compact] [--json]
 
 Runs the mandatory startup guard for novel-assistant runners:
@@ -90,20 +107,20 @@ function parseJson(stdout, fallback) {
 }
 
 function runSupervisor(projectRoot) {
-  const result = runNode('workflow-runtime-supervisor.js', [
-    '--project-root',
-    projectRoot,
-    '--json',
-  ]);
-  return {
-    exit_code: result.status,
-    result: parseJson(result.stdout, {
-      status: 'blocked_supervisor_invalid_output',
-      recommended_action: 'repair_runtime_guard',
-      stderr: result.stderr,
-      error: result.error,
-    }),
-  };
+  try {
+    const { exitCode, result } = supervise(projectRoot);
+    return { exit_code: exitCode, result };
+  } catch (error) {
+    return {
+      exit_code: 1,
+      result: {
+        status: 'blocked_supervisor_invalid_output',
+        recommended_action: 'repair_runtime_guard',
+        stderr: '',
+        error: error.message,
+      },
+    };
+  }
 }
 
 function readJsonFile(file) {
@@ -171,29 +188,42 @@ function repairRuntimeGuard(projectRoot, supervisorResult) {
 }
 
 function runStateValidation(projectRoot) {
-  const result = runNode('workflow-state-validate.js', ['--project-root', projectRoot, '--json']);
-  return {
-    exit_code: result.status,
-    result: parseJson(result.stdout, {
-      status: 'blocked_state_validation_invalid_output',
-      stderr: result.stderr,
-      error: result.error,
-    }),
-  };
+  try {
+    const result = resolveAuthoritativeStatus(projectRoot, {});
+    return {
+      exit_code: result.status === 'blocked' ? 2 : 0,
+      result,
+    };
+  } catch (error) {
+    return {
+      exit_code: 1,
+      result: {
+        status: 'blocked_state_validation_invalid_output',
+        stderr: '',
+        error: error.message,
+      },
+    };
+  }
 }
 
 function runTaskInbox(projectRoot, write) {
-  const args = ['--project-root', projectRoot, '--json'];
-  if (write) args.push('--write');
-  const result = runNode('workflow-task-inbox.js', args);
-  return {
-    exit_code: result.status,
-    result: parseJson(result.stdout, {
-      status: 'blocked_task_inbox_invalid_output',
-      stderr: result.stderr,
-      error: result.error,
-    }),
-  };
+  try {
+    const root = path.resolve(projectRoot);
+    const inbox = buildInbox(projectRoot);
+    if (write) {
+      inbox.task_index_path = path.relative(root, writeInbox(root, inbox)).split(path.sep).join('/');
+    }
+    return { exit_code: 0, result: inbox };
+  } catch (error) {
+    return {
+      exit_code: 1,
+      result: {
+        status: 'blocked_task_inbox_invalid_output',
+        stderr: '',
+        error: error.message,
+      },
+    };
+  }
 }
 
 function previewTaskFamilyMigration(projectRoot) {
@@ -202,22 +232,83 @@ function previewTaskFamilyMigration(projectRoot) {
   try { raw = fs.existsSync(deployedFile) ? fs.readFileSync(deployedFile, 'utf8').toLowerCase() : ''; } catch (_) { raw = ''; }
   const source = /oh-story|worldwonderer/.test(raw) ? 'oh-story' : /novel[-_]assistant/.test(raw) ? 'novel-assistant' : '';
   if (!source) return { exit_code: 0, result: { status: 'not_applicable', pending_task_count: 0 } };
-  const result = runNode('task-family-migrate.js', ['--project-root', projectRoot, '--source', source, '--json']);
-  return {
-    exit_code: result.status,
-    result: parseJson(result.stdout, { status: 'migration_preview_invalid', pending_task_count: 0, stderr: result.stderr, error: result.error }),
-  };
+  try {
+    const { exitCode, result } = previewMigration(projectRoot, source);
+    return { exit_code: exitCode, result };
+  } catch (error) {
+    return {
+      exit_code: 1,
+      result: { status: 'migration_preview_invalid', pending_task_count: 0, stderr: '', error: error.message },
+    };
+  }
 }
 
 function resolveSessionId(args) {
   if (args.sessionId) return { session_id: String(args.sessionId), source: 'argument' };
-  const result = runNode('workflow-session-id.js', ['--json']);
-  return parseJson(result.stdout, { session_id: `process:${process.pid}`, source: 'entry_guard_fallback' });
+  try {
+    return resolveSessionIdFromModule();
+  } catch (_) {
+    return { session_id: `process:${process.pid}`, source: 'entry_guard_fallback' };
+  }
 }
 
 function currentWorkflowId(projectRoot) {
   const focused = readFocusedTask(projectRoot);
   return focused.authority.status === 'ok' ? String(focused.authority.task.workflow_id || '') : '';
+}
+
+function previewShortWorkflowMigration(projectRoot) {
+  const focused = readFocusedTask(projectRoot);
+  if (focused.authority.status !== 'ok') return { status: 'not_applicable', required: false };
+  const task = focused.authority.task;
+  if (!isShortWorkflowType(task.workflow_type)) {
+    return { status: 'not_applicable', required: false };
+  }
+  const currentStage = String(task.current_stage || '');
+  const expectedScope = SHORT_WHOLE_STORY_STAGES.has(currentStage) ? '全篇' : String(task.scope || '');
+  const scopeCurrent = !SHORT_WHOLE_STORY_STAGES.has(currentStage) || String(task.scope || '') === '全篇';
+  const executionScopeCurrent = !task.stage_execution
+    || !String((task.stage_execution || {}).work_unit_scope || '')
+    || String((task.stage_execution || {}).work_unit_scope || '') === expectedScope;
+  if (Number(task.workflow_contract_version || 0) >= SHORT_WORKFLOW_CONTRACT_VERSION && scopeCurrent && executionScopeCurrent) {
+    return { status: 'current', required: false, workflow_id: String(task.workflow_id || '') };
+  }
+  return {
+    status: 'short_workflow_migration_pending',
+    required: true,
+    safe_auto_migrate: currentStage !== 'section_candidate_compare',
+    workflow_id: String(task.workflow_id || ''),
+    workflow_contract_from: Number(task.workflow_contract_version || 0),
+    workflow_contract_to: SHORT_WORKFLOW_CONTRACT_VERSION,
+    current_stage: currentStage,
+    current_scope: String(task.scope || ''),
+    expected_scope: expectedScope,
+    creative_assets_modified: false,
+  };
+}
+
+function autoMigrateShortWorkflow(projectRoot, migration) {
+  if (!migration || migration.required !== true || migration.safe_auto_migrate !== true) {
+    return { status: 'skipped', migrated: false };
+  }
+  const workflowId = String(migration.workflow_id || '');
+  if (!workflowId) return { status: 'skipped_missing_workflow_id', migrated: false };
+  const result = runNode('workflow-state-machine.js', [
+    'migrate-short-lean-workflow',
+    '--project-root', projectRoot,
+    '--workflow-id', workflowId,
+    '--confirm',
+    '--json',
+  ]);
+  const parsed = parseJson(result.stdout, {
+    status: 'short_workflow_auto_migration_failed',
+    stderr: result.stderr,
+    error: result.error,
+  });
+  return {
+    ...parsed,
+    migrated: result.status === 0 && parsed.status === 'short_lean_workflow_migrated',
+  };
 }
 
 function reconcileRuntime(projectRoot, workflowId, session, args) {
@@ -316,12 +407,22 @@ function runningStageIntent(task, projectRoot) {
     ? task.stage_execution
     : null;
   if (!execution) return null;
+  const completionCommand = portableProjectCommand(
+    execution.stage_completion_command || execution.execution_command,
+    projectRoot,
+  );
   const portableExecution = {
     ...execution,
     execution_workdir: '.',
     execution_command: portableProjectCommand(execution.execution_command, projectRoot),
     quality_command: portableProjectCommand(execution.quality_command, projectRoot),
-    stage_completion_command: portableProjectCommand(execution.stage_completion_command, projectRoot),
+    stage_completion_command: completionCommand,
+    current_required_action: 'edit_write_set',
+    after_write_action: {
+      type: 'execute_command',
+      command: completionCommand,
+    },
+    completion_required_before_reply: true,
     context_read_command: portableProjectCommand(execution.context_read_command, projectRoot),
   };
   return {
@@ -335,20 +436,78 @@ function runningStageIntent(task, projectRoot) {
     stage_execution: portableExecution,
     execution_workdir: '.',
     execution_command: portableExecution.execution_command || '',
+    completion_required_before_reply: true,
     resume_hint: String(portableExecution.resume_hint || ''),
   };
 }
 
-function runningStageDisplayName(stageId) {
+function runningStageDisplayName(stageId, task = {}) {
   const names = {
+    startup_scan: '检查短篇项目状态',
+    freshness_window: '选择热点时间范围',
+    info_source_pool: '抓取热点资讯',
+    material_learning: '学习已选资讯',
+    card_pool: '生成并筛选脑洞卡',
+    topic_selection: '确认短篇选题',
+    character_lock: '确认主要人物',
+    plan_outline: '完善短篇设定与小节大纲',
+    short_setting: '确认人物与剧情设定',
+    platform_genre_lock: '锁定平台与题材方法',
+    rhythm_pattern_selection: '锁定全篇节奏模式',
+    section_outline: '生成全篇小节大纲',
+    section_plan_lock: '确认总节数与小节标题',
     feedback_impact_sync: '分析反馈影响',
     feedback_apply_patch: '回写已确认的设定与小节大纲',
+    first_section_brief: '生成第 1 节 Brief',
+    section_brief: '生成当前小节 Brief',
+    next_section_brief: '生成下一节 Brief',
     section_brief_ready: '生成当前小节写作提要',
+    draft_first_section: '写第 1 节正文',
+    draft_section: '写当前小节正文',
+    draft_next_section: '写下一节正文',
     section_draft_loop: '写作当前小节',
+    section_machine_gate: '检查当前小节格式与篇幅',
+    quality_gate: '检查当前小节基础质量',
+    story_value_gate: '检查当前小节故事价值',
+    section_candidate_compare: '比较当前小节候选稿',
+    section_accept_anchor: '采用当前小节并写入锚点',
     section_repair_loop: '修订当前小节',
     final_check: '完成全篇最终检查',
   };
-  return names[String(stageId || '')] || '继续当前任务';
+  const normalized = String(stageId || '');
+  if (normalized === 'info_source_pool') {
+    const days = Number((((task || {}).freshness_window || {}).days) || 0);
+    return days > 0 ? `抓取最近 ${days} 天热点资讯` : names[normalized];
+  }
+  return names[normalized] || '继续当前任务';
+}
+
+function runningTaskDisplayName(projectRoot, task) {
+  if (!isShortWorkflowType((task || {}).workflow_type)) {
+    return String((task || {}).user_goal || (task || {}).scope || '当前作品任务').trim();
+  }
+  const state = readJsonFile(path.join(projectRoot, '追踪', 'private-short-extension', 'project-state.json')) || {};
+  const stored = String(
+    state.working_title
+    || state.title
+    || ((state.selected_material || {}).label)
+    || state.project_title
+    || '',
+  ).trim();
+  if (stored) return stored.replace(/^《|》(?:设定(?:（第\s*\d+\s*版）)?|人物|世界观)?$/gu, '').trim();
+  for (const [file, pattern] of [
+    ['素材卡.md', /(?:暂定作品名|作品名|书名)\s*[：:]\s*[《「“"]?([^\n》」”"]+)[》」”"]?/u],
+    ['设定.md', /^#\s*《([^》\n]+)》(?:设定|人物|世界观|$)/mu],
+  ]) {
+    try {
+      const text = fs.readFileSync(path.join(projectRoot, file), 'utf8');
+      const match = text.match(pattern);
+      if (match && String(match[1] || '').trim()) return String(match[1]).trim();
+    } catch (_) {
+      // Fall back to the durable task label when the optional title source is absent.
+    }
+  }
+  return String((task || {}).user_goal || (task || {}).scope || '当前作品任务').trim();
 }
 
 function buildRunningStageControls(projectRoot) {
@@ -359,9 +518,11 @@ function buildRunningStageControls(projectRoot) {
     : null;
   if (!task || !execution) return null;
 
+  const stageName = runningStageDisplayName(execution.stage_id || task.current_stage, task);
+  const resumeLabel = stageName.startsWith('继续') ? stageName : `继续${stageName}`;
   const command = (number) => `node scripts/workflow-state-machine.js resolve-action --project-root . --input ${number} --json`;
   const options = [
-    numberedOption(1, '继续当前阶段', 'resume_running_stage', '从最后可信断点继续，不重复确认。', true),
+    numberedOption(1, resumeLabel, 'resume_running_stage', '从最后可信断点继续，不重复确认。', true),
     numberedOption(2, '查看当前进度与依据', 'inspect_running_stage', '只查看当前阶段、暂存目标和最后可信产物。'),
     numberedOption(3, '暂停并保存断点', 'pause_running_stage', '保留当前任务和暂存内容，稍后可以恢复。'),
     numberedOption(4, '输入其他要求', 'free_text', '补充意见、改范围或切换目标。'),
@@ -371,8 +532,8 @@ function buildRunningStageControls(projectRoot) {
     option.execution_workdir = '.';
     option.execution_command = command(option.number);
   });
-  const stageName = runningStageDisplayName(execution.stage_id || task.current_stage);
-  const intro = `当前任务停在“${stageName}”阶段。`;
+  const taskName = runningTaskDisplayName(projectRoot, task);
+  const intro = `当前任务：${taskName}\n当前阶段：${stageName}`;
   return {
     render_mode: 'text_numbers',
     status: 'running_stage_waiting_choice',
@@ -383,6 +544,51 @@ function buildRunningStageControls(projectRoot) {
     selection_contract: 'execute_command_or_route_intent',
     free_text_enabled: true,
     text: `${intro}\n\n${options.map((option) => option.display).join('\n')}\n\n回复数字选择，也可以直接输入你的意见。`,
+  };
+}
+
+function buildPendingShortStartupControls(projectRoot) {
+  const focused = readFocusedTask(projectRoot);
+  const task = focused.authority.status === 'ok' ? focused.authority.task : null;
+  const pending = task && task.pending_action && typeof task.pending_action === 'object'
+    ? task.pending_action
+    : null;
+  const currentStage = String((task || {}).current_stage || '');
+  if (!task || !['startup_menu', 'freshness_window'].includes(currentStage) || !pending) return null;
+  const pendingOptions = Array.isArray(pending.options) ? pending.options : [];
+  if (pendingOptions.length === 0 || String(pending.status || '') === 'resolved') return null;
+
+  const script = JSON.stringify(path.join(__dirname, 'workflow-state-machine.js'));
+  const options = pendingOptions.slice(0, 4).map((item, index) => {
+    const number = Number(item.number || index + 1);
+    const option = numberedOption(
+      number,
+      item.label || `选项 ${number}`,
+      item.action_id || '',
+      item.description || '',
+      Boolean(item.recommended)
+    );
+    if (String(item.action_id || '') === 'free_text') {
+      option.interaction_mode = 'semantic_only';
+    } else {
+      option.interaction_mode = 'execute_command';
+      option.execution_workdir = '.';
+      option.execution_command = `node ${script} resolve-action --project-root . --input ${number} --bind-current --json`;
+    }
+    return option;
+  });
+  const intro = String(pending.question || '请选择短篇创作入口');
+  return {
+    render_mode: 'text_numbers',
+    status: currentStage === 'startup_menu' ? 'short_startup_choice_required' : 'short_freshness_choice_required',
+    intro,
+    workflow_id: String(task.workflow_id || ''),
+    current_stage: currentStage,
+    options,
+    selection_contract: 'execute_command_or_route_intent',
+    command_execution_policy: 'verbatim_no_pipe_no_redirect_no_truncation',
+    free_text_enabled: true,
+    text: `${intro}\n\n${options.map((option) => option.display).join('\n')}\n\n回复数字选择。`,
   };
 }
 
@@ -548,6 +754,12 @@ function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') 
       numberedOption(3, '导入或拆文', 'create_workflow:import_or_deconstruction', '导入已有小说，或拆解对标文本形成可吸收技巧卡。'),
       numberedOption(4, '输入其他目标', 'free_text_new_goal', '直接说明你要扫榜、去 AI 味、做封面、迁移项目或其他任务。'),
     ], 0);
+    options[1].execution_command = [
+      'node', JSON.stringify(path.join(__dirname, 'short-startup-entry.js')),
+      '--project-root', '.', '--json',
+    ].join(' ');
+    options[1].execution_workdir = '.';
+    options[1].interaction_mode = 'execute_command';
     const intro = '当前目录还不是写作项目。请先选择要创建或导入的目标。';
     return {
       render_mode: 'text_numbers',
@@ -555,6 +767,32 @@ function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') 
       intro,
       options,
       text: `${intro}\n\n${options.map((option) => option.display).join('\n')}\n\n回复数字选择。`,
+    };
+  }
+
+  if (status === 'short_workflow_migration_pending') {
+    const migration = taskInbox.short_workflow_migration || {};
+    const workflowId = String(migration.workflow_id || '');
+    const migrationOptions = normalizeFourMenu([
+      numberedOption(1, '升级并恢复当前短篇任务', 'migrate_short_workflow', '保留旧任务、暂存稿和历史回执；重建 workflow、memory 与阶段执行边界，不修改正文、设定或大纲。'),
+      numberedOption(2, '查看升级预览', 'inspect_short_workflow_migration', '只查看将恢复的阶段、旧暂存稿和记忆处理方式，不写入。'),
+      numberedOption(3, '暂不升级，只读查看当前任务', 'show_task_inbox_read_only', '不继续执行旧阶段，避免旧协议继续改写。'),
+      numberedOption(4, '输入其他要求', 'free_text', '补充迁移范围、恢复偏好或新的目标。'),
+    ], 1);
+    migrationOptions[0].execution_command = `node scripts/workflow-state-machine.js migrate-short-lean-workflow --project-root . --workflow-id ${JSON.stringify(workflowId)} --confirm --json`;
+    migrationOptions[1].execution_command = `node scripts/workflow-state-machine.js migrate-short-lean-workflow --project-root . --workflow-id ${JSON.stringify(workflowId)} --json`;
+    migrationOptions[2].execution_command = 'node scripts/workflow-task-inbox.js --project-root . --action show_unfinished_tasks --json';
+    migrationOptions.slice(0, 3).forEach((option) => {
+      option.interaction_mode = 'execute_command';
+      option.execution_workdir = '.';
+    });
+    const intro = '检测到当前短篇任务仍使用旧版 workflow / memory 协议。继续旧阶段可能造成范围错位、重复校验或记忆上下文错误，需先升级任务账本。';
+    return {
+      render_mode: 'text_numbers',
+      status,
+      intro,
+      options: migrationOptions,
+      text: `${intro}\n\n${migrationOptions.map((option) => option.display).join('\n')}\n\n回复数字选择。`,
     };
   }
 
@@ -707,9 +945,22 @@ function buildReport(args) {
   let stateValidation = runStateValidation(projectRoot);
   let taskInbox = runTaskInbox(projectRoot, args.write);
   let taskFamilyMigration = previewTaskFamilyMigration(projectRoot);
+  let shortWorkflowMigration = previewShortWorkflowMigration(projectRoot);
+  let shortWorkflowAutoMigration = { status: args.write ? 'not_required' : 'skipped_read_only', migrated: false };
   let migrationTaskCount = Number(taskInbox.result.migration_task_count) || 0;
   let runtimeReconciliation = { exit_code: 0, result: { status: args.write ? 'skipped_preflight' : 'skipped_read_only' } };
   let autoRepair = { repaired: false };
+  if (args.write && shortWorkflowMigration.safe_auto_migrate === true) {
+    shortWorkflowAutoMigration = autoMigrateShortWorkflow(projectRoot, shortWorkflowMigration);
+    if (shortWorkflowAutoMigration.migrated) {
+      supervisor = runSupervisor(projectRoot);
+      stateValidation = runStateValidation(projectRoot);
+      taskInbox = runTaskInbox(projectRoot, true);
+      taskFamilyMigration = previewTaskFamilyMigration(projectRoot);
+      shortWorkflowMigration = previewShortWorkflowMigration(projectRoot);
+      migrationTaskCount = Number(taskInbox.result.migration_task_count) || 0;
+    }
+  }
   if (
     args.write
     && migrationTaskCount === 0
@@ -725,12 +976,14 @@ function buildReport(args) {
       stateValidation = runStateValidation(projectRoot);
       taskInbox = runTaskInbox(projectRoot, true);
       taskFamilyMigration = previewTaskFamilyMigration(projectRoot);
+      shortWorkflowMigration = previewShortWorkflowMigration(projectRoot);
       migrationTaskCount = Number(taskInbox.result.migration_task_count) || 0;
     }
   }
   if (
     args.write
     && migrationTaskCount === 0
+    && shortWorkflowMigration.required !== true
     && String(stateValidation.result.status || '') !== 'blocked'
     && stateValidation.result.status !== 'migration_pending'
     && !shouldBlockSupervisor(supervisor)
@@ -741,18 +994,24 @@ function buildReport(args) {
       stateValidation = runStateValidation(projectRoot);
       taskInbox = runTaskInbox(projectRoot, true);
       taskFamilyMigration = previewTaskFamilyMigration(projectRoot);
+      shortWorkflowMigration = previewShortWorkflowMigration(projectRoot);
       migrationTaskCount = Number(taskInbox.result.migration_task_count) || 0;
     }
   }
   const outputGate = runVisibleOutputGate(args.visibleDraft ? path.resolve(args.visibleDraft) : '');
   const directIntent = explicitBusinessIntent ? buildDirectIntent(projectRoot, args.userIntent) : null;
-  const runningStageControls = explicitBusinessIntent ? null : buildRunningStageControls(projectRoot);
+  const runningStageControls = null;
+  const pendingShortStartupControls = null;
 
   let status = 'pass';
   let recommendedNext = 'business_routing_allowed';
   let exitCode = 0;
 
-  if (['blocked_workflow_session_lease', 'workflow_session_takeover_required'].includes(String(runtimeReconciliation.result.status || ''))) {
+  if (shortWorkflowMigration.required === true) {
+    status = 'short_workflow_migration_pending';
+    recommendedNext = 'preview_or_confirm_short_workflow_migration';
+    exitCode = 0;
+  } else if (['blocked_workflow_session_lease', 'workflow_session_takeover_required'].includes(String(runtimeReconciliation.result.status || ''))) {
     status = 'blocked_workflow_session_lease';
     recommendedNext = 'confirm_workflow_session_takeover';
     // A live lease is an expected user-choice state, not a shell failure.
@@ -798,7 +1057,11 @@ function buildReport(args) {
   const showRunningStageControls = Boolean(
     runningStageControls && ['pass', 'task_inbox_ready'].includes(status)
   );
+  const showPendingShortStartupControls = Boolean(
+    pendingShortStartupControls && ['pass', 'task_inbox_ready'].includes(status)
+  );
   if (showRunningStageControls) recommendedNext = 'show_running_stage_controls';
+  else if (showPendingShortStartupControls) recommendedNext = 'show_short_startup_controls';
 
   const report = {
     schemaVersion: SCHEMA_VERSION,
@@ -816,6 +1079,8 @@ function buildReport(args) {
     auto_repair: autoRepair,
     task_inbox: taskInbox.result,
     task_family_migration: taskFamilyMigration.result,
+    short_workflow_migration: shortWorkflowMigration,
+    short_workflow_auto_migration: shortWorkflowAutoMigration,
     output_gate: outputGate.result,
     direct_intent: directIntent,
     runner_contract: {
@@ -826,7 +1091,7 @@ function buildReport(args) {
         'output-pollution-check',
       ],
       business_routing_allowed: status === 'pass',
-      show_task_inbox_only: status === 'task_inbox_ready' && !showRunningStageControls,
+      show_task_inbox_only: status === 'task_inbox_ready' && !showRunningStageControls && !showPendingShortStartupControls,
       metadata_only: true,
       migration_task_count: migrationTaskCount,
       task_family_migration_pending_count: Number(taskFamilyMigration.result.pending_task_count) || 0,
@@ -836,11 +1101,19 @@ function buildReport(args) {
       task_inbox_deferred_for_explicit_intent: explicitBusinessIntent && status === 'pass' && ((Number(taskInbox.result.candidateCount) || 0) > 0 || (Number(taskInbox.result.recommendationCount) || 0) > 0),
     },
   };
+  report.task_inbox = {
+    ...report.task_inbox,
+    short_workflow_migration: shortWorkflowMigration,
+    short_workflow_auto_migration: shortWorkflowAutoMigration,
+  };
+  if (status === 'pass' && directIntent && directIntent.interaction_mode === 'resume_stage') {
+    report.presentation_allowed = false;
+  }
   report.visible_response = status === 'pass' && directIntent
     ? {
       render_mode: directIntent.interaction_mode === 'resume_stage' ? 'silent_resume' : 'silent_execute',
       status: directIntent.status === 'stage_execution_resume_ready' ? directIntent.status : 'explicit_intent_ready',
-      text: '',
+      ...(directIntent.interaction_mode === 'resume_stage' ? { user_visible: false } : { text: '' }),
       selection_contract: directIntent.interaction_mode === 'resume_stage' ? 'resume_running_stage' : 'execute_direct_intent_command',
       interaction_mode: directIntent.interaction_mode,
       execution_workdir: '.',
@@ -848,9 +1121,12 @@ function buildReport(args) {
       resume_hint: directIntent.resume_hint || '',
       stage_execution: directIntent.stage_execution || null,
       requires_user_confirm: false,
+      completion_required_before_reply: directIntent.completion_required_before_reply === true,
     }
     : showRunningStageControls
       ? runningStageControls
+      : showPendingShortStartupControls
+        ? pendingShortStartupControls
       : buildVisibleMenu(status, report.task_inbox, stateValidation.result.reason_code || '', projectRoot);
   if (status === 'migration_pending') {
     report.task_inbox_presentation = {
@@ -902,6 +1178,11 @@ function compactStageExecution(execution) {
     execution_command: String(execution.execution_command || ''),
     quality_command: String(execution.quality_command || ''),
     stage_completion_command: String(execution.stage_completion_command || ''),
+    current_required_action: String(execution.current_required_action || ''),
+    after_write_action: execution.after_write_action && typeof execution.after_write_action === 'object'
+      ? execution.after_write_action
+      : null,
+    completion_required_before_reply: execution.completion_required_before_reply === true,
     context_read_command: String(execution.context_read_command || ''),
     resume_hint: String(execution.resume_hint || ''),
     stage_context_packet: packet.packet_md || packet.packet_json
@@ -956,6 +1237,7 @@ function compactReport(report) {
     schemaVersion: report.schemaVersion,
     status: report.status,
     recommended_next: report.recommended_next,
+    presentation_allowed: report.presentation_allowed !== false,
     project_root: report.project_root,
     workflow_id: report.workflow_id || validation.workflow_id || '',
     current_stage: validation.current_stage || '',
@@ -969,6 +1251,7 @@ function compactReport(report) {
       candidateCount: Number(inbox.candidateCount) || 0,
       smartRecommendationCount: Number(inbox.smartRecommendationCount) || 0,
     },
+    short_workflow_auto_migration: report.short_workflow_auto_migration || null,
     runner_contract: {
       business_routing_allowed: Boolean((report.runner_contract || {}).business_routing_allowed),
       show_task_inbox_only: Boolean((report.runner_contract || {}).show_task_inbox_only),

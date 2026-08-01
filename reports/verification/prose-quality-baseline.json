@@ -1,17 +1,17 @@
 {
   "schemaVersion": "2.0.0",
   "corpusVersion": "v1",
-  "detectorVersion": "prose-quality-benchmark@2.0.0;check-ai-patterns@4a229baf6ffe;check-degeneration@edad5d169333",
+  "detectorVersion": "prose-quality-benchmark@2.0.0;check-ai-patterns@4a229baf6ffe;check-degeneration@ef6803eb668d",
   "sourceIdentity": {
     "identityVersion": "prose-quality-inputs-v1",
     "benchmarkSourceHash": "sha256:b335f53916848263b70ed6e5c3aca8015d1ae6802ea5d0652a16aca546f488c6",
     "corpusContentHash": "sha256:2037b41726e31eac56d3558bb292c6018b400488b10dac6fe8bbd0d10ce31b95",
     "detectorSourceHashes": {
       "check-ai-patterns": "sha256:4a229baf6ffebaf3d192b536f9e4f7d92ebf6a86646002ad62dbbb856227e3b2",
-      "check-degeneration": "sha256:edad5d1693334fe98688323db89da0385c9bc827cbe0fbc50a1e5e28f71bdfb8"
+      "check-degeneration": "sha256:ef6803eb668d47f2dc7d45a110dd5c440a45a5eaf1c83d0af26729624b61cf7b"
     },
-    "sourceCommit": "3be28360cd84d4a89dafcaafe8d86a10a040e71c",
-    "sourceTree": "21fad41be59e6e9fc6b5d0525b6996996d9538d5"
+    "sourceCommit": "812d44e76385b40e6fb8c0d602dc55aa8cc10b65",
+    "sourceTree": "08292d5dc447f9c36de30ce94f8268bca1dfe7ea"
   },
   "benchmarkSourceHash": "sha256:b335f53916848263b70ed6e5c3aca8015d1ae6802ea5d0652a16aca546f488c6",
   "corpusContentHash": "sha256:2037b41726e31eac56d3558bb292c6018b400488b10dac6fe8bbd0d10ce31b95",

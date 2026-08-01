@@ -107,10 +107,25 @@ if (result.status !== "pass" || result.tokenUsage.inputTokens !== 600 || result.
 for (const host of result.results) {
   if (host.status !== "pass" || host.assertions.some((item) => item.status !== "pass")) throw new Error(JSON.stringify(host));
   if (!host.usage.complete || host.usage.source !== "host") throw new Error(JSON.stringify(host.usage));
+  for (const assertion of host.assertions) {
+    for (const evidence of assertion.evidence) {
+      if (!evidence.path.startsWith(`evidence/${host.host}/`)) throw new Error(JSON.stringify(evidence));
+    }
+  }
 }
 ' "$output"
     [ -f "$REPO/reports/behavior-eval/$run_id/project/fixture/fixture.json" ]
     [ -f "$REPO/reports/behavior-eval/$run_id/project/artifacts/route.txt" ]
+    node - "$REPO/reports/behavior-eval/$run_id/summary.json" "$REPO/reports/behavior-eval/$run_id" <<'NODE'
+const fs=require('fs'),crypto=require('crypto'),path=require('path');
+const summary=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));const root=process.argv[3];
+for(const result of summary.results) for(const assertion of result.assertions) for(const evidence of assertion.evidence) {
+  const file=path.join(root,evidence.path);
+  if(!fs.existsSync(file)) throw new Error(`missing archived evidence: ${evidence.path}`);
+  const actual=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  if(actual!==evidence.sha256) throw new Error(`stale archived evidence: ${result.host}:${evidence.path}`);
+}
+NODE
     rm -rf "$tmp" "$REPO/reports/behavior-eval/$run_id"
 }
 

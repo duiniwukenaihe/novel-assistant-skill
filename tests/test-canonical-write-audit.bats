@@ -117,15 +117,18 @@ for (const [target, content] of [
   ['小节大纲.md', '# 小节\n初始。\n'],
   ['正文.md', '# 正文\n初始。\n'],
 ]) fs.writeFileSync(path.join(root, target), content);
+fs.writeFileSync(path.join(root, '正文/第001节.md'), '## 第001节 开场\n\n初始分节正文。\n');
 
 const first = audit.captureCanonicalBaseline(root, task);
-if (JSON.stringify(first.canonical_paths) !== JSON.stringify(['小节大纲.md', '正文.md', '设定.md'])) throw new Error(JSON.stringify(first));
+if (!first.canonical_paths.includes('正文/第001节.md')) throw new Error(JSON.stringify(first));
 fs.writeFileSync(path.join(root, '正文.md'), '# 正文\n未受控改写。\n');
+fs.writeFileSync(path.join(root, '正文/第001节.md'), '## 第001节 被覆盖\n\n未受控分节改写。\n');
 task.stage_execution = { stage_id: 'full_story_assembly', write_set: [] };
 const second = audit.captureCanonicalBaseline(root, task);
 if (second.status !== 'captured_incremental') throw new Error(JSON.stringify(second));
 const result = audit.auditCanonicalWrites(root, task);
 if (!result.unmanaged_paths.includes('正文.md')) throw new Error(JSON.stringify(result));
+if (!result.unmanaged_paths.includes('正文/第001节.md')) throw new Error(JSON.stringify(result));
 NODE
 }
 

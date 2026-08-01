@@ -91,6 +91,11 @@ setup() {
     grep -q "更新完成后运行.*workflow-entry-guard.js" "$top"
     grep -q "逐字使用.*visible_response.text" "$top"
     grep -q "禁止使用 Bash/Glob 枚举或搜索.*\.claude/skills/novel-assistant" "$top"
+    grep -q '第一条工具调用必须是更新检查命令' "$top"
+    grep -q '不得先解释.*确认当前目录' "$top"
+    grep -q '不得调用 `Glob`/`Grep`/`find`/`ls`/`Read` 探测项目' "$top"
+    grep -q '`visible_response.text` 是本轮唯一可见正文' "$top"
+    grep -q '不得追加.*建议先选 1' "$top"
     grep -q "N=0.*必须显示" "$top"
     grep -q "不得直接调用原始 AskUserQuestion" "$top"
     grep -q "不得凭聊天记忆生成“继续写第十二卷”" "$top"
@@ -100,6 +105,16 @@ setup() {
     grep -q "不得自动继续旧审阅/写作/拆文任务队列" "$setup_skill"
     grep -q "不得输出.*Invalid tool parameters" "$setup_skill"
     grep -q "如果用户原始意图仍需继续" "$setup_skill"
+}
+
+@test "bare entry opens the global inbox and silent resume never becomes visible prose" {
+    top="$TOP_CONTRACT"
+
+    grep -q '裸调用.*任务收件箱总览' "$top"
+    grep -q 'render_mode=silent_resume.*不得渲染' "$top"
+    grep -q '写完.*write_set.*stage_completion_command' "$top"
+    ! grep -q '有运行中阶段就展示该阶段的四项控制菜单' "$top"
+    ! grep -q '裸调用必须先显示“继续 / 查看 / 暂停 / 其他要求”' "$top"
 }
 
 @test "collaboration environment handoff uses numeric choices" {

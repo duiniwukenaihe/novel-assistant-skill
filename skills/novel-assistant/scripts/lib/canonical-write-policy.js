@@ -19,10 +19,45 @@ const STRICT_ROOTS = [
 ];
 const POLICY_RELATIVE_PATH = path.join('追踪', 'story-system', 'write-policy.json');
 
+function ensureCanonicalWritePolicy(projectRoot, options = {}) {
+  const root = canonicalProjectRoot(projectRoot);
+  const file = path.join(root, POLICY_RELATIVE_PATH);
+  if (fs.existsSync(file)) return loadCanonicalWritePolicy(root);
+  const mode = String(options.mode || 'strict');
+  if (!['strict', 'legacy'].includes(mode)) {
+    throw failure('blocked_invalid_write_policy', 'write policy mode must be strict or legacy');
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const policy = {
+    schemaVersion: '1.0.0',
+    mode,
+    initialized_for: String(options.initializedFor || ''),
+    initialized_at: new Date().toISOString(),
+  };
+  try {
+    const fd = fs.openSync(file, 'wx', 0o644);
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify(policy, null, 2)}\n`);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  }
+  return loadCanonicalWritePolicy(root);
+}
+
 function loadCanonicalWritePolicy(projectRoot) {
   const root = canonicalProjectRoot(projectRoot);
   const file = path.join(root, POLICY_RELATIVE_PATH);
-  if (!fs.existsSync(file)) return { schemaVersion: '1.0.0', mode: 'legacy', source: 'default' };
+  if (!fs.existsSync(file)) {
+    const managedShort = isManagedShortProject(root);
+    return {
+      schemaVersion: '1.0.0',
+      mode: managedShort || !hasExistingStoryEvidence(root) ? 'strict' : 'migration_required',
+      source: managedShort ? 'managed-short-default' : 'default',
+    };
+  }
   let policy;
   try {
     policy = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -43,6 +78,13 @@ function assertCanonicalWriteAllowed(projectRoot, targets, context = {}) {
   const policy = loadCanonicalWritePolicy(projectRoot);
   const normalizedTargets = normalizeTargets(projectRoot, targets);
   const canonicalTargets = normalizedTargets.filter(isCanonicalTarget);
+  if (policy.mode === 'migration_required' && canonicalTargets.length > 0) {
+    const error = failure('blocked_write_policy_migration_required', 'existing story assets require an explicit strict write-policy migration before canonical writes');
+    error.targets = canonicalTargets;
+    error.policy = policy;
+    error.recovery = 'node scripts/book-write-policy-migrate.js preview --project-root . --json';
+    throw error;
+  }
   const protectedTargets = canonicalTargets.filter(target => requiresTransaction(policy, target));
   const transactionId = transactionIdFrom(context);
   if (protectedTargets.length) {
@@ -67,6 +109,37 @@ function assertCanonicalWriteAllowed(projectRoot, targets, context = {}) {
       migrate_hint: 'Enable strict mode in 追踪/story-system/write-policy.json to require canonical transactions for story assets.',
     } : {}),
   };
+}
+
+function hasExistingStoryEvidence(root) {
+  return ['正文', '大纲', '细纲', '设定', '正文.md', '设定.md', '小节大纲.md']
+    .some(relative => pathHasContent(path.join(root, relative)));
+}
+
+function isManagedShortProject(root) {
+  const snapshot = readJsonIfExists(path.join(root, '追踪', 'story-system', 'short', 'material-snapshot.json'));
+  const projectState = readJsonIfExists(path.join(root, '追踪', 'story-system', 'short', 'project-state.json'))
+    || readJsonIfExists(path.join(root, '追踪', 'private-short-extension', 'project-state.json'));
+  return Boolean(snapshot
+    && projectState
+    && String(snapshot.workflow_id || '')
+    && String(projectState.active_write_workflow_id || ''));
+}
+
+function readJsonIfExists(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function pathHasContent(file) {
+  if (!fs.existsSync(file)) return false;
+  const stat = fs.statSync(file);
+  if (stat.isFile()) return stat.size > 0;
+  if (!stat.isDirectory()) return false;
+  return fs.readdirSync(file, { withFileTypes: true }).some(entry => pathHasContent(path.join(file, entry.name)));
 }
 
 function normalizeTargets(projectRoot, targets) {
@@ -207,7 +280,9 @@ module.exports = {
   POLICY_RELATIVE_PATH,
   STRICT_ROOTS,
   assertCanonicalWriteAllowed,
+  ensureCanonicalWritePolicy,
   isCanonicalTarget,
+  isManagedShortProject,
   loadCanonicalWritePolicy,
   normalizeTargets,
   normalizeWindowsTarget,

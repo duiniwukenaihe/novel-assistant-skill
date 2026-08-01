@@ -98,6 +98,44 @@ function hasForbiddenAsset(rel) {
   return '';
 }
 
+function auditReleaseVersion(repoRoot, manifest) {
+  const policyRel = 'config/github-public-release-files.json';
+  const policyPath = path.join(repoRoot, policyRel);
+  if (!fs.existsSync(policyPath)) {
+    return [{ id: 'missing_public_release_version_policy', file: policyRel, severity: 'S1' }];
+  }
+
+  let policy;
+  try {
+    policy = JSON.parse(readText(policyPath));
+  } catch {
+    return [{ id: 'invalid_public_release_version_policy', file: policyRel, severity: 'S1' }];
+  }
+  const expected = String(policy.releaseVersion || '');
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(expected)) {
+    return [{ id: 'invalid_public_release_version_policy', file: policyRel, severity: 'S1', actual: expected }];
+  }
+
+  const readmeMatch = readText(path.join(repoRoot, 'README.md'))
+    .match(/公开版本[：:]\s*v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/);
+  const changelogMatch = readText(path.join(repoRoot, 'CHANGELOG.md'))
+    .match(/^##\s+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s|$)/m);
+  const actualVersions = [
+    { file: 'README.md', actual: readmeMatch?.[1] || '' },
+    { file: 'CHANGELOG.md', actual: changelogMatch?.[1] || '' },
+    { file: 'skills/novel-assistant/novel-assistant-manifest.json', actual: String(manifest?.releaseVersion || '') },
+  ];
+  return actualVersions
+    .filter((entry) => entry.actual !== expected)
+    .map((entry) => ({
+      id: 'public_release_version_mismatch',
+      file: entry.file,
+      severity: 'S1',
+      expected,
+      actual: entry.actual,
+    }));
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const repoRoot = args.repoRoot;
@@ -127,7 +165,10 @@ function main() {
   const forbiddenText = [
     { id: 'private_lan_git_url', pattern: new RegExp(`git@${privateLanPrefix}\\.\\d+\\.\\d+:[^\\s\`"')]+`) },
     { id: 'private_lan_host', pattern: new RegExp(`${privateLanPrefix}\\.\\d+\\.\\d+`) },
-    { id: 'local_user_path', pattern: /\/Users\/zhangpeng/ },
+    { id: 'local_user_path', pattern: /\/Users\/[A-Za-z0-9._-]+(?=\/|[^A-Za-z0-9._-]|$)/ },
+    // Linux dev-machine home dir: require a real user segment (home + '/' + user
+    // + '/') so a bare "home/" token in prose does not trip the rule.
+    { id: 'local_user_path', pattern: /\/home\/[^/]+\// },
     { id: 'server_workspace_path', pattern: /\/data\/workspace/ },
     { id: 'example_password_leak', pattern: new RegExp(privatePasswordExample.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) },
     { id: 'private_feature_name_leak', pattern: new RegExp(privateFeatureSkillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
@@ -147,10 +188,11 @@ function main() {
   }
 
   const manifestPath = path.join(repoRoot, 'skills/novel-assistant/novel-assistant-manifest.json');
+  let manifest = null;
   if (!fs.existsSync(manifestPath)) {
     findings.push({ id: 'missing_novel_assistant_manifest', file: 'skills/novel-assistant/novel-assistant-manifest.json', severity: 'S1' });
   } else {
-    const manifest = JSON.parse(readText(manifestPath));
+    manifest = JSON.parse(readText(manifestPath));
     if (manifest.updateSourceUrl !== PUBLIC_REPO_URL) {
       findings.push({
         id: 'manifest_update_source_not_public_github',
@@ -161,6 +203,7 @@ function main() {
       });
     }
   }
+  findings.push(...auditReleaseVersion(repoRoot, manifest));
 
   return emitResult({ args, files, findings });
 }

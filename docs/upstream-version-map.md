@@ -1,5 +1,48 @@
 # 上游版本映射
 
+## 2026-08-01 上游 v0.7.2 选择性吸收
+
+| 字段 | 记录 |
+|---|---|
+| 上游仓库 / 分支 | `https://github.com/worldwonderer/oh-story-claudecode.git` / `main` |
+| 已评审基线 | `964d6bfdb7b78b225591e4b35bfa00d245d4f9a2` / `v0.7.0` |
+| 本轮稳定目标 | `06ee854c47267dc6eb7cc7bb70ca3436ece3dc81` / `v0.7.2` |
+| 本轮观察 HEAD | `8aaa701a783a3065144b2df2faac9fa70e9c8f7b` |
+| 结论 | 不 merge/cherry-pick；按本仓库架构 clean-room 重实现。Dashboard、Reasonix、发布提交不吸收。 |
+
+### 完整吸收（Task 1-3）
+
+| 上游 Commit | 主题 | 本地结果 |
+|---|---|---|
+| `60bdae7` / `0a37505` | 正文句法节奏去除短句崇拜 | 公有短篇/长篇/审阅/去AI/拆文规则统一为"句长随场景功能变化"；情绪词在证据支撑下可用；禁止机械拆句。 |
+| `f710ade` | 细纲只传递故事责任 | writing-craft + quality-checklist 增加细纲责任与正文表达边界；禁止字段逐条翻译、章尾总结、章尾预告。prose gate 已有工程词检测覆盖。 |
+| `c0a1482` | 会话起点假未完成与更新提醒 | `is_progress_completed` 精确识别 completed/completed_with_errors；更新提醒 24h 负缓存节流。 |
+
+### 差距补缺（Task 4）
+
+| 上游 Commit | 主题 | 本地结果 |
+|---|---|---|
+| `1ced63d` | 质量门不掩盖自身失败 | `check-degeneration.js --json` 加 `status:'partial'\|'complete'` + `files_unreadable`；其余 8 脚本审计为已覆盖。 |
+
+### 可选吸收（Task 5-6）
+
+| 上游 Commit | 主题 | 本地结果 |
+|---|---|---|
+| `d83d99c` | 既有世界观命名护栏 | 长篇设定识别 original/fanfic/historical_derivative/imported_existing_world；非原创模式命名 advisory 不硬阻断。 |
+| `b1e9ddb` | 开书发现本地对标 | 长短篇/通用 SKILL 增加开书阶段轻量扫描 对标/ 和 拆文库/；找不到不阻断、不联网。 |
+
+### 明确不吸收
+
+- Dashboard（novel-project 承担前端，上游 Dashboard 不进入 skill）
+- Reasonix 适配（本项目已支持 Claude/Codex/ZCode）
+- 发布提交、README 拼写修复
+
+### 观察项（Task 7）
+
+4 个参考项目变化（inkos/ai-novel-writing-assistant/edwardathomson-novelwriter/fanqie-rank-tracker），均建议继续观察，不在本轮吸收。详见 `reports/research/2026-07-31-reference-project-watch.md`。
+
+---
+
 ## 2026-07-20 上游 v0.7.0 与参考项目增量分诊
 
 | 字段 | 记录 |

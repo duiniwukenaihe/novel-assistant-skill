@@ -12,7 +12,7 @@ const { inferShortSectionIndex } = require('./lib/short-workflow-state');
 const { currentShortFeedbackRevisionSection } = require('./lib/short-feedback-revision-queue');
 const { writeBriefFreshnessSnapshot } = require('./lib/short-brief-freshness');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
-const { ensureShortProjectState } = require('./lib/short-project-state');
+const { ensureShortProjectState, resolveShortStateRelative, shortStateFile } = require('./lib/short-project-state');
 const {
   buildShortSectionOutlineContract,
   validateBriefOutlineCoverage,
@@ -45,7 +45,7 @@ function main() {
   const sectionIndex = currentShortFeedbackRevisionSection(task)
     || inferShortSectionIndex({ projectState, stageId, scope: String(task.scope || '') });
   if (!sectionIndex) return finish({ status: 'blocked_short_section_identity_missing', instruction: '当前任务没有可靠的小节身份；先由 workflow 恢复小节范围，不得默认生成第1节 Brief。' }, 0, args.json);
-  const titleLock = readJson(path.join(root, '追踪/private-short-extension/section-title-lock.json')) || {};
+  const titleLock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
   const titleEntry = (Array.isArray(titleLock.sections) ? titleLock.sections : []).find((item) => Number((item || {}).section_index) === sectionIndex);
   if (!titleEntry || titleEntry.confirmed !== true) {
     return finish({
@@ -116,7 +116,7 @@ function main() {
   }
 
   const acceptedAnchor = sectionIndex > 1
-    ? `追踪/private-short-extension/section-${String(sectionIndex - 1).padStart(3, '0')}-anchor.json`
+    ? resolveShortStateRelative(root, `section-${String(sectionIndex - 1).padStart(3, '0')}-anchor.json`)
     : '';
   const freshness = writeBriefFreshnessSnapshot({ projectRoot: root, briefPath: briefRel, sectionIndex, acceptedAnchorPath: acceptedAnchor });
   if (freshness.status !== 'snapshot_written') return finish({ status: 'short_brief_dependencies_changed', freshness, instruction: '规划依赖已变化，重新生成当前节写作提要。' }, 0, args.json);
@@ -146,7 +146,7 @@ function main() {
     owner_module: String(execution.owner_module || task.workflow_owner || ''),
     step_status: 'completed',
     outputs: [briefRel, freshness.sidecar, coverageRel],
-    changed_files: [briefRel, freshness.sidecar, coverageRel, '追踪/private-short-extension/project-state.json'],
+    changed_files: [briefRel, freshness.sidecar, coverageRel, resolveShortStateRelative(root, 'project-state.json', { forWrite: true })],
     created_files: [freshness.sidecar, coverageRel],
     evidence: [{
       brief: briefRel,
@@ -182,7 +182,7 @@ function nextDraftStage(task) {
 
 function applyOrFinish({ root, workflowId, packetFile, packetRel, sectionIndex, args }) {
   if (!args.apply) return finish({ status: 'packet_ready', workflow_id: workflowId, section_index: sectionIndex, result_packet: packetRel }, 0, args.json);
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(applied);
   const result = outcome.result;
   let projectStateProjection = null;
@@ -204,7 +204,8 @@ function applyOrFinish({ root, workflowId, packetFile, packetRel, sectionIndex, 
   }, outcome.exitCode, args.json);
 }
 function writeBriefReadyProjectState(root, sectionIndex, resultPacket = '') {
-  const file = safeProjectFile(root, '追踪/private-short-extension/project-state.json');
+  const relativePath = resolveShortStateRelative(root, 'project-state.json', { forWrite: true });
+  const file = shortStateFile(root, 'project-state.json', { forWrite: true });
   const current = readJson(file) || {};
   atomicWriteJson(file, {
     ...current,
@@ -215,7 +216,7 @@ function writeBriefReadyProjectState(root, sectionIndex, resultPacket = '') {
     latest_brief_result_packet: String(resultPacket || ''),
     updated_at: new Date().toISOString(),
   });
-  return { status: 'project_state_updated', path: '追踪/private-short-extension/project-state.json', section_index: Number(sectionIndex) };
+  return { status: 'project_state_updated', path: relativePath, section_index: Number(sectionIndex) };
 }
 
 function parseArgs(argv) {
@@ -247,6 +248,12 @@ function analyzeBriefQuality(text) {
   const findings = [];
   if (compactChars > briefBudget) findings.push('brief_repeats_or_exceeds_dynamic_budget');
   if (beatCount > beatBudget) findings.push('beat_density_exceeds_prose_capacity');
+  const executionText = source.replace(/#{1,6}\s+大纲覆盖映射[^\n]*\n[\s\S]*?(?=\n#{1,6}\s+|$)/u, '');
+  const evidenceCount = evidenceMechanismCount(executionText);
+  const responsibilityCount = sectionResponsibilityCount(executionText);
+  if (evidenceCount > 3) findings.push('evidence_mechanism_overload');
+  if (responsibilityCount > 4) findings.push('section_responsibility_overload');
+  if (evidenceCount >= 3 && responsibilityCount >= 4) findings.push('section_focus_overload');
   return {
     status: findings.length ? 'blocking' : 'pass',
     target_chars: targetChars,
@@ -254,8 +261,37 @@ function analyzeBriefQuality(text) {
     dynamic_brief_budget: briefBudget,
     beat_count: beatCount,
     dynamic_beat_budget: beatBudget,
+    evidence_mechanism_count: evidenceCount,
+    section_responsibility_count: responsibilityCount,
     findings,
   };
+}
+function evidenceMechanismCount(text) {
+  const source = String(text || '');
+  const mechanisms = [
+    /档案|工商记录|登记记录/u,
+    /回执|签收凭证|领取凭证/u,
+    /账本|报表|工资表|财务表/u,
+    /合同|协议|授权书|担保函/u,
+    /邮件|聊天记录|录音|视频记录/u,
+    /清单|申请|通知书/u,
+    /批次|追溯码|检测报告|检验报告/u,
+    /采购单|入库单|出库单|物流单/u,
+  ];
+  return mechanisms.filter(pattern => pattern.test(source)).length;
+}
+function sectionResponsibilityCount(text) {
+  const source = String(text || '');
+  const responsibilities = [
+    /召回|退款|退货|下架/u,
+    /停产|整改|复产|恢复生产/u,
+    /员工|工资|转岗|裁员|赔偿/u,
+    /董事会|股东会|暂停职务|辞职|职业经理人/u,
+    /直播|公开说明|舆论|消费者/u,
+    /父亲|母亲|兄弟|姐妹|舍友|朋友|婚姻|亲情/u,
+    /三个月后|半年后|一年后|多年后/u,
+  ];
+  return responsibilities.filter(pattern => pattern.test(source)).length;
 }
 function countCausalBeats(text) {
   const source = String(text || '');
@@ -319,4 +355,4 @@ function printHelp() { process.stdout.write('Usage: node short-section-brief-fin
 
 if (require.main === module) process.exitCode = main();
 
-module.exports = { analyzeBriefQuality, countCausalBeats, plannedTargetChars, writeBriefReadyProjectState };
+module.exports = { analyzeBriefQuality, countCausalBeats, evidenceMechanismCount, plannedTargetChars, sectionResponsibilityCount, writeBriefReadyProjectState };

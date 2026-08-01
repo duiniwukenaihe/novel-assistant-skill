@@ -37,21 +37,42 @@ NODE
   run node - "$REPO/scripts/lib/short-story-editorial-review.js" "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');const api=require(process.argv[2]);const root=process.argv[3];
 const pack=api.attachEvidenceRuntime(api.buildShortStoryEvidencePack(root,{workflowId:'wf-review'}),path.join(root,'正文.md'));
+const reader={reader_profile:{target_platform:'番茄短篇',platform_mode:'free_feed_mobile',genre_lens:['现实世情'],style_lens:['restrained_realism','suspense_gap'],reading_scene:'mobile_continuous',profile_basis:'设定.md'},section_reader_response:pack.section_metrics.map(row=>({section_index:row.section_index,engagement:row.section_index>3?'wavering':'engaged',felt_emotion:'想继续确认真相',reader_question:'下一步会付出什么代价',evidence_quote:row.opening_excerpt.slice(0,18)})),drop_off_points:[],character_impressions:[{character:'林照',first_impression:'依赖家人',later_impression:'开始主动查证',trust_change:'up',evidence_quotes:['林照拿到入厂单。']}],identity_continuity:[{identity_or_trait:'游戏主播',visibility:'fading',reader_effect:'开篇身份后续参与不足',evidence_quotes:['林照在直播里看见空车间。','哥哥关掉直播。']}],supporting_character_reality:[{character:'哥哥',felt_status:'thin',apparent_want:'保住公司',decisive_choice:'关闭直播',relationship_effect:'妹妹不再信任他',evidence_quotes:['哥哥关掉直播。']}],reveal_aftershock:[{reveal_section_index:4,revelation:'原始画面被交出',immediate_reader_shift:'期待公开对抗',consequence_seen:'partial',later_evidence_quotes:['唐禾把原始画面交给林照。','鲜果重新进入车间。']}],promise_response:{title_expectation:'看见空工厂背后的真相',payoff_status:'partial',evidence_quotes:['鲜果重新进入车间。'],reader_aftertaste:'后果仍显仓促'},final_reader_state:{would_continue_or_recommend:'maybe',strongest_pull:'空工厂真相',biggest_resistance:'后段收束过快'}};
 const card={
   schemaVersion:'1.0.0',workflow_id:'wf-review',story_sha256:pack.story_sha256,decision:'revise',summary:'后段收束过快。',
+  reader_response:reader,
   opening_assessment:{verdict:'concern',evidence_quote:'林照在直播里看见空车间。',reason:'开篇背景说明比例偏高。'},
   section_function_matrix:pack.section_metrics.map(row=>({section_index:row.section_index,structural_role:`第${row.section_index}节职责`,function_verdict:row.section_index>3?'concern':'pass',evidence_quote:row.opening_excerpt.slice(0,18),note:'逐节验收'})),
   character_arc_matrix:[
-    {character:'林照',desire:'承担责任',active_action:'公开证据',cost:'与家人决裂',change:'从等待到行动',verdict:'pass',evidence_quotes:['林照拿到入厂单。']},
-    {character:'哥哥',desire:'保住公司',active_action:'关闭直播',cost:'失去妹妹信任',change:'责任暴露',verdict:'concern',evidence_quotes:['哥哥关掉直播。']},
+    {character:'林照',desire:'承担责任',independent_stake:'获得独立判断权',active_action:'公开证据',cost:'与家人决裂',relationship_effect:'与哥哥的保护关系破裂',change:'从等待到行动',verdict:'pass',evidence_quotes:['林照拿到入厂单。']},
+    {character:'哥哥',desire:'保住公司',independent_stake:'保住经营控制权',active_action:'关闭直播',cost:'失去妹妹信任',relationship_effect:'兄妹关系转为对抗',change:'责任暴露',verdict:'concern',evidence_quotes:['哥哥关掉直播。']},
   ],
-  identity_payoff_matrix:[{identity_or_trait:'游戏主播',setup_quote:'林照在直播里看见空车间。',payoff_quote:'哥哥关掉直播。',verdict:'concern'}],
+  identity_payoff_matrix:[{identity_or_trait:'游戏主播',identity_type:'职业与技能',setup_quote:'林照在直播里看见空车间。',payoff_quote:'哥哥关掉直播。',ongoing_participation:'后段未持续转化为行动能力',verdict:'concern'}],
+  reveal_aftershock_matrix:[{reveal_section_index:4,revelation:'唐禾交出原始画面',immediate_consequence:'真相获得公开证据',downstream_change:'终局恢复生产但中间后果偏短',verdict:'concern',evidence_quotes:['唐禾把原始画面交给林照。','鲜果重新进入车间。']}],
   climax_ending_assessment:{verdict:'fail',climax_quote:'唐禾把原始画面交给林照。',ending_quote:'鲜果重新进入车间。',reason:'高潮和后果篇幅不足。'},
   findings:[{code:'TailCollapse',severity:'S2',scope:'第4-5节及小节大纲',evidence_quote:'鲜果重新进入车间。',repair_direction:'先补高潮行动链和结尾后果，再重建对应 Brief。'}],
 };
 const valid=api.validateEditorialReviewCard(card,pack);if(valid.status!=='valid') throw new Error(JSON.stringify(valid));
 delete card.character_arc_matrix[1].active_action;
 const invalid=api.validateEditorialReviewCard(card,pack);if(invalid.status!=='invalid'||!invalid.findings.some(row=>row.field==='character_arc_matrix.active_action')) throw new Error(JSON.stringify(invalid));
+card.character_arc_matrix[1].active_action='关闭直播';delete card.reveal_aftershock_matrix;
+const missingAftershock=api.validateEditorialReviewCard(card,pack);if(missingAftershock.status!=='invalid'||!missingAftershock.findings.some(row=>row.field==='reveal_aftershock_matrix')) throw new Error(JSON.stringify(missingAftershock));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "reader profile cannot infer a platform from the directory or prose" {
+  run node - "$REPO/scripts/lib/short-story-editorial-review.js" "$BATS_TEST_TMPDIR" <<'NODE'
+const fs=require('fs'),path=require('path');
+const review=require(process.argv[2]);
+const root=process.argv[3];
+fs.writeFileSync(path.join(root,'正文.md'),'## 第001节\n林照推开车间门。\n');
+const pack=review.attachEvidenceRuntime(review.buildShortStoryEvidencePack(root,{workflowId:'wf-reader'}),path.join(root,'正文.md'));
+const card={schemaVersion:'1.0.0',workflow_id:'wf-reader',story_sha256:pack.story_sha256,decision:'revise',reader_response:{reader_profile:{target_platform:'短篇（未确认具体平台）',platform_mode:'free_feed_mobile',genre_lens:['现实'],style_lens:['fast_punchy'],reading_scene:'mobile_continuous',profile_basis:'项目目录推断'},section_reader_response:[{section_index:1,engagement:'engaged',felt_emotion:'好奇',reader_question:'发生了什么',evidence_quote:'林照推开车间门。'}],drop_off_points:[],character_impressions:[{character:'林照',first_impression:'主动',later_impression:'主动',trust_change:'flat',evidence_quotes:['林照推开车间门。']}],identity_continuity:[],identity_continuity_not_applicable_reason:'样本过短',supporting_character_reality:[],supporting_character_not_applicable_reason:'只有主角',reveal_aftershock:[],reveal_aftershock_not_applicable_reason:'尚无揭示',promise_response:{title_expectation:'进入车间',payoff_status:'partial',evidence_quotes:['林照推开车间门。'],reader_aftertaste:'待展开'},final_reader_state:{would_continue_or_recommend:'maybe',strongest_pull:'车间',biggest_resistance:'信息少'}},opening_assessment:{verdict:'pass',evidence_quote:'林照推开车间门。',reason:'直接进入场景'},section_function_matrix:[{section_index:1,structural_role:'开场',function_verdict:'pass',evidence_quote:'林照推开车间门。'}],character_arc_matrix:[{character:'林照',desire:'查明情况',independent_stake:'确认眼前事实',active_action:'推门',cost:'未知',relationship_effect:'尚未展开',change:'开始行动',verdict:'concern',evidence_quotes:['林照推开车间门。']}],identity_payoff_matrix:[],identity_not_applicable_reason:'样本过短',reveal_aftershock_matrix:[],reveal_aftershock_not_applicable_reason:'尚无揭示',climax_ending_assessment:{verdict:'concern',climax_quote:'林照推开车间门。',ending_quote:'林照推开车间门。',reason:'尚未展开'},findings:[{code:'SampleShort',severity:'S3',scope:'第1节',evidence_quote:'林照推开车间门。',repair_direction:'继续观察'}]};
+const out=review.validateEditorialReviewCard(card,pack);
+if(out.status!=='invalid') throw new Error(JSON.stringify(out));
+if(!out.findings.some(item=>item.field==='reader_response.reader_profile.platform_mode')) throw new Error(JSON.stringify(out));
+if(!out.findings.some(item=>item.field==='reader_response.reader_profile.profile_basis')) throw new Error(JSON.stringify(out));
 NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
@@ -68,7 +89,7 @@ NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
-@test "editorial finalizer creates a deterministic evidence pack before asking agents for one review card" {
+@test "editorial finalizer asks for a reader reaction artifact before the editor decision" {
   mkdir -p "$BOOK/追踪/workflow/tasks/wf-review"
   cat > "$BOOK/追踪/workflow/tasks/wf-review/task.json" <<'JSON'
 {"workflow_id":"wf-review","workflow_type":"short_write","task_dir":"追踪/workflow/tasks/wf-review","current_stage":"full_story_review","stage_execution":{"status":"running","stage_id":"full_story_review","owner_module":"story-review"}}
@@ -77,10 +98,30 @@ JSON
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   node - "$output" "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');const out=JSON.parse(process.argv[2]);const root=process.argv[3];
-if(out.status!=='short_story_editorial_review_required') throw new Error(JSON.stringify(out));
+if(out.status!=='short_story_reader_response_required') throw new Error(JSON.stringify(out));
 if(!fs.existsSync(path.join(root,out.evidence_pack))) throw new Error('evidence pack missing');
 if(fs.existsSync(path.join(root,out.review_card))) throw new Error('review card must be written by reviewers, not fabricated by the finalizer');
-if(!out.review_card_schema.character_arc_matrix||!out.review_card_schema.identity_payoff_matrix) throw new Error(JSON.stringify(out.review_card_schema));
+if(!out.reader_response_schema.section_reader_response||out.reader_response_schema.character_arc_matrix) throw new Error(JSON.stringify(out.reader_response_schema));
+NODE
+}
+
+@test "reader and editor artifacts are isolated and invalid retries stop after one repair" {
+  mkdir -p "$BOOK/追踪/workflow/tasks/wf-split-review"
+  cat > "$BOOK/追踪/workflow/tasks/wf-split-review/task.json" <<'JSON'
+{"workflow_id":"wf-split-review","workflow_type":"short_write","task_dir":"追踪/workflow/tasks/wf-split-review","current_stage":"full_story_review","stage_execution":{"status":"running","stage_id":"full_story_review","owner_module":"story-review","stage_attempt_id":"sa-split"}}
+JSON
+  node "$REPO/scripts/short-story-review-finalize.js" --project-root "$BOOK" --workflow-id wf-split-review --json > "$BATS_TEST_TMPDIR/reader-required.json"
+  reader_path="$(node -p 'require(process.argv[1]).reader_response_card' "$BATS_TEST_TMPDIR/reader-required.json")"
+  mkdir -p "$BOOK/$(dirname "$reader_path")"
+  printf '%s\n' '{"reader_profile":{}}' > "$BOOK/$reader_path"
+
+  node "$REPO/scripts/short-story-review-finalize.js" --project-root "$BOOK" --workflow-id wf-split-review --json > "$BATS_TEST_TMPDIR/reader-invalid-1.json"
+  node "$REPO/scripts/short-story-review-finalize.js" --project-root "$BOOK" --workflow-id wf-split-review --json > "$BATS_TEST_TMPDIR/reader-invalid-2.json"
+
+  node - "$BATS_TEST_TMPDIR/reader-invalid-1.json" "$BATS_TEST_TMPDIR/reader-invalid-2.json" <<'NODE'
+const first=require(process.argv[2]),second=require(process.argv[3]);
+if(first.status!=='short_story_reader_response_invalid'||first.retry_budget_remaining!==0) throw new Error(JSON.stringify(first));
+if(second.status!=='short_story_review_manual_resolution_required'||!second.retry_budget_exhausted) throw new Error(JSON.stringify(second));
 NODE
 }
 
@@ -97,7 +138,8 @@ NODE
   node "$REPO/scripts/short-story-review-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json > "$BATS_TEST_TMPDIR/required.json"
   node - "$BOOK" "$BATS_TEST_TMPDIR/required.json" <<'NODE'
 const fs=require('fs'),path=require('path');const root=process.argv[2],required=require(process.argv[3]);const pack=JSON.parse(fs.readFileSync(path.join(root,required.evidence_pack)));const quote=i=>pack.section_metrics[i].opening_excerpt.slice(0,18);
-const card={schemaVersion:'1.0.0',workflow_id:pack.workflow_id,story_sha256:pack.story_sha256,decision:'revise',summary:'后段人物与高潮需要回炉。',opening_assessment:{verdict:'concern',evidence_quote:'林照在直播里看见空车间。',reason:'背景比例偏高。'},section_function_matrix:pack.section_metrics.map((row,i)=>({section_index:row.section_index,structural_role:`第${row.section_index}节职责`,function_verdict:i>2?'concern':'pass',evidence_quote:quote(i),note:'逐节验收'})),character_arc_matrix:[{character:'林照',desire:'承担责任',active_action:'公开证据',cost:'家庭冲突',change:'开始独立决策',verdict:'pass',evidence_quotes:['林照拿到入厂单。']},{character:'哥哥',desire:'保住公司',active_action:'关闭直播',cost:'失去信任',change:'责任暴露',verdict:'concern',evidence_quotes:['哥哥关掉直播。']}],identity_payoff_matrix:[{identity_or_trait:'游戏主播',setup_quote:'林照在直播里看见空车间。',payoff_quote:'哥哥关掉直播。',verdict:'concern'}],climax_ending_assessment:{verdict:'fail',climax_quote:'唐禾把原始画面交给林照。',ending_quote:'鲜果重新进入车间。',reason:'高潮和后果被压缩。'},findings:[{code:'TailCollapse',severity:'S2',scope:'第4-5节及小节大纲',evidence_quote:'鲜果重新进入车间。',repair_direction:'先补高潮行动链和结尾责任后果，再重建受影响 Brief。'}]};
+const reader={reader_profile:{target_platform:'番茄短篇',platform_mode:'free_feed_mobile',genre_lens:['现实世情'],style_lens:['restrained_realism','suspense_gap'],reading_scene:'mobile_continuous',profile_basis:'设定.md'},section_reader_response:pack.section_metrics.map((row,i)=>({section_index:row.section_index,engagement:i>2?'wavering':'engaged',felt_emotion:'担心真相代价',reader_question:'下一步会发生什么',evidence_quote:quote(i)})),drop_off_points:[],character_impressions:[{character:'林照',first_impression:'被保护',later_impression:'开始行动',trust_change:'up',evidence_quotes:['林照拿到入厂单。']}],identity_continuity:[{identity_or_trait:'游戏主播',visibility:'fading',reader_effect:'身份后续参与不足',evidence_quotes:['林照在直播里看见空车间。','哥哥关掉直播。']}],supporting_character_reality:[{character:'哥哥',felt_status:'thin',apparent_want:'保住公司',decisive_choice:'关闭直播',relationship_effect:'失去妹妹信任',evidence_quotes:['哥哥关掉直播。']}],reveal_aftershock:[{reveal_section_index:4,revelation:'原始画面出现',immediate_reader_shift:'期待公开对抗',consequence_seen:'partial',later_evidence_quotes:['唐禾把原始画面交给林照。','鲜果重新进入车间。']}],promise_response:{title_expectation:'空工厂真相',payoff_status:'partial',evidence_quotes:['鲜果重新进入车间。'],reader_aftertaste:'后果太快'},final_reader_state:{would_continue_or_recommend:'maybe',strongest_pull:'真相',biggest_resistance:'结尾压缩'}};
+const card={schemaVersion:'1.0.0',workflow_id:pack.workflow_id,story_sha256:pack.story_sha256,decision:'revise',summary:'后段人物与高潮需要回炉。',reader_response:reader,opening_assessment:{verdict:'concern',evidence_quote:'林照在直播里看见空车间。',reason:'背景比例偏高。'},section_function_matrix:pack.section_metrics.map((row,i)=>({section_index:row.section_index,structural_role:`第${row.section_index}节职责`,function_verdict:i>2?'concern':'pass',evidence_quote:quote(i),note:'逐节验收'})),character_arc_matrix:[{character:'林照',desire:'承担责任',independent_stake:'获得独立判断权',active_action:'公开证据',cost:'家庭冲突',relationship_effect:'保护关系破裂',change:'开始独立决策',verdict:'pass',evidence_quotes:['林照拿到入厂单。']},{character:'哥哥',desire:'保住公司',independent_stake:'保住经营控制权',active_action:'关闭直播',cost:'失去信任',relationship_effect:'兄妹转为对抗',change:'责任暴露',verdict:'concern',evidence_quotes:['哥哥关掉直播。']}],identity_payoff_matrix:[{identity_or_trait:'游戏主播',identity_type:'职业与技能',setup_quote:'林照在直播里看见空车间。',payoff_quote:'哥哥关掉直播。',ongoing_participation:'后续参与不足',verdict:'concern'}],reveal_aftershock_matrix:[{reveal_section_index:4,revelation:'唐禾交出原始画面',immediate_consequence:'获得公开证据',downstream_change:'后果收束偏短',verdict:'concern',evidence_quotes:['唐禾把原始画面交给林照。','鲜果重新进入车间。']}],climax_ending_assessment:{verdict:'fail',climax_quote:'唐禾把原始画面交给林照。',ending_quote:'鲜果重新进入车间。',reason:'高潮和后果被压缩。'},findings:[{code:'TailCollapse',severity:'S2',scope:'第4-5节及小节大纲',evidence_quote:'鲜果重新进入车间。',repair_direction:'先补高潮行动链和结尾责任后果，再重建受影响 Brief。'}]};
 fs.writeFileSync(path.join(root,required.review_card),JSON.stringify(card,null,2));
 NODE
   run node "$REPO/scripts/short-story-review-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
@@ -121,7 +163,8 @@ NODE
   node "$REPO/scripts/short-story-review-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json > "$BATS_TEST_TMPDIR/pass-required.json"
   node - "$BOOK" "$BATS_TEST_TMPDIR/pass-required.json" <<'NODE'
 const fs=require('fs'),path=require('path');const root=process.argv[2],required=require(process.argv[3]);const pack=JSON.parse(fs.readFileSync(path.join(root,required.evidence_pack)));const quote=i=>pack.section_metrics[i].opening_excerpt.slice(0,18);
-const card={schemaVersion:'1.0.0',workflow_id:pack.workflow_id,story_sha256:pack.story_sha256,decision:'pass',summary:'全篇可进入表达清理。',opening_assessment:{verdict:'pass',evidence_quote:'林照在直播里看见空车间。',reason:'开篇直接进入核心冲突。'},section_function_matrix:pack.section_metrics.map((row,i)=>({section_index:row.section_index,structural_role:`第${row.section_index}节职责`,function_verdict:'pass',evidence_quote:quote(i),note:'功能完成'})),character_arc_matrix:[{character:'林照',desire:'承担责任',active_action:'公开证据',cost:'家庭冲突',change:'开始独立决策',verdict:'pass',evidence_quotes:['林照拿到入厂单。']},{character:'哥哥',desire:'保住公司',active_action:'关闭直播',cost:'失去信任',change:'承担后果',verdict:'pass',evidence_quotes:['哥哥关掉直播。']}],identity_payoff_matrix:[{identity_or_trait:'游戏主播',setup_quote:'林照在直播里看见空车间。',payoff_quote:'哥哥关掉直播。',verdict:'pass'}],climax_ending_assessment:{verdict:'pass',climax_quote:'唐禾把原始画面交给林照。',ending_quote:'鲜果重新进入车间。',reason:'高潮证据推动终局兑现。'},findings:[]};fs.writeFileSync(path.join(root,required.review_card),JSON.stringify(card,null,2));
+const reader={reader_profile:{target_platform:'番茄短篇',platform_mode:'free_feed_mobile',genre_lens:['现实世情'],style_lens:['restrained_realism','suspense_gap'],reading_scene:'mobile_continuous',profile_basis:'设定.md'},section_reader_response:pack.section_metrics.map((row,i)=>({section_index:row.section_index,engagement:'engaged',felt_emotion:'持续关注真相',reader_question:'后果如何落地',evidence_quote:quote(i)})),drop_off_points:[],character_impressions:[{character:'林照',first_impression:'被保护',later_impression:'主动承担',trust_change:'up',evidence_quotes:['林照拿到入厂单。']}],identity_continuity:[{identity_or_trait:'游戏主播',visibility:'present',reader_effect:'直播经验参与公开行动',evidence_quotes:['林照在直播里看见空车间。','哥哥关掉直播。']}],supporting_character_reality:[{character:'哥哥',felt_status:'alive',apparent_want:'保住公司',decisive_choice:'关闭直播',relationship_effect:'承担失去妹妹信任的后果',evidence_quotes:['哥哥关掉直播。']}],reveal_aftershock:[{reveal_section_index:4,revelation:'原始画面出现',immediate_reader_shift:'确认真相可被证明',consequence_seen:'yes',later_evidence_quotes:['唐禾把原始画面交给林照。','鲜果重新进入车间。']}],promise_response:{title_expectation:'空工厂真相',payoff_status:'fulfilled',evidence_quotes:['鲜果重新进入车间。'],reader_aftertaste:'真实生产回归'},final_reader_state:{would_continue_or_recommend:'yes',strongest_pull:'人物选择',biggest_resistance:'无明显阻力'}};
+const card={schemaVersion:'1.0.0',workflow_id:pack.workflow_id,story_sha256:pack.story_sha256,decision:'pass',summary:'全篇可进入表达清理。',reader_response:reader,opening_assessment:{verdict:'pass',evidence_quote:'林照在直播里看见空车间。',reason:'开篇直接进入核心冲突。'},section_function_matrix:pack.section_metrics.map((row,i)=>({section_index:row.section_index,structural_role:`第${row.section_index}节职责`,function_verdict:'pass',evidence_quote:quote(i),note:'功能完成'})),character_arc_matrix:[{character:'林照',desire:'承担责任',independent_stake:'获得独立判断权',active_action:'公开证据',cost:'家庭冲突',relationship_effect:'重写兄妹边界',change:'开始独立决策',verdict:'pass',evidence_quotes:['林照拿到入厂单。']},{character:'哥哥',desire:'保住公司',independent_stake:'保住经营控制权',active_action:'关闭直播',cost:'失去信任',relationship_effect:'兄妹关系改变',change:'承担后果',verdict:'pass',evidence_quotes:['哥哥关掉直播。']}],identity_payoff_matrix:[{identity_or_trait:'游戏主播',identity_type:'职业与技能',setup_quote:'林照在直播里看见空车间。',payoff_quote:'哥哥关掉直播。',ongoing_participation:'直播经验持续参与行动',verdict:'pass'}],reveal_aftershock_matrix:[{reveal_section_index:4,revelation:'唐禾交出原始画面',immediate_consequence:'真相获得公开证据',downstream_change:'推动责任结算和真实生产恢复',verdict:'pass',evidence_quotes:['唐禾把原始画面交给林照。','鲜果重新进入车间。']}],climax_ending_assessment:{verdict:'pass',climax_quote:'唐禾把原始画面交给林照。',ending_quote:'鲜果重新进入车间。',reason:'高潮证据推动终局兑现。'},findings:[]};fs.writeFileSync(path.join(root,required.review_card),JSON.stringify(card,null,2));
 NODE
   run node "$REPO/scripts/short-story-review-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
   [ "$status" -eq 0 ] || { echo "$output"; false; }

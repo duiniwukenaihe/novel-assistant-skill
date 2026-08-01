@@ -12,6 +12,7 @@
 ## 维护者文档
 
 - [脚本地图](scripts-map.md)
+- [Token 高效 Harness 吸收计划](token-efficient-harness-absorption-plan.md)
 - [Skill 目录策略](skill-directory-policy.md)
 - [公开 GitHub 发布](github-public-release.md)
 - [发布检查清单](release-checklist.md)

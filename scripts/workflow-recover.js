@@ -280,6 +280,7 @@ function buildPacket(task, stageId, payload, packetRel) {
     workflow_type: task.workflow_type,
     stage_id: stageId,
     step_id: stageId,
+    owner_module: String(((task.stage_execution || {}).owner_module) || task.workflow_owner || ''),
     step_status: 'completed',
     outputs: [packetRel],
     changed_files: [],
@@ -312,7 +313,7 @@ function defaultPacketPath(task, stageId) {
 
 function applyPacket(projectRoot, packetFile, recoveredStage) {
   const stateMachine = path.join(__dirname, 'workflow-state-machine.js');
-  const run = cp.spawnSync(process.execPath, [stateMachine, 'apply-result', '--project-root', projectRoot, '--result', packetFile, '--json'], {
+  const run = cp.spawnSync(process.execPath, [stateMachine, 'apply-result', '--project-root', projectRoot, '--result', packetFile, '--compact', '--json'], {
     encoding: 'utf8',
     maxBuffer: 8 * 1024 * 1024,
   });

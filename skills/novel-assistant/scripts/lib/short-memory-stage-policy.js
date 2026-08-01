@@ -9,6 +9,7 @@ function checkShortMemoryStage({ projectRoot, task, execution, sectionIndex, sta
 
 function classifyShortMemoryStage(validation = {}, stageId = '') {
   const status = String(validation.status || 'missing');
+  const stage = String(stageId || '');
   if (status === 'current') {
     return {
       status: 'pass',
@@ -26,6 +27,18 @@ function classifyShortMemoryStage(validation = {}, stageId = '') {
       receipt: null,
       stale_sources: [],
       advisory: '旧任务没有阶段记忆回执；本轮兼容继续，下一阶段将生成新版当前作品记忆快照。',
+    };
+  }
+  if (status === 'stale' && stage === 'section_accept_anchor') {
+    return {
+      status: 'short_memory_context_refresh_required',
+      blocking: false,
+      refresh_allowed: true,
+      memory_status: status,
+      receipt: validation.current_receipt || null,
+      stale_sources: Array.isArray(validation.stale_sources) ? validation.stale_sources : [],
+      resume_stage: 'section_accept_anchor',
+      instruction: '采用前检测到当前作品记忆变化；工作流应自动刷新当前阶段上下文并继续采用。刷新失败时才暂停。',
     };
   }
   return {

@@ -15,6 +15,8 @@ description: 网络小说工具箱内部记忆模块。用于工作流需要读�
 - 只做五件事：类型化查询、证据检索、压缩快照、版本管理、读取回执。记忆建议只有在专业产物被接受后才可投影。
 - 存储必须经过 `StorageBackend` / repository 契约。当前默认读取项目内本地文件；未来 PostgreSQL 由 `novel-project` 注入 adapter。本模块不保存连接串、密码，也不直接连接数据库。
 - 单目录短篇只保存当前作品连续性。跨短篇素材池、作者长期画像和学习进化由外部项目管理器消费 `追踪/integration/outbox.jsonl` 后维护，本模块不得把它们回灌成当前作品事实。
+- Chat 原文不是正式记忆。用户意见先进入 workflow 的反馈收件箱，由领域 skill 判断影响层级并形成可读方案；只有用户确认后的最终方案、已事务回写的设定/大纲和已采用正文事实才能投影。原始讨论、被否决方案、模型自我总结和“继续执行”之类控制语句不得进入作品记忆。
+- 短篇规划记忆分为 `active` 与 `partial`。只有标题承诺、目标情绪、主角欲望/恐惧、终局兑现和小节义务齐全时才可进入下一节最小上下文；残缺投影只记录缺项供 workflow 修复，不能参与正文生成。
 - 短篇逐节正文不读取全量 lorebook，也不重复装配全局 memory packet。专业模块先声明当前 `project_id + section_index` 所需的类型化 `Memory Query`，本模块据此编译最小记忆快照，只选取已接受的前序事实、活跃人物、未闭合承诺和已确认写作规则；`story-workflow` 只保存合同引用和校验调用顺序，不拼接事实内容。候选稿、未来小节事实、其他作品与聊天转录禁止进入。阶段结束前校验 `memory_read_receipt`，相关事实已变化时保留候选稿并局部重建上下文，不允许带着旧记忆继续采用。
 - 通用内核职责固定为：按宿主上下文和阶段复杂度分配召回预算、按优先级截取事实、生成稳定版本、校验读取回执、报告失效来源。题材与文体模块只提供 profile：短篇把上一节人物状态、未决钩子和本节到期承诺转成连续性义务；长篇按书/卷/阶段/章提供自己的层级与义务。通用内核不得出现“第 N 节”“卷纲”或具体题材判断。
 
@@ -104,6 +106,7 @@ node scripts/memory-recommender.js --project-root <book-root> --status --json
 5. 显式记忆迁移和章节提交共享书目级写入租约；另一个会话正在接受章节或投影记忆时返回 `blocked_book_write_locked`，不得用第二份 lorebook 覆盖第一份。
 6. `status=blocked_output_pollution` 时，先隔离污染，不能把污染记忆注入上下文。
 7. 领域产物被用户接受后，可用 `memory-recommender.js` 记录建议；高风险变更用 `--confirm ... --decision apply|reject` 闭环，不得只留下永久 pending。
+   短篇规划反馈的固定顺序是：`Chat 意见 -> 影响分析 -> 用户确认最终方案 -> 事务回写素材卡/设定/小节大纲 -> 失效受影响 Brief -> 投影 planning-constraints 与 reader-promise -> 逐节复检`。任何子 skill 都不得跳过 workflow 直接把聊天摘要写成 canon。
    章节事务只有在 accepted commit 形成后才能增量投影；条目必须记录 `acceptedCommitId`、`valid_from`、`valid_to` 和生命周期身份。未接受、非任务族主分支、污染、已失效或来源陈旧的条目不得进入 active memory。
    承诺/伏笔状态只接受 accepted chapter commit 中结构化 `promise_deltas` 的幂等投影。聊天意见、Agent 摘要、未接受候选稿和对整份 `伏笔.md` 的猜测都不能直接打开、推进或关闭承诺；同一 commit 重放不得重复追加事件。
 8. 用户问“你学到了什么 / 记住了什么 / 当前记忆状态”时，必须运行 `--status`，用落盘状态回答，不能凭聊天印象回答。

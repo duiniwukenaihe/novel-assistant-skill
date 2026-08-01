@@ -9,6 +9,7 @@ const {
   activeShortFeedbackRevision,
   previewShortFeedbackRevisionAcceptance,
 } = require('./short-feedback-revision-queue');
+const { isShortWorkflowType } = require('./short-workflow-types');
 
 function validateDetailOutlineQualityResult(result, task, projectRoot = '') {
   if (!task || String(task.workflow_type || '') !== 'long_write' || String(task.current_stage || '') !== 'detail_outline_review') {
@@ -385,7 +386,7 @@ function createWorkflowTransitionService(deps) {
       return resolveLongformLifecycleTransition(tpl, machine, stageDef, stageId, explicitNext, blocked);
     }
 
-    const shortQualityNext = ['short_write', 'short_startup', 'private_short_startup'].includes(String((tpl || {}).workflow_type || ''))
+    const shortQualityNext = isShortWorkflowType((tpl || {}).workflow_type)
       ? resolveShortQualityNext({ stageId, result, allowedNext: allowed })
       : '';
     if (!explicitNext && shortQualityNext) {
@@ -398,7 +399,7 @@ function createWorkflowTransitionService(deps) {
       };
     }
 
-    if (['short_write', 'short_startup', 'private_short_startup'].includes(String((tpl || {}).workflow_type || ''))
+    if (isShortWorkflowType((tpl || {}).workflow_type)
       && stageId === 'section_accept_anchor' && !blocked) {
       if (!result.section_acceptance || typeof result.section_acceptance !== 'object') {
         return {

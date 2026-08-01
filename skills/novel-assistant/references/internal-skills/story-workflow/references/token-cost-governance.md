@@ -51,6 +51,15 @@ Raw tool output is not the model context.
 4. If output contains diffs, previous tool transcripts, provider banners, repeated terms, or `Invalid tool parameters`, run the tool-call degradation guard before reusing it.
 5. A professional module may request source snippets only for conflicts, missing evidence, or user-selected inspection.
 
+The managed runner persists complete stdout/stderr under the task `runner-output/` directory and writes a deterministic summary beside them. Ledger events record `raw_output_chars`, `compacted_output_chars`, and `tool_output_compression_ratio`; an unrecognized format falls back to bounded first/last lines plus preserved error lines and raw artifact paths.
+
+## Source And Artifact Reuse
+
+- `source_id` identifies the logical project-relative source and remains stable while that source is edited.
+- `source_digest` identifies one immutable content revision. A changed digest creates a new artifact and refreshes only its dependency closure; it must not globally block Workflow or Memory.
+- Stage packets expose artifact identities. Result packets echo `consumed_artifact_ids` and declare `produced_artifact_ids`, so downstream stages reuse accepted evidence instead of reacquiring it.
+- Stable prompt protocol and dynamic task context have separate digests. A stable digest indicates cache eligibility only; actual cache usage is reported solely from host usage fields.
+
 ## Retry and Waste Policy
 
 Retries are bounded by type, not by optimism.

@@ -117,6 +117,32 @@ NODE
     [ "$(cat "$PROJECT/.claude/hooks/managed.sh")" = 'managed hook v1' ]
 }
 
+@test "managed sync restores a missing owned file and rollback preserves the missing state" {
+    node - "$MANAGED" "$PROJECT" "$SOURCE" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const runtime = require(process.argv[2]);
+const projectRoot = process.argv[3];
+const sourceRoot = process.argv[4];
+const target = path.join(projectRoot, '.claude/hooks/managed.sh');
+
+let plan = runtime.planManagedSync({ projectRoot, sourceRoot, previousManifest: null, bundleId: 'test-bundle' });
+runtime.applyManagedSync(plan);
+const previousManifest = JSON.parse(fs.readFileSync(path.join(projectRoot, '.story-runtime-managed.json'), 'utf8'));
+fs.rmSync(target);
+
+plan = runtime.planManagedSync({ projectRoot, sourceRoot, previousManifest, bundleId: 'test-bundle' });
+const applied = runtime.applyManagedSync(plan);
+if (applied.status !== 'synced') process.exit(1);
+if (!applied.snapshotId) process.exit(2);
+if (fs.readFileSync(target, 'utf8') !== 'managed hook v1\n') process.exit(3);
+
+const rollback = runtime.rollbackManagedSync({ projectRoot, snapshotId: applied.snapshotId });
+if (rollback.status !== 'rolled_back') process.exit(4);
+if (fs.existsSync(target)) process.exit(5);
+NODE
+}
+
 @test "managed rollback requires confirmation when a user deleted an updated file after the snapshot" {
     node - "$MANAGED" "$PROJECT" "$SOURCE" <<'NODE'
 const fs = require('fs');

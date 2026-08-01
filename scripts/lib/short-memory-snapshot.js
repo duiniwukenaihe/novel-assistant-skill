@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { rankChineseMemory } = require('./chinese-memory-retrieval');
 const { StoryMemoryRepository } = require('./story-memory-repository');
+const { compactReaderPromiseForSection } = require('./short-reader-promise');
 const {
   createMemoryContract,
   createMemoryReadReceipt,
@@ -40,7 +41,7 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
     stage_id: stageId || 'short_memory_snapshot',
     owner_module: String(task.workflow_owner || 'story-short-write'),
     scope: { section_index: sectionIndex },
-    needs: ['accepted_facts', 'active_cast', 'active_promises', 'confirmed_style_rules', 'confirmed_quality_rules', 'planning_constraints', 'continuity_obligations', 'canon_constraints'],
+    needs: ['accepted_facts', 'active_cast', 'active_promises', 'reader_promise', 'confirmed_style_rules', 'confirmed_quality_rules', 'planning_constraints', 'continuity_obligations', 'canon_constraints'],
     query_text: queryText,
   });
   const memoryTokenBudget = deriveMemoryTokenBudget({ task, query: queryText, stageId });
@@ -56,8 +57,11 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
   const qualityRules = selectQualityRules(repository.pollutionRules(), queryText);
   const promises = selectPromises(repository.promises(), sectionIndex);
   const planningConstraints = selectPlanningConstraints(repository, sectionIndex, task);
+  const storedReaderPromise = repository.readerPromise();
+  const readerPromise = compactReaderPromiseForSection(storedReaderPromise, sectionIndex);
+  const memoryWarnings = buildMemoryWarnings(storedReaderPromise);
   const activeCast = compactActiveCast(repository.activeCast(), facts, queryText);
-  const continuityObligations = buildContinuityObligations(facts, promises, planningConstraints, sectionIndex);
+  const continuityObligations = buildContinuityObligations(facts, promises, planningConstraints, sectionIndex, readerPromise);
   const selectedEntryIds = unique([
     ...facts.map(item => item.fact_id),
     ...styleRules.map(item => item.id),
@@ -65,15 +69,18 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
     ...qualityRules.map(item => item.id),
     ...promises.map(item => item.id),
     ...planningConstraints.map(item => item.id),
+    ...(readerPromise ? [`reader-promise:${readerPromise.revision}`] : []),
   ]);
   const selectedMemory = {
     accepted_facts: facts.map(compactFact),
     active_cast: activeCast,
     active_promises: promises,
+    reader_promise: readerPromise,
     confirmed_style_rules: [...styleRules, ...preferences].map(compactRule),
     confirmed_quality_rules: qualityRules.map(compactRule),
     continuity_obligations: continuityObligations,
     canon_constraints: planningConstraints,
+    memory_warnings: memoryWarnings,
   };
   const memoryRevision = buildMemoryRevision({
     project_id: String(projectState.project_id || ''),
@@ -120,6 +127,18 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
   return { status: 'assembled', payload, contract, receipt };
 }
 
+function buildMemoryWarnings(readerPromise) {
+  if (!readerPromise || typeof readerPromise !== 'object' || String(readerPromise.status || '') !== 'partial') return [];
+  const missingFields = Array.isArray(readerPromise.missing_fields)
+    ? readerPromise.missing_fields.map(String).filter(Boolean)
+    : [];
+  return [{
+    code: 'reader_promise_partial',
+    message: '当前短篇规划尚未形成完整读者承诺；缺失项不会注入正文上下文。',
+    missing_fields: missingFields,
+  }];
+}
+
 function validateShortStageMemoryReceipt(projectRoot, task, execution, options = {}) {
   const packetRel = String((((execution || {}).stage_context_packet || {}).packet_json) || '');
   if (!packetRel) return { status: 'not_recorded', reason: 'stage_context_packet_missing' };
@@ -161,7 +180,7 @@ function buildQuery(repository, sectionIndex, options = {}) {
   return [
     includeCurrentBrief ? repository.readText(`写作Brief_第${pad}节.md`) : '',
     extractOutlineSection(repository.readText('小节大纲.md'), sectionIndex),
-    sectionIndex > 1 ? repository.readText(`追踪/private-short-extension/section-${String(sectionIndex - 1).padStart(3, '0')}-anchor.json`) : '',
+    sectionIndex > 1 ? repository.shortStateText(`section-${String(sectionIndex - 1).padStart(3, '0')}-anchor.json`) : '',
   ].filter(Boolean).join('\n');
 }
 
@@ -219,7 +238,7 @@ function continuityFactScore(row) {
   return score;
 }
 
-function buildContinuityObligations(facts, promises, planningConstraints, sectionIndex) {
+function buildContinuityObligations(facts, promises, planningConstraints, sectionIndex, readerPromise = null) {
   const obligations = [];
   for (const fact of facts) {
     if (factSection(fact) !== sectionIndex - 1) continue;
@@ -254,24 +273,31 @@ function buildContinuityObligations(facts, promises, planningConstraints, sectio
       requirement: 'must_obey_or_explicitly_replan',
     });
   }
+  if (readerPromise) {
+    obligations.push({
+      source_id: `reader-promise:${String(readerPromise.revision || '')}`,
+      kind: 'reader_promise',
+      requirement: 'must_advance_current_section_without_breaking_final_payoff',
+    });
+  }
   return obligations;
 }
 
 function selectPlanningConstraints(repository, sectionIndex, task = {}) {
-  const persisted = repository.planningConstraints().filter(isActive).filter(row => {
-    const refs = Array.isArray(row.source_refs) ? row.source_refs : [];
-    if (!refs.length || refs.some(ref => String(repository.sourceRevision(String((ref || {}).path || ''))) !== String((ref || {}).hash || ''))) return false;
-    const scope = row.scope && typeof row.scope === 'object' ? row.scope : {};
-    if (scope.whole_story === true) return true;
-    const sections = Array.isArray(row.affected_sections) ? row.affected_sections.map(positiveInt).filter(Boolean) : [];
-    return !sections.length || sections.includes(sectionIndex);
-  }).map(row => ({
-    id: String(row.constraint_id || ''),
-    content: String(row.content || ''),
-    scope: row.scope && typeof row.scope === 'object' ? row.scope : {},
-    affected_sections: Array.isArray(row.affected_sections) ? row.affected_sections.map(positiveInt).filter(Boolean) : [],
-    evidence: (Array.isArray(row.source_refs) ? row.source_refs : []).map(ref => ({ path: String((ref || {}).path || '') })).filter(ref => ref.path),
-  })).filter(row => row.id && row.content);
+  const query = {
+    projectId: String(((repository.projectState() || {}).project_id) || ''),
+    sectionIndex,
+    repository,
+  };
+  const persisted = repository.planningConstraints()
+    .filter(row => isPlanningConstraintActive(row, query))
+    .map(row => ({
+      id: String(row.constraint_id || ''),
+      content: String(row.content || ''),
+      scope: row.scope && typeof row.scope === 'object' ? row.scope : {},
+      affected_sections: Array.isArray(row.affected_sections) ? row.affected_sections.map(positiveInt).filter(Boolean) : [],
+      evidence: (Array.isArray(row.source_refs) ? row.source_refs : []).map(ref => ({ path: String((ref || {}).path || '') })).filter(ref => ref.path),
+    })).filter(row => row.id && row.content);
   const selected = new Map(persisted.map(row => [row.id, row]));
   for (const row of taskAcceptedPlanningConstraints(task, sectionIndex)) selected.set(row.id, row);
   return [...selected.values()];
@@ -286,25 +312,39 @@ function taskAcceptedPlanningConstraints(task, sectionIndex) {
   const queue = task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
     ? task.feedback_revision_queue
     : null;
-  const affected = [...new Set([
+  const inheritedAffected = [...new Set([
     ...(Array.isArray(plan.affected_sections) ? plan.affected_sections : []),
     ...(queue && String(queue.status || '') === 'running' && Array.isArray(queue.affected_sections) ? queue.affected_sections : []),
   ].map(positiveInt).filter(Boolean))];
-  if (affected.length && !affected.includes(sectionIndex)) return [];
   return (Array.isArray(plan.requirements) ? plan.requirements : [])
     .map((row, index) => {
       const id = String((row || {}).requirement_id || `${plan.plan_id || 'accepted-plan'}.requirement-${index + 1}`);
       const content = String((row || {}).text || (row || {}).content || '').trim();
+      const affected = requirementAffectedSections(row, content);
+      const scoped = affected.length ? affected : inheritedAffected;
+      if (scoped.length && !scoped.includes(sectionIndex)) return null;
       return {
         id: `constraint.${id}`,
         content,
-        scope: { book: 'current', sections: affected },
-        affected_sections: affected,
+        scope: { book: 'current', sections: scoped },
+        affected_sections: scoped,
         evidence: (Array.isArray(plan.projected_assets) ? plan.projected_assets : []).map(path => ({ path: String(path) })),
         source_kind: 'task_scoped_accepted_plan',
       };
     })
-    .filter(row => row.id && row.content);
+    .filter(row => row && row.id && row.content);
+}
+
+function requirementAffectedSections(row, content) {
+  const direct = [...(Array.isArray((row || {}).affected_sections) ? row.affected_sections : []), ...(Array.isArray((row || {}).sections) ? row.sections : [])]
+    .map(positiveInt).filter(Boolean);
+  if (direct.length) return [...new Set(direct)];
+  const found = new Set();
+  String(content || '').replace(/第\s*0*(\d+)\s*(?:至|到|-|—|~)\s*0*(\d+)\s*节/gu, (_, start, end) => {
+    for (let value = Math.min(Number(start), Number(end)); value <= Math.max(Number(start), Number(end)); value += 1) found.add(value);
+    return _;
+  }).replace(/第\s*0*(\d+)\s*节/gu, (_, value) => { found.add(Number(value)); return _; });
+  return [...found].filter(positiveInt).sort((a, b) => a - b);
 }
 
 function selectRules(rows, query) {
@@ -371,7 +411,13 @@ function compactActiveCast(value, facts, query) {
   const present = unique([...(Array.isArray(source.presentCharacters) ? source.presentCharacters : []), ...inferred]);
   if (present.length) result.present_characters = present;
   if (source.characters && typeof source.characters === 'object' && !Array.isArray(source.characters)) {
-    const selected = Object.entries(source.characters).filter(([name]) => query.includes(name) || present.includes(name));
+    const selected = Object.entries(source.characters).filter(([name, character]) => {
+      const aliases = Array.isArray((character || {}).aliases) ? character.aliases : [];
+      return query.includes(name)
+        || present.includes(name)
+        || aliases.some(alias => alias && query.includes(String(alias)))
+        || aliases.some(alias => alias && present.includes(String(alias)));
+    });
     if (selected.length) result.characters = Object.fromEntries(selected);
   }
   return result;
@@ -381,6 +427,36 @@ function isActive(row) {
   const status = String((row || {}).status || 'active').toLowerCase();
   return !['superseded', 'rejected', 'quarantined', 'closed', 'invalid'].includes(status)
     && !(row || {}).valid_to;
+}
+
+// Unified validity check for book-level planning constraints (P0.1).
+// A confirmed plan survives task/workflow and single-round feedback lifecycle
+// changes: provenance.workflow_id / provenance.feedback_id stay readable for
+// audit but no longer gate whether a constraint is active. The hard
+// `source_refs` requirement that previously dropped constraints which had no
+// evidence refs is removed: a constraint with no refs is treated as live.
+// Constraints that DO carry `source_refs` still honor per-asset hash drift,
+// so an accepted plan whose 素材卡/设定/小节大纲 changed underneath keeps being
+// re-derived rather than silently re-injected with stale evidence.
+function isPlanningConstraintActive(row, query = {}) {
+  if (!isActive(row)) return false;
+  if (query.projectId && row.project_id && String(row.project_id) !== String(query.projectId)) return false;
+  const refs = Array.isArray(row.source_refs) ? row.source_refs : [];
+  if (refs.length && query.repository
+      && refs.some(ref => String(query.repository.sourceRevision(String((ref || {}).path || ''))) !== String((ref || {}).hash || ''))) {
+    return false;
+  }
+  const scope = row.scope && typeof row.scope === 'object' ? row.scope : {};
+  const legacyTextSections = scope.whole_story === true
+    ? requirementAffectedSections({}, String(row.content || ''))
+    : [];
+  if (legacyTextSections.length) return !query.sectionIndex || legacyTextSections.includes(Number(query.sectionIndex));
+  const sections = Array.isArray(row.affected_sections)
+    ? row.affected_sections.map(positiveInt).filter(Boolean)
+    : (Array.isArray(scope.sections) ? scope.sections.map(positiveInt).filter(Boolean) : []);
+  if (sections.length) return !query.sectionIndex || sections.includes(Number(query.sectionIndex));
+  if (scope.whole_story === true) return true;
+  return !query.sectionIndex || sections.length === 0 || sections.includes(Number(query.sectionIndex));
 }
 
 function isAcceptedRule(row) {

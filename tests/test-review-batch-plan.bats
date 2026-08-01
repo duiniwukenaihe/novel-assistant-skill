@@ -124,9 +124,12 @@ const batch=out.batches[0];
 if (!Array.isArray(batch.evidence_signals) || !batch.evidence_signals.includes('character_drift') || !batch.evidence_signals.includes('prose')) throw new Error(JSON.stringify(batch));
 if (!batch.dispatch_plan || batch.dispatch_plan.retryPolicy!=='missing_dimension_once') throw new Error(JSON.stringify(batch));
 const roles=batch.dispatch_plan.roles.map((role)=>role.subagent_type);
-for (const role of ['story-explorer','consistency-checker','narrative-writer']) if (!roles.includes(role)) throw new Error(JSON.stringify(batch.dispatch_plan));
+for (const role of ['story-explorer','narrative-writer']) if (!roles.includes(role)) throw new Error(JSON.stringify(batch.dispatch_plan));
+if (roles.length !== 2) throw new Error(`small evidence batch should cap parallel review at 2: ${JSON.stringify(batch.dispatch_plan)}`);
 if (roles.includes('character-designer')) throw new Error('missing optional role must be deferred instead of forcing solo fallback');
 if (!batch.dispatch_plan.deferredDimensions.includes('character')) throw new Error(JSON.stringify(batch.dispatch_plan));
+if (!batch.dispatch_plan.deferredDimensions.includes('canon')) throw new Error(JSON.stringify(batch.dispatch_plan));
+if (!batch.complexity_policy || batch.complexity_policy.recommended_agent_count !== 2) throw new Error(JSON.stringify(batch));
 NODE
 }
 
@@ -146,7 +149,12 @@ NODE
 
     node - "$TMP_DIR/host.json" "$TMP_DIR/runtime.json" "$TMP_DIR/fallback.json" <<'NODE'
 const fs=require('fs');
-const plans=process.argv.slice(2).map((file)=>{const created=JSON.parse(fs.readFileSync(file,'utf8'));return JSON.parse(fs.readFileSync(`${created.task.book_root}/${created.task.review_plan_path}`,'utf8'));});
+const path=require('path');
+const plans=process.argv.slice(2).map((file)=>{
+  const created=JSON.parse(fs.readFileSync(file,'utf8'));
+  const projectRoot=path.join(path.dirname(file),path.basename(file,'.json'));
+  return JSON.parse(fs.readFileSync(path.join(projectRoot,created.task.book_root,created.task.review_plan_path),'utf8'));
+});
 const [host,runtime,fallback]=plans;
 if(host.budget_policy.source_budget_origin!=='host_actual' || host.budget_policy.source_budget_chars!==18000) throw new Error(JSON.stringify(host.budget_policy));
 if(runtime.budget_policy.source_budget_origin!=='runtime_estimate' || runtime.budget_policy.source_budget_chars!==9000) throw new Error(JSON.stringify(runtime.budget_policy));

@@ -38,6 +38,34 @@ NODE
   [ "$status" -eq 0 ]
 }
 
+@test "short brief blocks checklist prose that overloads one section with evidence and closure systems" {
+  run node - "$SCRIPT" <<'NODE'
+const { analyzeBriefQuality } = require(process.argv[2]);
+const brief = `# 第9节写作提要
+> 目标 1600-1900 个中文字符
+## 视角与人物
+第一人称，林照、哥哥、母亲、员工、舍友、父亲出场。
+## 因果动作链
+1. 调取工商档案和交易回执。
+2. 公布检测报告、批次记录和退款申请。
+3. 启动召回、退款与停产整改。
+4. 处理员工工资和转岗。
+5. 召开董事会暂停哥哥职务并引入职业经理人。
+6. 三个月后恢复生产并直播公开。
+7. 舍友群回应，随后去见父亲。
+## 禁止漂移
+不回避现实后果。
+## 验收
+所有线索全部收束。`;
+const result = analyzeBriefQuality(brief);
+if (result.status !== 'blocking') throw new Error(JSON.stringify(result));
+if (!result.findings.includes('evidence_mechanism_overload')) throw new Error(JSON.stringify(result));
+if (!result.findings.includes('section_responsibility_overload')) throw new Error(JSON.stringify(result));
+if (!result.findings.includes('section_focus_overload')) throw new Error(JSON.stringify(result));
+NODE
+  [ "$status" -eq 0 ]
+}
+
 @test "expected brief overload is a normal revision status instead of a shell error" {
   BOOK="$BATS_TEST_TMPDIR/book"
   WF="wf-brief-recovery"

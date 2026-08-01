@@ -1,5 +1,7 @@
 'use strict';
 
+const { isShortWorkflowType } = require('./short-workflow-types');
+
 const POLICIES = Object.freeze({
   long_startup: required(3600, true),
   short_startup: required(3000, true),
@@ -39,6 +41,16 @@ const SHORT_STAGE_CONTEXT_ONLY = new Set([
   'final_check',
 ]);
 
+const SHORT_NO_MEMORY_STAGES = new Set([
+  'startup_scan',
+  'startup_menu',
+  'freshness_window',
+  'info_source_pool',
+  'info_source_selection',
+  'material_learning',
+  'project_seed',
+]);
+
 function required(tokenBudget, acceptsUpdates) {
   return Object.freeze({ mode: 'required', token_budget: tokenBudget, accepts_memory_updates: acceptsUpdates });
 }
@@ -54,7 +66,10 @@ function none(reason = '') {
 function resolveWorkflowMemoryPolicy(workflowType, stageId = '') {
   const type = String(workflowType || '');
   const stage = String(stageId || '');
-  if (['short_write', 'short_startup', 'private_short_startup'].includes(type) && SHORT_STAGE_CONTEXT_ONLY.has(stage)) {
+  if (isShortWorkflowType(type) && SHORT_NO_MEMORY_STAGES.has(stage)) {
+    return none('short_preflight_or_discovery_uses_direct_source_evidence');
+  }
+  if (isShortWorkflowType(type) && SHORT_STAGE_CONTEXT_ONLY.has(stage)) {
     return none('current_story_snapshot_in_stage_context_packet');
   }
   const policy = POLICIES[type];
@@ -109,6 +124,7 @@ function resolveMemoryContractPolicy(contract) {
 module.exports = {
   POLICIES,
   SHORT_STAGE_CONTEXT_ONLY,
+  SHORT_NO_MEMORY_STAGES,
   resolveExecutionMemoryPolicy,
   resolveMemoryContractPolicy,
   resolveStageMemoryPolicy,

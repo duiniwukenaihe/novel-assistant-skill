@@ -171,6 +171,16 @@ metadata:
    - 对话贴文本模式：确认 `原文.md` 文件非空（>0 bytes）
 5. 此步骤确保即使拆文过程中出现异常，原始材料不会丢失
 
+#### 来源制品复用
+
+原文备份完成后，只摄取一次，不要在后续阶段反复读取或重新复制同一来源：
+
+```bash
+node scripts/source-ingest.js --project-root . --task-dir "<当前任务目录>" --source "<项目内原文相对路径>" --json
+```
+
+把返回的 `source_id`、`source_digest`、`artifact_path` 写入当前阶段 result packet。Stage 0.5 及后续阶段只读取 `artifact_path`；内容未变时复用已有制品。内容变化时以稳定 `source_id` 识别同一来源、以新 `source_digest` 建立局部新版本，只刷新依赖该来源的阶段，不得把整个 Workflow 或 Memory 判为过期。仅在制品缺失、证据不足或用户明确要求刷新时重新摄取。
+
 ### 输出目录结构
 
 ```

@@ -67,6 +67,8 @@ function buildContextPack(projectDir, options) {
   ].filter(Boolean).join('\n');
   const characterFiles = findRelevantNamedFiles(projectDir, path.join('设定', '角色'), combinedForCharacters);
   const invariantFiles = findRelevantNamedFiles(projectDir, path.join('设定', '角色不变量'), combinedForCharacters);
+  const activeCast = readProjectJson(projectDir, path.join('追踪', 'memory', 'active-cast.json'));
+  const activeCastCharacters = selectRelevantActiveCast(activeCast.data, combinedForCharacters);
 
   const sourceFiles = {
     outline: rel(outline),
@@ -79,6 +81,7 @@ function buildContextPack(projectDir, options) {
     foreshadow: tracking.foreshadow.relPath,
     timeline: tracking.timeline.relPath,
     characterState: tracking.characterState.relPath,
+    activeCast: activeCast.relPath,
     characterFiles: characterFiles.map(file => file.relPath),
     characterInvariantFiles: invariantFiles.map(file => file.relPath),
   };
@@ -115,6 +118,7 @@ function buildContextPack(projectDir, options) {
   ]).slice(0, 30);
   const characterState = unique([
     ...keywordLines(tracking.characterState.text, characterFiles.map(file => file.name)),
+    ...activeCastCharacters.map(compactActiveCastCharacter),
     ...characterFiles.flatMap(file => [`${file.name}: ${compactText(file.text, 300)}`]),
     ...invariantFiles.flatMap(file => `${file.name}不变量: ${compactText(file.text, 240)}`),
   ]).slice(0, 30);
@@ -230,6 +234,44 @@ function readProjectFile(projectDir, relPath) {
   const absPath = path.join(projectDir, relPath);
   if (!fs.existsSync(absPath)) return { relPath: null, absPath, text: '' };
   return { relPath, absPath, text: readText(absPath) };
+}
+
+function readProjectJson(projectDir, relPath) {
+  const absPath = path.join(projectDir, relPath);
+  if (!fs.existsSync(absPath)) return { relPath: null, absPath, data: null };
+  try {
+    return { relPath, absPath, data: JSON.parse(readText(absPath)) };
+  } catch (_) {
+    return { relPath, absPath, data: null };
+  }
+}
+
+function selectRelevantActiveCast(activeCast, sourceText) {
+  if (!activeCast || typeof activeCast !== 'object' || !activeCast.characters || typeof activeCast.characters !== 'object') return [];
+  const query = String(sourceText || '');
+  const present = Array.isArray(activeCast.presentCharacters) ? activeCast.presentCharacters.map(String) : [];
+  return Object.entries(activeCast.characters)
+    .filter(([name, character]) => {
+      const aliases = Array.isArray((character || {}).aliases) ? character.aliases.map(String) : [];
+      return query.includes(name)
+        || present.includes(name)
+        || aliases.some(alias => alias && (query.includes(alias) || present.includes(alias)));
+    })
+    .slice(0, 12)
+    .map(([name, character]) => ({ name, ...(character || {}) }));
+}
+
+function compactActiveCastCharacter(character) {
+  const details = [
+    character.role,
+    character.identity,
+    character.goal,
+    character.fear_or_stake,
+    character.flaw_or_misbelief,
+    character.capability_boundary,
+    character.change_arc,
+  ].map(value => String(value || '').trim()).filter(Boolean);
+  return `${character.name}: ${details.join('；')}`.slice(0, 360);
 }
 
 function walkFiles(baseDir, relDir, onFile) {

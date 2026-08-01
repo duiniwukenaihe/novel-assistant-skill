@@ -105,6 +105,68 @@ if (out.state_conflicts.length !== 0 || out.authority_metadata_changes.length !=
 NODE
 }
 
+@test "migration rewrites stale absolute task_dir paths from a moved project into relative ones" {
+    # Simulate a project that was relocated on disk: the task snapshot still
+    # records an absolute task_dir that pointed at the *old* project location.
+    # Migration must normalize it back to a path relative to the new project root.
+    mkdir -p "$BOOK/追踪/workflow/tasks/wf-moved"
+    cat > "$BOOK/追踪/workflow/tasks/wf-moved/task.json" <<JSON
+{"workflow_id":"wf-moved","workflow_type":"review_repair","status":"running","scope":"第1章","user_goal":"审阅第1章","task_dir":"/old/project/root/追踪/workflow/tasks/wf-moved","lifecycle":{"status":"active"}}
+JSON
+    cat > "$BOOK/追踪/workflow/current-task.json" <<JSON
+{"workflow_id":"wf-moved","workflow_type":"review_repair","status":"running","scope":"第1章","user_goal":"审阅第1章","task_dir":"/old/project/root/追踪/workflow/tasks/wf-moved","lifecycle":{"status":"active"}}
+JSON
+
+    node "$SCRIPT" --project-root "$BOOK" --source novel-assistant --write --confirm --json > "$TMP_DIR/applied.json"
+
+    node - "$BOOK" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const root = process.argv[2];
+const expectedDir = '追踪/workflow/tasks/wf-moved';
+const task = JSON.parse(fs.readFileSync(path.join(root, expectedDir, 'task.json'), 'utf8'));
+const pointer = JSON.parse(fs.readFileSync(path.join(root, '追踪/workflow/current-task.json'), 'utf8'));
+if (task.task_dir !== expectedDir) throw new Error(`task.task_dir should be relative, got: ${task.task_dir}`);
+if (pointer.task_dir !== expectedDir) throw new Error(`pointer.task_dir should be relative, got: ${pointer.task_dir}`);
+if (task.authority_metadata && task.authority_metadata.durable_task_path !== expectedDir + '/task.json') {
+  throw new Error(`durable_task_path should be relative, got: ${task.authority_metadata.durable_task_path}`);
+}
+// No path field anywhere should still carry the stale absolute prefix.
+const dump = JSON.stringify({ task, pointer });
+if (dump.includes('/old/project/root/')) throw new Error('stale absolute path leaked into migrated record');
+NODE
+}
+
+@test "migration is idempotent: a second run on a current project returns migration_current without rewriting" {
+    write_lineage_tasks
+
+    node "$SCRIPT" --project-root "$BOOK" --source novel-assistant --write --confirm --json > "$TMP_DIR/first.json"
+
+    # snapshot the durable task file so we can prove the second run did not rewrite it
+    task_file="$BOOK/追踪/workflow/tasks/wf-old-b/task.json"
+    snapshot="$(shasum -a 256 "$task_file" | awk '{print $1}')"
+
+    run node "$SCRIPT" --project-root "$BOOK" --source novel-assistant --write --confirm --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status": "task_family_migration_current"'* ]]
+
+    node - "$output" <<'NODE'
+const out = JSON.parse(process.argv[2]);
+if (out.migrated_task_count !== undefined && out.migrated_task_count !== 0) {
+  throw new Error(`second run must not report migrated tasks, got: ${out.migrated_task_count}`);
+}
+if (out.candidate_task_count !== 0 && out.pending_task_count !== 0) {
+  // either signal is acceptable; the key invariant is status and no work done
+  if (out.migrated_workflow_ids && out.migrated_workflow_ids.length) {
+    throw new Error(`second run must not list migrated workflow ids: ${JSON.stringify(out.migrated_workflow_ids)}`);
+  }
+}
+NODE
+
+    after="$(shasum -a 256 "$task_file" | awk '{print $1}')"
+    [ "$snapshot" = "$after" ]
+}
+
 @test "migration blocks divergent workflow execution state before overwriting either copy" {
     cat > "$BOOK/追踪/workflow/tasks/wf-old-a/task.json" <<'JSON'
 {"workflow_id":"wf-old-a","workflow_type":"review_repair","status":"running","scope":"1-200章","user_goal":"审阅 1-200 章","task_dir":"追踪/workflow/tasks/wf-old-a","current_stage":"evidence_scan","machine":{"completed_stages":["range_lock"]},"stage_execution":{"status":"running","batch_id":"002","expected_result_packet":"batch-002.json"},"review_batches":{"completed_count":1}}

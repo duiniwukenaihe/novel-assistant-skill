@@ -96,6 +96,9 @@ const status = failCount > 0 ? 'fail' : warnCount > 0 ? 'warn' : 'pass';
 const result = {
   schemaVersion: '1.0.0',
   status,
+  verification_level: 'L1_contract_static',
+  production_readiness_claim: false,
+  remaining_verification: ['L2_deterministic_behavior', 'L3_real_host_behavior', 'L4_public_release'],
   repoRoot,
   checks,
   findings: checks.filter((check) => check.status !== 'pass'),

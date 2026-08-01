@@ -10,6 +10,14 @@ setup() {
     mkdir -p "$PROJECT"
 }
 
+@test "runner compact presentation preserves the atomic stage completion contract" {
+    grep -q "stage_completion_command: String(execution.stage_completion_command" "$RUNNER"
+    grep -q "current_required_action: String(execution.current_required_action" "$RUNNER"
+    grep -q "after_write_action: execution.after_write_action" "$RUNNER"
+    grep -q "completion_required_before_reply: execution.completion_required_before_reply === true" "$RUNNER"
+    grep -q "response.render_mode !== 'silent_resume'" "$RUNNER"
+}
+
 teardown() {
     rm -rf "$TMP_DIR"
 }
@@ -48,6 +56,17 @@ NODE
 
     grep -q '"status": "dry_run"' "$TMP_DIR/out.json"
     grep -q '"adapter": "fake"' "$TMP_DIR/out.json"
+    node - "$TMP_DIR/out.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.host_execution_mode !== 'managed_runner') throw new Error(JSON.stringify(out));
+if (out.execution_boundary?.visible_execution_mode !== '托管运行') throw new Error(JSON.stringify(out.execution_boundary));
+const caps = out.execution_boundary?.capabilities || {};
+if (caps.stream_abort || caps.process_liveness || caps.exact_usage) throw new Error(JSON.stringify(caps));
+for (const key of ['streaming_control', 'unattended']) {
+  if (Object.prototype.hasOwnProperty.call(caps, key)) throw new Error(JSON.stringify(caps));
+}
+NODE
     test ! -e "$PROJECT/fake-host-invocations.log"
     test -z "$(find "$PROJECT/追踪/workflow/tasks" -path '*runner-packets*' -type f -print)"
 }
@@ -116,7 +135,12 @@ NODE
     runner_packet="$(find "$PROJECT/追踪/workflow/tasks" -path '*runner-packets*' -name '*.run.json' | head -1)"
     grep -q '"owner_module": "private-short-extension"' "$runner_packet"
     grep -q '"task_state": "追踪/workflow/tasks/' "$runner_packet"
-    grep -q '"packet_mode": "task_immutable"' "$runner_packet"
+    grep -q '"stage_context_packet": null' "$runner_packet"
+    test -n "$(find "$PROJECT/追踪/workflow/tasks" -path '*runner-output*' -name '*.stdout.log' -type f -print -quit)"
+    output_summary="$(find "$PROJECT/追踪/workflow/tasks" -path '*runner-output*' -name '*.summary.json' -type f -print -quit)"
+    test -n "$output_summary"
+    grep -q '"raw_chars"' "$output_summary"
+    grep -q '"compression_ratio"' "$output_summary"
     grep -q '"workflow_id"' "$PROJECT/追踪/workflow/token-cost-ledger.jsonl"
     grep -q '"status": "summary"' "$PROJECT/追踪/workflow/token-cost-summary.json"
     node - "$PROJECT" <<'NODE'
@@ -125,6 +149,7 @@ const root = process.argv[2];
 const event = JSON.parse(fs.readFileSync(`${root}/追踪/workflow/token-cost-ledger.jsonl`, 'utf8').trim());
 const summary = JSON.parse(fs.readFileSync(`${root}/追踪/workflow/token-cost-summary.json`, 'utf8'));
     if (event.token_source !== 'estimated' || event.estimated_tokens <= 0) throw new Error(JSON.stringify(event));
+    if (typeof event.raw_output_chars !== 'number' || typeof event.compacted_output_chars !== 'number') throw new Error(JSON.stringify(event));
     if (summary.estimated.events !== 1 || summary.unavailable.events !== 0) throw new Error(JSON.stringify(summary));
 NODE
     node "$STATE" inspect --project-root "$PROJECT" --json > "$TMP_DIR/inspect.json"
@@ -132,7 +157,10 @@ NODE
 const fs = require('fs');
 const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (out.task.machine.completed_stages.length !== 1) throw new Error(JSON.stringify(out.task.machine));
-if (out.task.stage_execution && out.task.stage_execution.status === 'running') throw new Error('stage still running');
+if (out.task.stage_execution && out.task.stage_execution.status === 'running'
+  && out.task.machine.completed_stages.includes(out.task.stage_execution.stage_id)) {
+  throw new Error('completed stage is still running');
+}
 NODE
 }
 
@@ -187,6 +215,7 @@ assert.equal(authority.readFocusedTask(root).pointer.workflow_id, taskB.workflow
 const result = {
   workflow_id: taskA.workflow_id,
   workflow_type: taskA.workflow_type,
+  owner_module: taskA.workflow_registry.owner_module,
   stage_id: taskA.current_stage,
   step_id: taskA.current_stage,
   step_status: 'completed',
@@ -537,10 +566,9 @@ NODE
 
     node "$RUNNER" run --project-root "$PROJECT" --adapter fake --fake-executable "$FAKE" --fake-mode success --max-stages 8 --json > "$TMP_DIR/out.json"
 
-    grep -q '"status": "needs_confirmation"' "$TMP_DIR/out.json"
-    grep -q '"target_stage": "generation_confirmation"' "$TMP_DIR/out.json"
-    [ "$(wc -l < "$PROJECT/fake-host-invocations.log" | tr -d ' ')" -eq 3 ]
-    ! grep -q 'generate_cover' "$PROJECT/fake-host-invocations.log"
+    grep -q '"status": "needs_selection"' "$TMP_DIR/out.json"
+    grep -q '"target_stage": "cover_preflight"' "$TMP_DIR/out.json"
+    test ! -e "$PROJECT/fake-host-invocations.log"
 }
 
 @test "runner retries model degradation once then preserves the checkpoint" {
@@ -594,14 +622,16 @@ NODE
     grep -q '"stop_reason": "idle_timeout"' "$TMP_DIR/out.json"
 }
 
-@test "runner run advances safe stages until the configured stage limit" {
+@test "runner run stops for user choice before the configured stage limit" {
     create_started_task
 
     node "$RUNNER" run --project-root "$PROJECT" --adapter fake --fake-executable "$FAKE" --fake-mode success --max-stages 2 --json > "$TMP_DIR/out.json"
 
-    grep -q '"status": "stage_limit"' "$TMP_DIR/out.json"
-    grep -q '"stage_count": 2' "$TMP_DIR/out.json"
-    [ "$(wc -l < "$PROJECT/fake-host-invocations.log" | tr -d ' ')" -eq 2 ]
+    grep -q '"status": "needs_confirmation"' "$TMP_DIR/out.json"
+    grep -q '"stage_count": 1' "$TMP_DIR/out.json"
+    grep -q '"target_stage": "startup_menu"' "$TMP_DIR/out.json"
+    ! grep -q '"description"' "$TMP_DIR/out.json"
+    [ "$(wc -l < "$PROJECT/fake-host-invocations.log" | tr -d ' ')" -eq 1 ]
 }
 
 @test "runner executes a high-risk stage only after the state machine records user confirmation" {

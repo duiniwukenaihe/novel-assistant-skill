@@ -31,7 +31,19 @@ JSON
     [[ "$output" == *'blocked_canonical_transaction_required'* ]]
 }
 
-@test "legacy mode permits a direct canonical write check" {
+@test "missing policy on an existing story requires explicit migration" {
+    run node "$SCRIPT" check --project-root "$BOOK" --target "正文/第1卷/第001章.md" --json
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'blocked_write_policy_migration_required'* ]]
+    [[ "$output" == *'book-write-policy-migrate.js preview'* ]]
+}
+
+@test "explicit legacy mode permits a direct canonical write check" {
+    cat > "$BOOK/追踪/story-system/write-policy.json" <<'JSON'
+{"schemaVersion":"1.0.0","mode":"legacy"}
+JSON
+
     run node "$SCRIPT" check --project-root "$BOOK" --target "正文/第1卷/第001章.md" --json
 
     [ "$status" -eq 0 ]

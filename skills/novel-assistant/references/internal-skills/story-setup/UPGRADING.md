@@ -55,7 +55,8 @@
 - `agents_version: 15` → 旧版，需重新部署以获取 OpenCode / OpenClaw 资产、单入口 commands 和 OpenCode 写正文守卫
 - `agents_version: 16` → 旧版，需重新部署以获取用户个人风格学习 agent 与风格画像加载链路
 - `agents_version: 17` → 旧版，需重新部署以获取章节定位/张弛参考、`check-degeneration.js` 正文退化检测器和 `check-ai-patterns.js` 新增标点/碎句号检测
-- `agents_version: 18` → 当前版本
+- `agents_version: 18` → 旧版，需重新部署以获取专业读者盲读 Agent 与读者证据合同
+- `agents_version: 19` → 当前版本
 
 ## 版本变更
 
@@ -195,7 +196,7 @@
 - **narrative-writer 边界更新**：用户硬约束优先于对标文风和模型默认写法，但不得突破正文门禁、AI味门禁、Chapter Contract、平台/安全约束和字数下限；用户软偏好只调节节奏、句法、口吻和禁用表达。
 - 已部署项目请重新运行 `/novel-assistant 准备写书` 刷新 hooks/agents/references/scripts/OpenCode 资产；部署后新开会话，让 `style-learner` 注册为可用 custom agent。
 
-### v18 (当前)
+### v18
 
 - `setup_skill_version` 升级到 `1.4.5`，`.story-deployed` 的 `agents_version` 保持 `18`。本版新增 workflow 确定性恢复、状态不变量、范围审阅批次和旧项目记忆迁移运行时脚本。
 - **正文退化检测器**：新增 `check-degeneration.js`，用于正文/章节级检测逐字复读、截断、占位拒绝语、工程词泄露（如“细纲/情节点/下一章/任务描述”）。它不改写正文，只报告证据；命中 blocking 后必须重写受影响段落或章节。
@@ -209,3 +210,11 @@
 - **provider/model profile 边界**：skill 不管理 API key、base URL、provider 登录态或计费配置；Claude Code / Codex / OpenCode 或前端 runner 负责模型与供应商配置。workflow 只记录宿主模型能力画像，用于任务分批、模型等级选择、失败恢复和成本治理。
 - **流程候选语义**：`只执行本项 / 继续后续阶段 / 完成整个流程` 必须显式写清完成后还剩哪些阶段，并把 `remaining_stages` 写入 workflow 状态，避免用户误以为选了单项后全流程已完成。
 - 这些改动属于 skill/workflow 文档和 bundle 内部契约；如果项目 `.story-deployed` 已是 agents v18，通常不需要因本条单独迁移正文、大纲、细纲或书目结构。只有安装包更新后检测到 setup 资产实际变化时，才提示 `/novel-assistant 更新写作协作环境`。
+
+### v19（当前）
+
+- `setup_skill_version` 升级到 `1.4.6`，`.story-deployed` 的 `agents_version` 升级到 `19`。
+- **专业读者 Agent**：新增只读 `professional-reader`。它先于总编辑盲读全文，按目标平台、题材和阅读场景记录逐节投入度、掉线点、人物印象、标题期待与终读余味，不读大纲替正文辩护，也不直接给改稿方案。
+- **审阅证据分层**：用户聊天原文、专业读者报告、编辑判断、候选修订方案和用户确认方案分别保存。读者报告只进入当前审阅任务 artifacts/result packet；只有用户确认后的修订方案才能投影到 workflow memory、设定、大纲、Brief 与回炉队列。
+- **成本边界**：完整短篇、里程碑、整卷或全书审阅默认运行一个专业读者；小节/章节日常门禁仅在留存、人物可信度或标题兑现出现风险时调用。需要对照读者时优先在同一 Agent 输出中增加一个对照镜头，不默认并发多个读者 Agent。
+- 已部署项目需运行 `/novel-assistant 更新写作协作环境` 刷新 Claude Code、Codex/OpenCode Agent 资产；Claude Code 更新后需新开会话注册 `professional-reader`。

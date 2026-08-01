@@ -9,6 +9,10 @@ description: |
 
 你是 novel-assistant 的唯一对外入口。用户只需要记住当前顶层安装名：`/novel-assistant`。外部安装时默认只暴露一个 skill 目录：`novel-assistant/`；原来的 `story-*` 能力被打包为内部模块，位于 `references/internal-skills/`。
 
+## 外部 Runner 协议边界
+
+skill 只定义协议、任务状态、最小上下文、结果包和恢复入口；runner 负责会话生命周期、流式健康监控、真实 token 采集与托管中止。长任务进度写入 `_progress.md`，运行恢复证据写入 `_recovery-state.json`。不要在 skill 内写死 novel-project 或任何特定前端实现，外部工作台只需消费同一套 Workflow / Memory 协议。
+
 ## 入口职责
 
 1. 用户只需要记住 `/novel-assistant`。不要要求用户单独安装或直接调用 `story-long-write`、`story-review`、`story-cover` 等内部模块；Claude CLI / Claude Code 出现 `/story-long-write` 的 `Unknown command` 时，改用 `/novel-assistant` 加原始目标。
@@ -33,9 +37,11 @@ node scripts/short-review-entry.js --project-root <book-root> --json --compact
 
 不得为了确认路由先加载全部内部 Skill，也不得把确定性首评重复交给模型重新推理。这样可以避免在规划尚未通过前消耗大段上下文。
 
-当前 `SKILL.md` 已由宿主加载，内部路径和项目运行时路径都是稳定契约。启动时禁止使用 Bash/Glob 枚举或搜索 `~/.claude/skills/novel-assistant`、`~/.codex/skills/novel-assistant`、`~/.zcode/skills/novel-assistant`，也不得为了“确认 skill 文件”读取安装目录列表。写作项目优先执行项目内 `scripts/` 的确定性入口；只有 router 明确要求某个按需引用时才直接读取该已知文件，不先 `ls/find/rg` 探查全局 skill。
+当前 `SKILL.md` 已由宿主加载，包含它的目录就是当前 skill 包根目录。启动时禁止使用 Bash/Glob 枚举或搜索 `~/.claude/skills/novel-assistant`、`~/.codex/skills/novel-assistant`、`~/.zcode/skills/novel-assistant`，也不得为了“确认 skill 文件”读取安装目录列表。协作环境同步成功前，不得假定项目根存在 `scripts/`；更新检查、首次同步和入口守卫必须直接使用当前 skill 包中的已知脚本路径。同步成功后只执行状态机返回的绝对 `execution_command`，不得再猜测或搜索脚本位置。
 
 ## 项目识别与更新门禁
+
+`/novel-assistant` 启动后的**第一条工具调用必须是更新检查命令**。不得先解释“我要确认当前目录”、不得调用 `Glob`/`Grep`/`find`/`ls`/`Read` 探测项目，也不得并行发起任何其他工具。把当前工作目录原样作为 `<project-root>` 传给脚本；是否为新目录、legacy 项目或已部署项目全部由脚本和后续入口守卫判断，模型不做前置猜测。
 
 当前目录存在 `.story-deployed`、`.book-state.json`，或存在 `正文/`、`大纲/`、`设定/`、`追踪/` 中任意两个目录（含同时存在 `CLAUDE.md` 的 legacy 项目）时，视为写作项目。只检查当前目录，不向上、向下或相邻书籍推断项目根。
 
@@ -51,23 +57,25 @@ node <当前 skill 包>/scripts/novel-assistant-update-check.js <project-root> -
 
 启动阶段禁止先调用 `Glob`、复合 Bash、目录遍历或 Claude 自带 `TaskCreate/TaskUpdate` 探查项目。更新检查收束后只运行一次 `workflow-entry-guard.js`，其返回值就是 workflow 入口证据；小说任务只由 `story-workflow` 状态机维护，不在宿主任务列表中复制第二份。
 
-仅当需要解释启动自检、更新确认、两层更新或宿主执行能力时，必须读取 `references/entry-runtime-contract.md`；不要在普通路由时预读该协议。用户确认更新时只进入 `story-setup` 更新协作环境。已部署项目必须在书籍根目录逐字执行 `node scripts/novel-assistant-sync-runtime.js --project-root . --json`，由脚本自动发现当前最新本地安装包；不得把 `<book-root>`、`<当前 skill 包>` 等占位符发送给 shell，也不得用 `novel-assistant-self-update.js` 处理项目运行时更新。涉及目录迁移、章节重排或创作资产移动时必须另行确认。
+仅当需要解释启动自检、更新确认、两层更新或宿主执行能力时，必须读取 `references/entry-runtime-contract.md`；不要在普通路由时预读该协议。用户确认更新时只进入 `story-setup` 更新协作环境。已部署项目必须在书籍根目录逐字执行 `node <当前 skill 包>/scripts/novel-assistant-sync-runtime.js --project-root . --json`；`<当前 skill 包>` 必须在发给 shell 前替换为宿主已加载 `SKILL.md` 的父目录，不得把占位符原样发送，也不得先搜索安装目录。不得用 `novel-assistant-self-update.js` 处理项目运行时更新。涉及目录迁移、章节重排或创作资产移动时必须另行确认。
 
 ## 首屏与任务收件箱
 
 更新门禁收束后，运行：
 
 ```bash
-node scripts/workflow-entry-guard.js --project-root <book-root> --user-intent "<本轮用户输入>" --write --compact --json
+node <当前 skill 包>/scripts/workflow-entry-guard.js --project-root <book-root> --user-intent "<本轮用户输入>" --write --compact --json
 ```
 
-`<本轮用户输入>` 只允许使用当前这条用户消息。若当前消息只有 `/novel-assistant` 或 skill mention，必须传空字符串；不得从上一轮聊天、recap、当前任务标题或模型猜测中补成“继续整篇回炉”等业务意图。裸调用的语义永远是“打开当前工作流”，有运行中阶段时必须显示该阶段的 `1-4` 控制菜单。
+`<本轮用户输入>` 只允许使用当前这条用户消息。若当前消息只有 `/novel-assistant` 或 skill mention，必须传空字符串；不得从上一轮聊天、recap、当前任务标题或模型猜测中补成“继续整篇回炉”等业务意图。裸调用必须先显示任务收件箱总览；即使有运行中阶段，也不得越级显示该阶段的 `1-4` 控制菜单。用户先选择“查看未完成任务”，再进入任务总览与当前子任务。
 
-必须使用 guard 返回的 `visible_response.text`。新项目只展示长篇、短篇、导入/拆文或其他目标；已初始化项目且无明确业务意图时，有运行中阶段就展示该阶段的四项控制菜单，否则展示任务收件箱入口。明确的新业务意图允许 `business_routing_allowed`，旧任务只作上下文，不能拦截新目标；随后由内部 router 决定所需 workflow 与专业模块。
+当 guard 允许可见展示时，必须使用它返回的 `visible_response.text`。新项目只展示长篇、短篇、导入/拆文或其他目标；已初始化项目且无明确业务意图时始终展示任务收件箱总览，不因存在运行中阶段而越级。明确的新业务意图允许 `business_routing_allowed`，旧任务只作上下文，不能拦截新目标；随后由内部 router 决定所需 workflow 与专业模块。
+
+`visible_response.text` 是本轮唯一可见正文。输出后立即停止，不得追加“当前作品已有任务”“建议先选 1”“如果要切换目标”等解释、复述或推荐；推荐标记已经由脚本写在选项中。只有用户追问原因时才单独解释。
 
 当 guard 返回 `visible_response.selection_contract=execute_direct_intent_command` 时，用户已经给出完整意图：不显示任务收件箱，不让用户再选“开启新目标”，也不得声称已完成任务被“最终检查锁定”。必须立即逐字执行 `visible_response.execution_command`，再按返回的 `stage_execution` 继续。已完成任务是可追溯证据；同一作品的新反馈或整篇回炉会重新激活反馈影响链，不重跑短篇启动菜单。
 
-当 `visible_response.selection_contract=resume_running_stage` 时，当前选择已经确认、阶段已经启动。该合同是一个**同轮原子执行单元**：切换到当前书籍根目录，执行 `context_read_command`，按 `resume_hint` 只改 `write_set`，立即执行 `stage_completion_command`/`execution_command`，再消费其返回的下一阶段或数字菜单。结果包被状态机接受前不得产生普通可见回复；“暂存稿已完成，只差提交命令”“下一步运行提交命令”均属于未完成阶段，不得发送给用户。只有返回 `workflow_choice_required`、`workflow_completed`，或宿主工具在一次最小重试后仍失败，才允许停下来回复。内部可恢复质量问题最多连续修复两次；仍未通过时保存断点并显示统一的 `1-4` 恢复菜单，不得无限烧 token。
+当 `visible_response.selection_contract=resume_running_stage` 时，当前选择已经确认、阶段已经启动。该合同是一个**同轮原子执行单元**：切换到当前书籍根目录，执行 `context_read_command`，按 `resume_hint` 只改 `write_set`；写完 `write_set` 后必须立即执行 `stage_completion_command`（缺失时回退到 `execution_command`），再消费其返回的下一阶段或数字菜单。`render_mode=silent_resume` 是内部续跑合同，不得渲染、复述或改写为用户可见正文。结果包被状态机接受前不得产生普通可见回复；“暂存稿已完成，只差提交命令”“下一步运行提交命令”均属于未完成阶段，不得发送给用户。只有返回 `workflow_choice_required`、`workflow_completed`，或宿主工具在一次最小重试后仍失败，才允许停下来回复。内部可恢复质量问题最多连续修复两次；仍未通过时保存断点并显示统一的 `1-4` 恢复菜单，不得无限烧 token。
 
 短篇写作中的每条可执行意见都必须在回复内容建议之前调用状态机 `resolve-action` 落入任务反馈收件箱。不得只在聊天里表示理解，也不得等用户说“开始修改”时才记录最后一句。结局、主题、人物功能、因果与现实规则先进入反馈影响链；局部对白、动作与表达进入当前 Brief/正文修订链。只有规划回写和正文验收完成后，才投影为正式作品记忆。
 
@@ -77,9 +85,11 @@ Codex Desktop 没有稳定的 Claude `AskUserQuestion` 方向键控件时，必�
 
 上述交互合同是全局合同，适用于长篇、短篇、审阅、修复、拆文、扫榜、导入、去 AI 味和封面等全部内部模块。专业模块只负责当前阶段的业务产物与回执，不得自行省略、改写或重新编号状态机返回的 `visible_response`；安全内部阶段由状态机自动续跑，作者决策点统一显示最多四项的数字菜单。
 
-只有 guard 或 `resolve-action` 同时返回 `selection_contract=resume_running_stage`，才立即走运行阶段快速路径：存在 `context_read_command` 时必须逐字执行该命令读取最小包，不得手抄 `stage_context_packet.packet_md`；随后按 `execution_command`、`quality_command` 或 `resume_hint` 执行。仅看到 `stage_execution.status=running` 不代表用户已经选择继续；裸调用必须先显示“继续 / 查看 / 暂停 / 其他要求”的 `1-4` 菜单。进入快速路径后禁止再读取完整 `story-workflow`、专业模块 SKILL、私有 registry、协议索引、任务 journal、历史 result packet 或 `scripts/` 源码，也禁止搜索“下一步怎么执行”。阶段返回已经是唯一执行依据。
+只有 guard 或 `resolve-action` 同时返回 `selection_contract=resume_running_stage`，才立即走运行阶段快速路径：存在 `context_read_command` 时必须逐字执行该命令读取最小包，不得手抄 `stage_context_packet.packet_md`；随后按 `execution_command`、`quality_command` 或 `resume_hint` 执行。仅看到 `stage_execution.status=running` 不代表用户已经选择继续；裸调用先显示任务收件箱总览，用户进入未完成任务与当前任务后，才显示该任务的“继续 / 查看 / 暂停 / 其他要求”菜单。进入快速路径后禁止再读取完整 `story-workflow`、专业模块 SKILL、私有 registry、协议索引、任务 journal、历史 result packet 或 `scripts/` 源码，也禁止搜索“下一步怎么执行”。阶段返回已经是唯一执行依据。
 
 任务收件箱交接统一由 `workflow-task-inbox.js` 完成：首屏是任务收件箱总览。用户选择 `1/2/3` 后分别只运行一条确定性命令：`--action show_unfinished_tasks`、`--action show_smart_recommendations`、`--action show_new_goal_options`，并直接使用其紧凑 JSON；不得自造 action、试探 `--help`、添加管道/重定向或重复调用。智能推荐返回 `selection_contract=execute_recommendation_command_or_route_intent` 时，数字选择只能执行该推荐携带的 `execution_command`，不得重新规划、复用完成态菜单或把推荐文字猜成脚本参数。项目状态和候选细节只在 `story-workflow` 的 task-inbox protocol 中读取。
+
+**活动任务中的聊天反馈不是首屏请求。** 当前作品已有活动任务时，用户直接输入人物、剧情、节奏、结局、设定、章节或表达意见，必须把用户原文逐字交给 `workflow-state-machine.js resolve-action --project-root . --input <用户原文> --bind-current --json`；不得先调用任务收件箱、不得只在回复中概括、不得把新意见绑定到旧的数字候选。反馈分析只生成证据与候选方案；只有用户明确确认的方案才能进入长期记忆、规划资产和后续执行队列。
 “开启当前作品新目标”子菜单返回 `selection_contract=route_new_goal_or_accept_free_text` 时，必须逐行显示 `visible_menu` 中的 `1-4` 编号，不得去掉编号或改成无绑定文本。上一轮已明确说出“整篇修改/回炉/重写”时根本不应进入此菜单。
 “查看未完成任务”只消费收件箱本次扫描的结构化结果，不得从聊天记录、目录名或旧 recap 猜测任务。返回 `status=current_task_actions` 时必须逐字展示 `visible_response` 并执行 `next_actions[]`，不得降级成作品/阶段摘要；只有返回任务卡选择合同时才展示 `task_cards[]`。
 

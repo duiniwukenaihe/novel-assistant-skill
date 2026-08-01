@@ -103,7 +103,7 @@ async function executeOneStage(root, options) {
         status: 'needs_confirmation',
         project_root: root,
         target_stage: next.target_stage || task.current_stage || '',
-        options: candidates,
+        options: compactMenuOptionsForRunner(candidates),
       };
     }
     if (continueCandidates.length !== 1) {
@@ -111,7 +111,7 @@ async function executeOneStage(root, options) {
         status: 'needs_selection',
         project_root: root,
         target_stage: next.target_stage || task.current_stage || '',
-        options: candidates,
+        options: compactMenuOptionsForRunner(candidates),
       };
     }
     const pending = next.pending_action || {};
@@ -360,10 +360,10 @@ function appliedResult(root, task, execution, apply, reusedExistingResult, attem
     next_status: apply.status,
     next_stage: apply.next_stage || '',
     memory_projection: memoryProjection,
-    stage_execution: apply.stage_execution || null,
-    pending_action: apply.pending_action || null,
-    next_candidates: Array.isArray(apply.next_candidates) ? apply.next_candidates : [],
-    visible_response: apply.visible_response || null,
+    stage_execution: compactStageExecutionForRunner(apply.stage_execution || null),
+    pending_action: compactPendingActionForRunner(apply.pending_action || null),
+    next_candidates: compactMenuOptionsForRunner(Array.isArray(apply.next_candidates) ? apply.next_candidates : []),
+    visible_response: compactVisibleResponseForRunner(apply.visible_response || null),
     interaction_contract: String(apply.interaction_contract || ''),
   };
 }
@@ -383,6 +383,60 @@ function runState(command, root, extra = []) {
   }
   if (result.error) parsed.runner_error = result.error.message;
   return parsed;
+}
+
+function compactStageExecutionForRunner(execution) {
+  if (!execution || typeof execution !== 'object') return null;
+  return {
+    status: String(execution.status || ''),
+    stage_id: String(execution.stage_id || ''),
+    step_id: String(execution.step_id || ''),
+    stage_attempt_id: String(execution.stage_attempt_id || ''),
+    expected_result_packet: String(execution.expected_result_packet || ''),
+    execution_command: String(execution.execution_command || ''),
+    stage_completion_command: String(execution.stage_completion_command || ''),
+    current_required_action: String(execution.current_required_action || ''),
+    after_write_action: execution.after_write_action && typeof execution.after_write_action === 'object'
+      ? execution.after_write_action
+      : null,
+    completion_required_before_reply: execution.completion_required_before_reply === true,
+    context_read_command: String(execution.context_read_command || ''),
+    resume_hint: String(execution.resume_hint || ''),
+  };
+}
+
+function compactPendingActionForRunner(pending) {
+  if (!pending || typeof pending !== 'object') return null;
+  return {
+    id: String(pending.id || pending.pending_action_id || ''),
+    question: String(pending.question || ''),
+    options: compactMenuOptionsForRunner(Array.isArray(pending.options) ? pending.options : []),
+    free_text_enabled: pending.free_text_enabled !== false,
+  };
+}
+
+function compactVisibleResponseForRunner(visible) {
+  if (!visible || typeof visible !== 'object') return null;
+  const response = {
+    render_mode: String(visible.render_mode || 'text_numbers'),
+    status: String(visible.status || ''),
+    selection_contract: String(visible.selection_contract || ''),
+    user_visible: visible.user_visible !== false,
+    options: compactMenuOptionsForRunner(Array.isArray(visible.options) ? visible.options : []),
+  };
+  if (response.render_mode !== 'silent_resume') response.text = String(visible.text || '');
+  return response;
+}
+
+function compactMenuOptionsForRunner(options) {
+  return options.slice(0, 4).map((option) => ({
+    number: Number((option || {}).number || 0) || undefined,
+    action_id: String((option || {}).action_id || (option || {}).action || ''),
+    label: String((option || {}).label || ''),
+    target_stage: String((option || {}).target_stage || ''),
+    recommended: Boolean((option || {}).recommended),
+    requires_user_confirm: Boolean((option || {}).requires_user_confirm),
+  }));
 }
 
 function readJson(file) {

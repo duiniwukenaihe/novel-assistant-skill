@@ -270,8 +270,45 @@ const overview = buildWorkflowTaskOverview(task, tpl);
 if (!overview || overview.task_title !== '完成当前长篇') throw new Error(JSON.stringify(overview));
 if (!overview.current_subtask || overview.current_subtask.id !== 'chapter_brief') throw new Error(JSON.stringify(overview));
 if (!Array.isArray(overview.phases) || overview.phases.length < 2) throw new Error(JSON.stringify(overview));
-if (!overview.text.includes('当前子任务') || !overview.text.includes('任务阶段')) throw new Error(overview.text);
+if (!overview.text.includes('当前阶段') || !overview.text.includes('任务阶段')) throw new Error(overview.text);
+for (const label of ['故事核心', '总纲', '卷纲', '阶段细纲', '章节 Brief', '正文与验收', '人物 / 伏笔 / 时间线提交', '复盘与跨卷交接']) {
+  if (!overview.phases.some(phase => phase.label === label)) throw new Error(`missing author phase ${label}: ${overview.text}`);
+}
 if ((overview.interaction_contract || {}).expose_as_top_level_task !== false) throw new Error(JSON.stringify(overview));
+NODE
+}
+
+@test "short task overview follows the README author workflow and hides internal checks" {
+    node - "$REPO" <<'NODE'
+const path = require('path');
+const repo = process.argv[2];
+const { BASE_TEMPLATES } = require(path.join(repo, 'scripts/lib/workflow-template-registry.js'));
+const { buildWorkflowTaskOverview } = require(path.join(repo, 'scripts/lib/workflow-action-renderer.js'));
+const tpl = BASE_TEMPLATES.short_write;
+const task = {
+  workflow_id: 'wf-short', workflow_type: 'short_write', user_goal: '完成当前短篇', current_stage: 'section_plan_lock',
+  machine: { completed_stages: ['project_type_lock', 'material_source_choice', 'material_card', 'short_setting', 'platform_genre_lock', 'rhythm_pattern_selection', 'section_outline'], remaining_stages: [] },
+  unit_lifecycle: { stage_roles: (tpl.unit_lifecycle_contract || {}).stage_roles || {} },
+  scheduling_contract: tpl.scheduling_contract,
+};
+const overview = buildWorkflowTaskOverview(task, tpl);
+const labels = overview.phases.map(phase => phase.label);
+for (const label of ['资讯 / 素材 / 脑洞卡', '设定与人物', '确认总节数与小节标题', '当前节 Brief', '只写当前节', '双门验收与采用', '合稿 / 精修 / 发布检查']) {
+  if (!labels.includes(label)) throw new Error(`missing author phase ${label}: ${overview.text}`);
+}
+for (const leaked of ['平台与题材方法', '节奏与爽点模型', '结构影响审计', '看点价值门']) {
+  if (overview.text.includes(leaked)) throw new Error(`internal stage leaked: ${leaked}\n${overview.text}`);
+}
+if ((overview.current_subtask || {}).author_phase_label !== '确认总节数与小节标题') throw new Error(JSON.stringify(overview.current_subtask));
+
+const sectionOverview = buildWorkflowTaskOverview({
+  ...task,
+  current_stage: 'section_brief',
+  machine: { completed_stages: [...task.machine.completed_stages, 'section_plan_lock', 'short_structure_impact_audit', 'hook_value_gate'], remaining_stages: [] },
+  author_execution_point: { kind: 'section', index: 2, total: 9, label: '第 2/9 节《哥哥说，只是设备升级》', compact_label: '第 2/9 节' },
+}, tpl);
+if (!sectionOverview.text.includes('当前执行：第 2/9 节《哥哥说，只是设备升级》')) throw new Error(sectionOverview.text);
+if ((sectionOverview.execution_point || {}).index !== 2) throw new Error(JSON.stringify(sectionOverview.execution_point));
 NODE
 }
 
@@ -286,7 +323,7 @@ const out = JSON.parse(process.argv[2]);
 if (out.status !== 'workflow_task_overview') throw new Error(JSON.stringify(out));
 const visible = out.visible_response || {};
 if (visible.status !== 'workflow_task_overview' || !String(visible.text || '').includes('任务阶段')) throw new Error(JSON.stringify(out));
-if (!String(visible.text || '').includes('当前子任务')) throw new Error(JSON.stringify(out));
+if (!String(visible.text || '').includes('当前阶段')) throw new Error(JSON.stringify(out));
 if (!Array.isArray(visible.options) || visible.options.length !== 4) throw new Error(JSON.stringify(out));
 if (visible.options[0].action_id !== 'open_current_subtask') throw new Error(JSON.stringify(out));
 NODE
@@ -298,6 +335,68 @@ const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const actions = Array.isArray(out.next_actions) ? out.next_actions : [];
 if (actions.some(action => action.action_id === 'open_task_overview')) throw new Error(JSON.stringify(out));
 if (!actions.length) throw new Error('current subtask actions are missing');
+NODE
+}
+
+@test "short task overview reads the current section execution point from project state" {
+    project="$TMP_DIR/short-execution-point"
+    mkdir -p "$project"
+    node "$STATE" create --workflow-type short_write --project-root "$project" --user-goal "完成当前短篇" --no-private-registry --json >/dev/null
+    node - "$project" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const root = process.argv[2];
+const pointer = JSON.parse(fs.readFileSync(path.join(root, '追踪/workflow/current-task.json'), 'utf8'));
+const taskFile = path.join(root, pointer.task_dir, 'task.json');
+const task = JSON.parse(fs.readFileSync(taskFile, 'utf8'));
+task.current_stage = 'section_brief';
+task.current_step = 'section_brief';
+task.scope = '第2节';
+task.machine.completed_stages = [
+  'project_type_lock', 'material_source_choice', 'material_card', 'short_setting',
+  'platform_genre_lock', 'rhythm_pattern_selection', 'section_outline', 'section_plan_lock',
+  'short_structure_impact_audit', 'hook_value_gate',
+];
+fs.writeFileSync(taskFile, `${JSON.stringify(task, null, 2)}\n`);
+const stateRoot = path.join(root, '追踪/story-system/short');
+fs.mkdirSync(stateRoot, { recursive: true });
+fs.writeFileSync(path.join(stateRoot, 'project-state.json'), `${JSON.stringify({ planned_sections: 9, current_section_index: 2, narrative: { planned_sections: 9 } }, null, 2)}\n`);
+fs.writeFileSync(path.join(stateRoot, 'section-title-lock.json'), `${JSON.stringify({ sections: [{ section_index: 2, title: '哥哥说，只是设备升级' }] }, null, 2)}\n`);
+NODE
+
+    run node "$STATE" task-overview --project-root "$project" --json
+    [ "$status" -eq 0 ]
+    node - "$output" <<'NODE'
+const out = JSON.parse(process.argv[2]);
+const visible = out.visible_response || {};
+if (!String(visible.text || '').includes('当前执行：第 2/9 节《哥哥说，只是设备升级》')) throw new Error(JSON.stringify(out));
+if (!String((((visible.options || [])[0] || {}).label || '')).includes('第 2/9 节')) throw new Error(JSON.stringify(visible.options));
+NODE
+}
+
+@test "legacy short platform and rhythm confirmation menus resume as internal author-phase work" {
+    project="$TMP_DIR/legacy-short-author-stop"
+    mkdir -p "$project"
+    node "$STATE" create --workflow-type short_write --project-root "$project" --user-goal "新开短篇" --no-private-registry --json >/dev/null
+    node - "$project" <<'NODE'
+const fs=require('fs'),path=require('path');const root=process.argv[2];
+const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
+const taskFile=path.join(root,pointer.task_dir,'task.json');
+const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+task.current_stage='platform_genre_lock';task.current_step='platform_genre_lock';task.status='running';
+task.stage_execution={status:'awaiting_author_confirmation',stage_id:'platform_genre_lock',step_id:'platform_genre_lock'};
+task.pending_action={id:'pa-platform-old',status:'pending',options:[{number:1,action_id:'continue_next_stage',target_stage:'platform_genre_lock'}]};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+    run node "$STATE" next-candidates --project-root "$project" --no-private-registry --json
+    [ "$status" -eq 0 ]
+    node - "$output" "$project" <<'NODE'
+const fs=require('fs'),path=require('path');const out=JSON.parse(process.argv[2]);const root=process.argv[3];
+if(out.status!=='stage_execution_resume_ready') throw new Error(JSON.stringify(out));
+const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
+const task=JSON.parse(fs.readFileSync(path.join(root,pointer.task_dir,'task.json'),'utf8'));
+if(task.pending_action) throw new Error(JSON.stringify(task.pending_action));
+if((task.stage_execution||{}).status!=='running'||task.stage_execution.stage_id!=='platform_genre_lock') throw new Error(JSON.stringify(task.stage_execution));
 NODE
 }
 

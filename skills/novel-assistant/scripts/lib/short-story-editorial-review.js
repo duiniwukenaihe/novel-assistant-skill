@@ -87,13 +87,29 @@ function buildShortStoryEvidencePack(projectRoot, options = {}) {
   };
 }
 
-function validateEditorialReviewCard(card, evidencePack) {
+function validateReaderResponseCard(card, evidencePack) {
+  const findings = [];
+  const readerResponse = card && card.reader_response ? card.reader_response : card;
+  validateReaderResponse(readerResponse, evidencePack, findings);
+  const storyText = readStoryTextFromPack(evidencePack);
+  for (const quote of collectReaderEvidenceQuotes(readerResponse)) {
+    if (quote && storyText && !normalizeText(storyText).includes(normalizeText(quote))) {
+      findings.push(problem('evidence_quote', `正文中找不到专业读者引用：${quote.slice(0, 40)}`));
+    }
+  }
+  return findings.length ? { status: 'invalid', findings } : { status: 'valid', findings: [] };
+}
+
+function validateEditorialReviewCard(card, evidencePack, options = {}) {
   const findings = [];
   if (!card || typeof card !== 'object' || Array.isArray(card)) return invalid('review_card_not_object');
   if (String(card.schemaVersion || '') !== SCHEMA_VERSION) findings.push(problem('schemaVersion', '审阅卡版本不匹配。'));
   if (String(card.workflow_id || '') !== String(evidencePack.workflow_id || '')) findings.push(problem('workflow_id', '审阅卡任务身份不匹配。'));
   if (String(card.story_sha256 || '') !== String(evidencePack.story_sha256 || '')) findings.push(problem('story_sha256', '审阅卡对应的正文已经变化。'));
   if (!VALID_DECISIONS.has(String(card.decision || ''))) findings.push(problem('decision', 'decision 只能是 pass 或 revise。'));
+
+  const readerResponse = options.readerResponse || card.reader_response;
+  validateReaderResponse(readerResponse, evidencePack, findings);
 
   validateAssessment(card.opening_assessment, 'opening_assessment', ['verdict', 'evidence_quote', 'reason'], findings);
   validateAssessment(card.climax_ending_assessment, 'climax_ending_assessment', ['verdict', 'climax_quote', 'ending_quote', 'reason'], findings);
@@ -117,7 +133,7 @@ function validateEditorialReviewCard(card, evidencePack) {
   if (!characterMatrix.length) findings.push(problem('character_arc_matrix', '至少验收主角与一个承担剧情功能的重要角色。'));
   if ((evidencePack.character_hints || []).length >= 2 && characterMatrix.length < 2) findings.push(problem('character_arc_matrix', '设定中存在多个重要人物，不能只验收主角。'));
   for (const row of characterMatrix) {
-    for (const field of ['character', 'desire', 'active_action', 'cost', 'change', 'verdict']) {
+    for (const field of ['character', 'desire', 'independent_stake', 'active_action', 'cost', 'relationship_effect', 'change', 'verdict']) {
       if (!String((row || {})[field] || '').trim()) findings.push(problem(`character_arc_matrix.${field}`, '人物弧线矩阵字段缺失。'));
     }
     if (!Array.isArray((row || {}).evidence_quotes) || !(row || {}).evidence_quotes.length) findings.push(problem('character_arc_matrix.evidence_quotes', '人物判断必须引用正文证据。'));
@@ -129,10 +145,22 @@ function validateEditorialReviewCard(card, evidencePack) {
     findings.push(problem('identity_payoff_matrix', '必须检查主角职业、能力、缺陷或身份设定是否在后文持续参与；确实不适用时说明理由。'));
   }
   for (const row of identityMatrix) {
-    for (const field of ['identity_or_trait', 'setup_quote', 'payoff_quote', 'verdict']) {
+    for (const field of ['identity_or_trait', 'identity_type', 'setup_quote', 'payoff_quote', 'ongoing_participation', 'verdict']) {
       if (!String((row || {})[field] || '').trim()) findings.push(problem(`identity_payoff_matrix.${field}`, '身份效用矩阵字段缺失。'));
     }
     if ((row || {}).verdict && !VALID_VERDICTS.has(String((row || {}).verdict))) findings.push(problem('identity_payoff_matrix.verdict', '身份效用结论非法。'));
+  }
+
+  const revealMatrix = Array.isArray(card.reveal_aftershock_matrix) ? card.reveal_aftershock_matrix : [];
+  if (!revealMatrix.length && !String(card.reveal_aftershock_not_applicable_reason || '').trim()) {
+    findings.push(problem('reveal_aftershock_matrix', '必须检查关键揭示是否改变后续行动、关系或代价；确实没有揭示时说明理由。'));
+  }
+  for (const row of revealMatrix) {
+    for (const field of ['reveal_section_index', 'revelation', 'immediate_consequence', 'downstream_change', 'verdict']) {
+      if (!String((row || {})[field] || '').trim()) findings.push(problem(`reveal_aftershock_matrix.${field}`, '揭示余震矩阵字段缺失。'));
+    }
+    if (!Array.isArray((row || {}).evidence_quotes) || !(row || {}).evidence_quotes.length) findings.push(problem('reveal_aftershock_matrix.evidence_quotes', '揭示余震判断必须同时引用揭示与后续影响证据。'));
+    if ((row || {}).verdict && !VALID_VERDICTS.has(String((row || {}).verdict))) findings.push(problem('reveal_aftershock_matrix.verdict', '揭示余震结论非法。'));
   }
 
   const reviewFindings = Array.isArray(card.findings) ? card.findings : [];
@@ -148,12 +176,101 @@ function validateEditorialReviewCard(card, evidencePack) {
   if (String(card.decision || '') === 'revise' && !reviewFindings.length) findings.push(problem('findings', 'revise 必须给出可执行问题项。'));
 
   const storyText = readStoryTextFromPack(evidencePack);
-  for (const quote of collectEvidenceQuotes(card)) {
+  for (const quote of collectEditorialEvidenceQuotes(card)) {
     if (quote && storyText && !normalizeText(storyText).includes(normalizeText(quote))) {
       findings.push(problem('evidence_quote', `正文中找不到引用：${quote.slice(0, 40)}`));
     }
   }
   return findings.length ? { status: 'invalid', findings } : { status: 'valid', findings: [] };
+}
+
+function validateReaderResponse(readerResponse, evidencePack, findings) {
+  if (!readerResponse || typeof readerResponse !== 'object' || Array.isArray(readerResponse)) {
+    findings.push(problem('reader_response', '缺少专业读者盲读结果。'));
+    return;
+  }
+  const profile = readerResponse.reader_profile || {};
+  if (!String(profile.target_platform || '').trim()) findings.push(problem('reader_response.reader_profile.target_platform', '缺少目标平台；未知时写未确认。'));
+  if (!String(profile.platform_mode || '').trim()) findings.push(problem('reader_response.reader_profile.platform_mode', '缺少读者平台画像。'));
+  if (!Array.isArray(profile.genre_lens)) findings.push(problem('reader_response.reader_profile.genre_lens', '题材观察重点必须是数组。'));
+  if (!Array.isArray(profile.style_lens)) findings.push(problem('reader_response.reader_profile.style_lens', '文风观察重点必须是数组。'));
+  if (!String(profile.reading_scene || '').trim()) findings.push(problem('reader_response.reader_profile.reading_scene', '缺少阅读场景。'));
+  if (!String(profile.profile_basis || '').trim()) findings.push(problem('reader_response.reader_profile.profile_basis', '缺少读者画像依据。'));
+  const platformUnconfirmed = /未确认|未知/u.test(String(profile.target_platform || ''));
+  if (platformUnconfirmed && String(profile.platform_mode || '') !== 'general_fiction') {
+    findings.push(problem('reader_response.reader_profile.platform_mode', '目标平台未确认时只能使用 general_fiction，不能从正文或目录反推平台。'));
+  }
+  if (/目录推断|书名推断|标题推断|模型常识/u.test(String(profile.profile_basis || ''))) {
+    findings.push(problem('reader_response.reader_profile.profile_basis', '读者画像依据不得来自目录、书名、标题或模型常识推断。'));
+  }
+
+  const expectedSections = new Set((evidencePack.section_metrics || []).map(item => Number(item.section_index)));
+  const sectionRows = Array.isArray(readerResponse.section_reader_response) ? readerResponse.section_reader_response : [];
+  const covered = new Set();
+  for (const row of sectionRows) {
+    const index = Number((row || {}).section_index);
+    if (expectedSections.has(index)) covered.add(index);
+    for (const field of ['engagement', 'felt_emotion', 'reader_question', 'evidence_quote']) {
+      if (!String((row || {})[field] || '').trim()) findings.push(problem(`reader_response.section_reader_response.${index || '?'}.${field}`, '逐节读者反应字段缺失。'));
+    }
+    if (!['engaged', 'wavering', 'drop_risk'].includes(String((row || {}).engagement || ''))) {
+      findings.push(problem(`reader_response.section_reader_response.${index || '?'}.engagement`, 'engagement 非法。'));
+    }
+  }
+  for (const index of expectedSections) {
+    if (!covered.has(index)) findings.push(problem('reader_response.section_reader_response', `专业读者缺少第${index}节的阅读反应。`));
+  }
+  if (!Array.isArray(readerResponse.drop_off_points)) findings.push(problem('reader_response.drop_off_points', '掉线点必须是数组，可为空。'));
+  const impressions = Array.isArray(readerResponse.character_impressions) ? readerResponse.character_impressions : [];
+  if (!impressions.length) findings.push(problem('reader_response.character_impressions', '至少记录主角的人物印象变化。'));
+  for (const row of impressions) {
+    for (const field of ['character', 'first_impression', 'later_impression', 'trust_change']) {
+      if (!String((row || {})[field] || '').trim()) findings.push(problem(`reader_response.character_impressions.${field}`, '人物印象字段缺失。'));
+    }
+    if (!Array.isArray((row || {}).evidence_quotes) || !(row || {}).evidence_quotes.length) findings.push(problem('reader_response.character_impressions.evidence_quotes', '人物印象必须引用正文证据。'));
+  }
+  const identityContinuity = Array.isArray(readerResponse.identity_continuity) ? readerResponse.identity_continuity : [];
+  if ((evidencePack.identity_hints || []).length && !identityContinuity.length && !String(readerResponse.identity_continuity_not_applicable_reason || '').trim()) {
+    findings.push(problem('reader_response.identity_continuity', '设定包含职业、能力、缺陷或身份，专业读者必须记录它在后文是否仍可感。'));
+  }
+  for (const row of identityContinuity) {
+    for (const field of ['identity_or_trait', 'visibility', 'reader_effect']) {
+      if (!String((row || {})[field] || '').trim()) findings.push(problem(`reader_response.identity_continuity.${field}`, '身份连续性字段缺失。'));
+    }
+    if (!['present', 'fading', 'abandoned'].includes(String((row || {}).visibility || ''))) findings.push(problem('reader_response.identity_continuity.visibility', 'visibility 非法。'));
+    if (!Array.isArray((row || {}).evidence_quotes) || (row || {}).evidence_quotes.length < 2) findings.push(problem('reader_response.identity_continuity.evidence_quotes', '身份连续性至少需要前后两处正文证据。'));
+  }
+  const supportingReality = Array.isArray(readerResponse.supporting_character_reality) ? readerResponse.supporting_character_reality : [];
+  if ((evidencePack.character_hints || []).length >= 2 && !supportingReality.length && !String(readerResponse.supporting_character_not_applicable_reason || '').trim()) {
+    findings.push(problem('reader_response.supporting_character_reality', '存在多个重要人物时，专业读者必须记录至少一个配角是活人还是功能件。'));
+  }
+  for (const row of supportingReality) {
+    for (const field of ['character', 'felt_status', 'apparent_want', 'decisive_choice', 'relationship_effect']) {
+      if (!String((row || {})[field] || '').trim()) findings.push(problem(`reader_response.supporting_character_reality.${field}`, '配角真实感字段缺失。'));
+    }
+    if (!['alive', 'thin', 'functional'].includes(String((row || {}).felt_status || ''))) findings.push(problem('reader_response.supporting_character_reality.felt_status', 'felt_status 非法。'));
+    if (!Array.isArray((row || {}).evidence_quotes) || !(row || {}).evidence_quotes.length) findings.push(problem('reader_response.supporting_character_reality.evidence_quotes', '配角真实感必须引用正文证据。'));
+  }
+  const revealAftershock = Array.isArray(readerResponse.reveal_aftershock) ? readerResponse.reveal_aftershock : [];
+  if (expectedSections.size >= 3 && !revealAftershock.length && !String(readerResponse.reveal_aftershock_not_applicable_reason || '').trim()) {
+    findings.push(problem('reader_response.reveal_aftershock', '多节故事必须记录至少一次关键揭示之后，读者是否看见行动、关系或代价发生变化。'));
+  }
+  for (const row of revealAftershock) {
+    for (const field of ['reveal_section_index', 'revelation', 'immediate_reader_shift', 'consequence_seen']) {
+      if (!String((row || {})[field] || '').trim()) findings.push(problem(`reader_response.reveal_aftershock.${field}`, '揭示余震字段缺失。'));
+    }
+    if (!['yes', 'partial', 'no'].includes(String((row || {}).consequence_seen || ''))) findings.push(problem('reader_response.reveal_aftershock.consequence_seen', 'consequence_seen 非法。'));
+    if (!Array.isArray((row || {}).later_evidence_quotes) || !(row || {}).later_evidence_quotes.length) findings.push(problem('reader_response.reveal_aftershock.later_evidence_quotes', '揭示余震必须引用后续正文证据。'));
+  }
+  const promise = readerResponse.promise_response || {};
+  for (const field of ['title_expectation', 'payoff_status', 'reader_aftertaste']) {
+    if (!String(promise[field] || '').trim()) findings.push(problem(`reader_response.promise_response.${field}`, '标题承诺反应字段缺失。'));
+  }
+  if (!Array.isArray(promise.evidence_quotes) || !promise.evidence_quotes.length) findings.push(problem('reader_response.promise_response.evidence_quotes', '标题兑现判断必须引用正文证据。'));
+  const finalState = readerResponse.final_reader_state || {};
+  for (const field of ['would_continue_or_recommend', 'strongest_pull', 'biggest_resistance']) {
+    if (!String(finalState[field] || '').trim()) findings.push(problem(`reader_response.final_reader_state.${field}`, '终读反应字段缺失。'));
+  }
 }
 
 function splitSections(text) {
@@ -201,7 +318,19 @@ function validateAssessment(value, prefix, fields, findings) {
   if (value.verdict && !VALID_VERDICTS.has(String(value.verdict))) findings.push(problem(`${prefix}.verdict`, 'verdict 非法。'));
 }
 
-function collectEvidenceQuotes(card) {
+function collectReaderEvidenceQuotes(reader) {
+  const quotes = [];
+  for (const row of (reader || {}).section_reader_response || []) quotes.push((row || {}).evidence_quote);
+  for (const row of (reader || {}).drop_off_points || []) quotes.push((row || {}).evidence_quote);
+  for (const row of (reader || {}).character_impressions || []) quotes.push(...((row || {}).evidence_quotes || []));
+  for (const row of (reader || {}).identity_continuity || []) quotes.push(...((row || {}).evidence_quotes || []));
+  for (const row of (reader || {}).supporting_character_reality || []) quotes.push(...((row || {}).evidence_quotes || []));
+  for (const row of (reader || {}).reveal_aftershock || []) quotes.push(...((row || {}).later_evidence_quotes || []));
+  quotes.push(...(((((reader || {}).promise_response) || {}).evidence_quotes) || []));
+  return quotes.map(value => String(value || '').trim()).filter(Boolean);
+}
+
+function collectEditorialEvidenceQuotes(card) {
   const quotes = [];
   const opening = card.opening_assessment || {};
   const ending = card.climax_ending_assessment || {};
@@ -209,6 +338,7 @@ function collectEvidenceQuotes(card) {
   for (const row of card.section_function_matrix || []) quotes.push((row || {}).evidence_quote);
   for (const row of card.character_arc_matrix || []) quotes.push(...((row || {}).evidence_quotes || []));
   for (const row of card.identity_payoff_matrix || []) quotes.push((row || {}).setup_quote, (row || {}).payoff_quote);
+  for (const row of card.reveal_aftershock_matrix || []) quotes.push(...((row || {}).evidence_quotes || []));
   for (const row of card.findings || []) quotes.push((row || {}).evidence_quote);
   return quotes.map(value => String(value || '').trim()).filter(Boolean);
 }
@@ -239,5 +369,6 @@ module.exports = {
   attachEvidenceRuntime,
   buildShortStoryEvidencePack,
   splitSections,
+  validateReaderResponseCard,
   validateEditorialReviewCard,
 };

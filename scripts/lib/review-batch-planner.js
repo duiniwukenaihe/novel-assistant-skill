@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { planReviewRoles } = require('./review-role-policy');
 const { reviewEvidencePolicy } = require('./review-target-policy');
+const { classifyTaskComplexity } = require('./task-complexity-policy');
 
 const DEFAULT_DIMENSIONS = ['plot', 'hooks', 'character', 'canon', 'prose'];
 const CONSERVATIVE_SOURCE_BUDGET_CHARS = 12000;
@@ -69,6 +70,23 @@ function planReviewBatches({ chapters, parentScope, requiredDimensions, budgetPo
 
     const first = primary[0];
     const last = primary[primary.length - 1];
+    const signals = evidenceSignals(primary);
+    const candidateDispatch = planReviewRoles({
+      requiredDimensions: dimensions,
+      evidenceSignals: signals,
+      availableAgents,
+      budgetPolicy: policy,
+    });
+    const complexityPolicy = classifyTaskComplexity({
+      workflowType: 'review_repair',
+      stageId: 'classify_findings',
+      inputFiles: primary.length,
+      inputChars: Math.ceil(weightedChars),
+      unitCount: primary.length,
+      riskLevel: reviewRiskLevel(primary),
+      independentDomains: candidateDispatch.roles.map((role) => role.subagent_type),
+      maxParallelAgents: policy.max_parallel_agents,
+    });
     batches.push({
       id: `batch-${String(batches.length + 1).padStart(3, '0')}`,
       range: `${first.globalDraftOrder}-${last.globalDraftOrder}`,
@@ -80,13 +98,9 @@ function planReviewBatches({ chapters, parentScope, requiredDimensions, budgetPo
       boundary_reason: boundaryReason,
       boundary_context: { before: [], after: [] },
       expected_dimensions: dimensions.slice(),
-      evidence_signals: evidenceSignals(primary),
-      dispatch_plan: planReviewRoles({
-        requiredDimensions: dimensions,
-        evidenceSignals: evidenceSignals(primary),
-        availableAgents,
-        budgetPolicy: policy,
-      }),
+      evidence_signals: signals,
+      complexity_policy: complexityPolicy,
+      dispatch_plan: capDispatchPlan(candidateDispatch, complexityPolicy.recommended_agent_count),
     });
   }
 
@@ -215,6 +229,31 @@ function riskDensity(chapters) {
 
 function evidenceSignals(chapters) {
   return Array.from(new Set(chapters.flatMap((chapter) => chapter.staticRiskTags || []).map(String))).sort();
+}
+
+function reviewRiskLevel(chapters) {
+  const density = riskDensity(chapters);
+  if (density >= 2) return 'high';
+  if (density > 0) return 'medium';
+  return 'low';
+}
+
+function capDispatchPlan(dispatchPlan, agentLimit) {
+  const roles = Array.isArray(dispatchPlan.roles) ? dispatchPlan.roles : [];
+  const limit = Math.max(0, Number(agentLimit) || 0);
+  const selected = roles.slice(0, limit);
+  const deferredDimensions = Array.from(new Set([
+    ...(Array.isArray(dispatchPlan.deferredDimensions) ? dispatchPlan.deferredDimensions : []),
+    ...roles.slice(limit).flatMap((role) => Array.isArray(role.dimensions) ? role.dimensions : []),
+  ])).sort();
+  return {
+    ...dispatchPlan,
+    mode: selected.length ? 'agent_dispatch' : 'solo_fallback',
+    roles: selected,
+    deferredDimensions,
+    candidateRoleCount: roles.length,
+    appliedAgentLimit: limit,
+  };
 }
 
 function boundaryBefore(candidate, previous) {

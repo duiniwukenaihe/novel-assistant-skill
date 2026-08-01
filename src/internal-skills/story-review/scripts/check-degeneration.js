@@ -75,6 +75,11 @@ if (options.files.length === 0) {
 
 let failed = false;
 const allFindings = [];
+// 扫描完整性记账：质量门不得用「空 findings」冒充「全部扫完且无问题」。当某个输入
+// 崩掉（不可读/编码错）时，必须在 JSON 里自报 status=partial 并列出未读文件，这样仅看
+// findings 数组或未严格检查退出码的聚合器也能区分「部分扫描」与「完成」。
+const filesScanned = [];
+const filesUnreadable = [];
 
 for (const file of options.files) {
   const fullPath = path.resolve(file);
@@ -83,15 +88,26 @@ for (const file of options.files) {
     input = fs.readFileSync(fullPath, 'utf8');
   } catch (error) {
     failed = true;
+    filesUnreadable.push({ file, error: error.message });
     if (!options.json) console.error(`${file}: unable to read (${error.message})`);
     continue;
   }
+  filesScanned.push(file);
   const findings = scanDocument(input).map((finding) => ({ file, ...finding }));
   allFindings.push(...findings);
 }
 
+// 完成度状态：有未读文件 → partial（扫描未覆盖全部输入）；否则 complete。
+// 退出码语义不变：exit 2 = 扫描错误（含 partial），exit 1 = 有 quality finding，exit 0 = clean。
+const scanStatus = filesUnreadable.length > 0 ? 'partial' : 'complete';
+
 if (options.json) {
-  process.stdout.write(`${JSON.stringify({ findings: allFindings }, null, 2)}\n`);
+  const report = { status: scanStatus, findings: allFindings };
+  if (filesUnreadable.length > 0) {
+    report.files_scanned = filesScanned;
+    report.files_unreadable = filesUnreadable;
+  }
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 } else {
   for (const f of allFindings) {
     console.log(`${f.file}:${f.line}:${f.column}: [${f.severity}] ${f.type}: ${f.message} (${f.excerpt})`);

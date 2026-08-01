@@ -32,7 +32,7 @@ Options:
   --commit                 Commit sanitized changes on the public branch
   --push                   Push HEAD to <remote>/<branch> (requires --commit)
   --allow-dirty-source     Allow dirty source checkout; only committed ref is used
-  --skip-runtime-verify    Skip public runtime smoke checks (not recommended)
+  --skip-runtime-verify    Skip runtime checks for an uncommitted diagnostic preview only
   -h, --help               Show this help
 
 Typical:
@@ -92,6 +92,10 @@ done
 
 if [ "$PUSH_BRANCH" -eq 1 ] && [ "$COMMIT_CHANGES" -ne 1 ]; then
   echo "Refusing --push without --commit; uncommitted worktree changes cannot be pushed." >&2
+  exit 2
+fi
+if [ "$SKIP_RUNTIME_VERIFY" -eq 1 ] && { [ "$COMMIT_CHANGES" -eq 1 ] || [ "$PUSH_BRANCH" -eq 1 ]; }; then
+  echo "Refusing --skip-runtime-verify with --commit or --push; production release gates are mandatory." >&2
   exit 2
 fi
 
@@ -159,6 +163,7 @@ git -C "$WORKTREE_DIR" diff --check
 
 if [ "$SKIP_RUNTIME_VERIFY" -ne 1 ]; then
   node "$WORKTREE_DIR/scripts/production-smoke-matrix.js" --repo-root "$WORKTREE_DIR" --json
+  bats "$WORKTREE_DIR/tests/test-short-workflow-production-e2e.bats"
   node "$WORKTREE_DIR/scripts/workflow-state-machine.js" templates --json > "$WORKTREE_DIR/.public-workflow-templates.json"
   node - "$WORKTREE_DIR" "$WORKTREE_DIR/.public-workflow-templates.json" <<'NODE'
 const fs = require('fs');

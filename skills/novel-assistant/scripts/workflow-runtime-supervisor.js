@@ -169,4 +169,6 @@ function main() {
   process.exit(exitCode);
 }
 
-main();
+module.exports = { supervise, main };
+
+if (require.main === module) main();
