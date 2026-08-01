@@ -178,6 +178,26 @@ NODE
     [[ "$output" != *'quality_evidence_required'* ]]
 }
 
+@test "quality gate treats an evidenced outline revise as a repair decision instead of a schema error" {
+    prepare_valid_quality_evidence
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,id]=process.argv.slice(2);
+const file=path.join(root,'追踪/workflow/tasks',id,'artifacts/section-006-story-review.json');
+const card=JSON.parse(fs.readFileSync(file,'utf8'));
+const row=card.outline_coverage.find((item)=>item.id==='B02');
+if(!row) throw new Error('missing B02 fixture');
+row.status='revise';
+fs.writeFileSync(file,JSON.stringify(card,null,2)+'\n');
+NODE
+
+    run node "$QUALITY_GATE" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"packet_ready"'* ]]
+    [[ "$output" == *'"decision":"revise"'* ]]
+    [[ "$output" != *'quality_evidence_required'* ]]
+}
+
 @test "quality gate returns an exact writable schema when evidence is genuinely incomplete" {
     prepare_valid_quality_evidence
     node - "$BOOK" "$WORKFLOW_ID" <<'NODE'

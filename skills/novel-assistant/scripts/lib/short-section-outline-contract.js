@@ -189,9 +189,13 @@ function validateDraftOutlineCoverage(review, contract, draftText) {
       findings.push({ code: 'draft_outline_obligation_missing', obligation_id: obligation.id });
       continue;
     }
-    if (String(row.status || '') !== 'pass') {
-      findings.push({ code: 'draft_outline_obligation_revise', obligation_id: obligation.id });
+    const status = String(row.status || '');
+    if (!['pass', 'revise'].includes(status)) {
+      findings.push({ code: 'draft_outline_obligation_status_invalid', obligation_id: obligation.id });
       continue;
+    }
+    if (status === 'revise') {
+      findings.push({ code: 'draft_outline_obligation_revise', obligation_id: obligation.id });
     }
     const quote = normalizeText(row.evidence_quote || '');
     if (quote.length < 4 || !source.includes(quote)) {

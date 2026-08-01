@@ -111,6 +111,10 @@ function main() {
     }), 0, args.json);
   }
   const failed = new Set(review.checks.filter((item) => item.status === 'revise').map((item) => item.id));
+  const outlineFindings = validateDraftOutlineCoverage(review, outlineContract, fs.readFileSync(draft, 'utf8'));
+  for (const finding of outlineFindings.filter((item) => item.code === 'draft_outline_obligation_revise')) {
+    failed.add(`outline_${finding.obligation_id}`);
+  }
   if (readerMilestone.required && String(((review || {}).reader_milestone || {}).status || '') === 'revise') {
     failed.add('professional_reader_milestone');
   }
@@ -238,7 +242,8 @@ function validateQualityEvidence(review, { workflowId, sectionIndex, draft, outl
       }
     }
   }
-  findings.push(...validateDraftOutlineCoverage(review, outlineContract, draftText));
+  findings.push(...validateDraftOutlineCoverage(review, outlineContract, draftText)
+    .filter((item) => item.code !== 'draft_outline_obligation_revise'));
   const metadata = review.acceptance_metadata && typeof review.acceptance_metadata === 'object' && !Array.isArray(review.acceptance_metadata)
     ? review.acceptance_metadata
     : {};
@@ -395,7 +400,7 @@ function buildQualityEvidenceSchema({ workflowId, sectionIndex, draft, outlineCo
       .filter((item) => item.required_in_draft)
       .map((item) => ({
         id: item.id,
-        status: 'pass',
+        status: 'pass|revise',
         evidence_quote: '正文中兑现该大纲义务的原句',
       })),
     summary: '不少于十二个字的本节质量结论',
