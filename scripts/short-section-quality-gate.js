@@ -131,7 +131,10 @@ function main() {
   const summary = String(review.summary || args.summary || (passed
     ? `第${sectionIndex}节角色、因果、情绪、钩子和吸引力通过。`
     : `第${sectionIndex}节需修订：${[...failed].join(', ')}。`)).slice(0, 500);
-  const nextStage = passed ? 'section_accept_anchor' : 'section_brief';
+  const nextStage = passed ? 'section_accept_anchor' : resolveQualityRepairStage(execution);
+  const repairAction = nextStage === 'feedback_impact_sync'
+    ? '进入反馈影响链并生成当前节修订授权'
+    : '重建当前节 Brief 后修订';
   atomicWriteJson(packetFile, {
     workflow_id: workflowId,
     workflow_type: String(task.workflow_type || 'short_write'),
@@ -161,14 +164,14 @@ function main() {
     checkpoint_state: {
       current_stage: stageId,
       completed_range: passed ? `第${sectionIndex}节质量门完成` : '',
-      remaining_range: passed ? `第${sectionIndex}节采用锚点` : `重建第${sectionIndex}节 Brief 并修订`,
+      remaining_range: passed ? `第${sectionIndex}节采用锚点` : repairAction,
       resume_from: nextStage,
     },
     output_health_result: 'pass',
     current_section_index: sectionIndex,
     candidate_count: 1,
     next_stage_id: nextStage,
-    next_recommendation: passed ? '等待用户采用当前节' : '返回当前节 Brief，修复故事问题后再写',
+    next_recommendation: passed ? '等待用户采用当前节' : repairAction,
     handoff_summary: summary,
     acceptance_metadata: normalizeAcceptanceMetadata(review.acceptance_metadata),
     memory_updates: [],
@@ -206,13 +209,20 @@ function main() {
     decision,
     result_packet: packetRel,
     next_stage: String(applyResult.current_stage || ((applyResult.task || {}).current_stage) || nextStage),
-    next_action: passed ? '等待用户确认采用当前节' : '重建当前节 Brief 后修订',
+    next_action: passed ? '等待用户确认采用当前节' : repairAction,
     next_candidates: nextCandidates,
     visible_response: visibleResponse,
     interaction_contract: visibleResponse ? 'render_visible_response_text_verbatim' : 'continue_current_running_stage',
     ...outcome.presentation,
     ...(outcome.applied ? {} : { apply_result: applyResult }),
   }, outcome.exitCode, args.json);
+}
+
+function resolveQualityRepairStage(execution) {
+  const allowed = (((execution || {}).transition_contract || {}).allowed_next || []).map(String);
+  if (allowed.includes('section_brief')) return 'section_brief';
+  if (allowed.includes('feedback_impact_sync')) return 'feedback_impact_sync';
+  return 'section_brief';
 }
 
 function validateQualityEvidence(review, { workflowId, sectionIndex, draft, outlineContract, readerMilestone }) {

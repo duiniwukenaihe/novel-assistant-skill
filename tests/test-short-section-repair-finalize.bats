@@ -198,6 +198,38 @@ NODE
     [[ "$output" != *'quality_evidence_required'* ]]
 }
 
+@test "private quality revise advances to its declared feedback repair path" {
+    prepare_valid_quality_evidence
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,id]=process.argv.slice(2);
+const taskFile=path.join(root,'追踪/workflow/tasks',id,'task.json');
+const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+task.stage_execution.transition_contract={
+  allowed_next:['feedback_impact_sync','section_accept_anchor','section_candidate_compare','short_deslop'],
+  failure_return:'',
+  invalid_transition:'reject'
+};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+const cardFile=path.join(root,'追踪/workflow/tasks',id,'artifacts/section-006-story-review.json');
+const card=JSON.parse(fs.readFileSync(cardFile,'utf8'));
+card.outline_coverage.find((item)=>item.id==='B02').status='revise';
+fs.writeFileSync(cardFile,JSON.stringify(card,null,2)+'\n');
+NODE
+
+    run node "$QUALITY_GATE" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"applied"'* ]]
+    [[ "$output" == *'"decision":"revise"'* ]]
+    [[ "$output" == *'"next_stage":"feedback_impact_sync"'* ]]
+    node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,id]=process.argv.slice(2);
+const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));
+if(task.current_stage!=='feedback_impact_sync') throw new Error(JSON.stringify({current_stage:task.current_stage,last_transition:(task.machine||{}).last_transition}));
+NODE
+}
+
 @test "quality gate returns an exact writable schema when evidence is genuinely incomplete" {
     prepare_valid_quality_evidence
     node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
