@@ -8,7 +8,7 @@ setup() {
     BOOK="$TMP_DIR/book"
     mkdir -p "$BOOK/追踪/private-short-extension"
     printf '{"working_title":"测试短篇","current_section_index":7,"accepted_sections":[]}\n' > "$BOOK/追踪/private-short-extension/project-state.json"
-    printf '# 第7节写作提要\n\n视角：我。\n人物：林昭。\n因果：公开证据。\n钩子：母亲出现。\n禁止：不换视角。\n验收：完成冲突升级。\n' > "$BOOK/写作Brief_第007节.md"
+    printf '# 第7节写作提要\n\n视角：我。\n人物：阿岚。\n因果：公开证据。\n钩子：负责人出现。\n禁止：不换视角。\n验收：完成冲突升级。\n' > "$BOOK/写作Brief_第007节.md"
     node "$STATE_MACHINE" create --workflow-type short_write --project-root "$BOOK" --scope "第7节" --user-goal "写第7节" --no-private-registry --json >/dev/null
     WORKFLOW_ID="$(node -e 'const fs=require("fs"),path=require("path");const p=JSON.parse(fs.readFileSync(path.join(process.argv[1],"追踪/workflow/current-task.json"),"utf8"));console.log(p.workflow_id)' "$BOOK")"
     node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
@@ -32,7 +32,7 @@ teardown() {
     cat > "$BOOK/草稿_第007节_候选.md" <<'MD'
 # 第7节
 
-我把直播回放投到会议室的白墙上。屏幕里，传送带一直在转，镜头扫过的仓库却连一只果筐都没有。母亲推门进来，把三年前那份弃权书放在桌上。她没有替我解释，只问董事会敢不敢把原料采购单也投上去。
+我把复核记录投到会议室的白墙上。屏幕里的编号连续跳过一页，归档目录却声称材料完整。负责人推门进来，把三年前那份授权书放在桌上。他没有替我解释，只问审查组敢不敢把原始签收单也投上去。
 MD
 
     run node "$FINALIZE" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
@@ -58,19 +58,19 @@ NODE
 ## 第7节：公开证据
 - 承接上节：第6节留下关键文件来源未公开。
 - 结构功能：反击升级。
-- 开篇钩子：直播间追问文件是真是假。
+- 开篇钩子：复核席追问文件是真是假。
 - 故事承诺：主角必须用可核验的证据反击。
-- 场景动作：主角把关键文件展示给直播镜头。
-- 压力变化：被催促关播转为全场必须看文件编号。
-- 角色选择：她不再等待哥哥解释。
-- 可见阻力：有人催她关播。
+- 场景动作：主角把关键文件展示给公开复核席。
+- 压力变化：被催促停止投影转为全场必须看文件编号。
+- 角色选择：她不再等待主管解释。
+- 可见阻力：有人催她停止复核。
 - 因果链：拿到文件 -> 公开编号 -> 逼迫对方回应。
 - 本节兑现：证据被公开看见。
-- 关系变化：主角与哥哥从被保护转为公开对峙。
-- 代价升级：她会失去家族内部权限。
+- 关系变化：主角与主管从被保护转为公开对峙。
+- 代价升级：她会失去部门内部权限。
 - 核心承诺兑现：文件编号把谎言从口头争执变成公开证据。
-- 决定性行动：她把文件编号对准镜头。
-- 现实后果：哥哥必须解释文件来源。
+- 决定性行动：她把文件编号投到公开屏幕。
+- 现实后果：主管必须解释文件来源。
 - 关系收束：兄妹关系暂时转为对立。
 - 节尾钩子：对方必须回应文件来源。
 ## 第8节：继续追问
@@ -93,13 +93,13 @@ task.stage_execution.stage_context_packet={packet_json:packet.packet_json,packet
 task.stage_execution.memory_context={context_source:'stage_context',memory_read_receipt:packet.memory_read_receipt,memory_contract:packet.memory_contract};
 fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
 NODE
-    printf '%s\n' '{"fact_id":"fact.changed","subject":"测试短篇","predicate":"第6节状态","object":"母亲已经把关键文件交给主角。","scope":{"book":"current","section":6},"status":"active"}' >> "$BOOK/追踪/memory/facts.jsonl"
+    printf '%s\n' '{"fact_id":"fact.changed","subject":"测试短篇","predicate":"第6节状态","object":"审计员已经把关键文件交给主角。","scope":{"book":"current","section":6},"status":"active"}' >> "$BOOK/追踪/memory/facts.jsonl"
     cat > "$BOOK/草稿_第007节_候选.md" <<'MD'
 # 第7节
 
-我把关键文件压在掌心，第一次没有等哥哥替我解释。会议室门外有人催我关掉直播，我却把镜头对准文件编号，让所有人先看清楚这份证据到底从哪儿来。
+我把关键文件压在掌心，第一次没有等主管替我解释。会议室门外有人催我停止复核，我却把文件编号投到公开屏幕，让所有人先看清楚这份证据到底从哪儿来。
 
-哥哥隔着桌子叫我的名字，我没有回头。那一刻我知道，继续说下去不是为了赢一场嘴仗，而是让每个看见直播的人都能顺着编号查到文件来源。
+主管隔着桌子叫我的名字，我没有回头。那一刻我知道，继续说下去不是为了赢一场嘴仗，而是让每个参加复核的人都能顺着编号查到文件来源。
 MD
 
     run node "$FINALIZE" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json

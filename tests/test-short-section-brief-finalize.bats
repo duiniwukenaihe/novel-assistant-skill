@@ -24,7 +24,7 @@ const { analyzeBriefQuality, countCausalBeats } = require(process.argv[2]);
 const brief = `# 第7节写作提要
 > 目标 1500-1700 个中文字符
 ## 因果动作链
-主角追问；母亲改口；主角核对证据；对手发预告；主角准备反制。
+主角追问；证人改口；主角核对证据；对手发预告；主角准备反制。
 ## 禁写项
 1. 不引入新人。
 2. 不提前开播。
@@ -44,15 +44,23 @@ const { analyzeBriefQuality } = require(process.argv[2]);
 const brief = `# 第9节写作提要
 > 目标 1600-1900 个中文字符
 ## 视角与人物
-第一人称，林照、哥哥、母亲、员工、舍友、父亲出场。
+第一人称，只保留主角、搭档、对手与见证人。
+## 证据机制
+1. 证据机制 A：现场记录。
+2. 证据机制 B：书面凭据。
+3. 证据机制 C：第三方核验。
+4. 证据机制 D：时间线复核。
 ## 因果动作链
-1. 调取工商档案和交易回执。
-2. 公布检测报告、批次记录和退款申请。
-3. 启动召回、退款与停产整改。
-4. 处理员工工资和转岗。
-5. 召开董事会暂停哥哥职务并引入职业经理人。
-6. 三个月后恢复生产并直播公开。
-7. 舍友群回应，随后去见父亲。
+1. 主角发现矛盾。
+2. 对手拒绝说明。
+3. 搭档完成核验。
+4. 主角作出选择。
+## 本节承担项
+1. 回答核心疑问。
+2. 兑现前置承诺。
+3. 处理直接后果。
+4. 完成人物关系变化。
+5. 建立下一阶段的新状态。
 ## 禁止漂移
 不回避现实后果。
 ## 验收
@@ -73,12 +81,14 @@ NODE
   cat > "$BOOK/追踪/workflow/tasks/$WF/task.json" <<JSON
 {"workflow_id":"$WF","workflow_type":"short_write","task_dir":"追踪/workflow/tasks/$WF","state_version":1,"current_stage":"next_section_brief","scope":"第7节","stage_execution":{"status":"running","stage_id":"next_section_brief","stage_attempt_id":"sa-brief-001","expected_result_packet":"追踪/workflow/tasks/$WF/result-packets/next_section_brief.result.json"}}
 JSON
+  printf '{"schemaVersion":"1.0.0","workflow_id":"%s","task_dir":"追踪/workflow/tasks/%s","state_version":1}\n' "$WF" "$WF" > "$BOOK/追踪/workflow/current-task.json"
   cat > "$BOOK/追踪/private-short-extension/project-state.json" <<'JSON'
 {"project_id":"brief-overload-test","plan_revision":1,"narrative":{"planned_sections":8},"current_section_index":7,"accepted_sections":[{"section_index":6}]}
 JSON
   cat > "$BOOK/追踪/private-short-extension/section-title-lock.json" <<'JSON'
 {"workflow_id":"wf-brief-recovery","project_id":"brief-overload-test","plan_revision":1,"sections":[{"section_index":7,"title":"第七节","confirmed":true}]}
 JSON
+  printf '{"schema_version":"1.0.0","section_index":6,"status":"accepted","section_summary":"上一节留下待解决的公开冲突。","open_hook":"主角必须作出选择。"}\n' > "$BOOK/追踪/private-short-extension/section-006-anchor.json"
   printf '# 素材卡\n测试素材。\n' > "$BOOK/素材卡.md"
   printf '# 设定\n第一人称。\n主节奏：调查反击。\n共8节。\n' > "$BOOK/设定.md"
   cat > "$BOOK/小节大纲.md" <<'EOF'
@@ -101,10 +111,10 @@ JSON
 - 核心承诺兑现：主角当面拒绝继续包庇对手。
 - 决定性行动：主角将原始邮件交给独立审查。
 - 即时代价：主角失去工作权限。
-- 节尾钩子：邮件抄送栏出现母亲的名字。
+- 节尾钩子：记录中出现另一名知情人。
 EOF
   {
-    printf '# 第7节写作提要\n> 目标 1500-1700 个中文字符\n## 视角与人物\n第一人称，人物称谓固定，主角只能根据眼前证据判断。\n## 大纲覆盖映射\n- S00：中段升级。\n- B01：对手抢夺合同。\n- B02：主角保留备份。\n- C01：主角拒绝删除备份。\n- H01：邮件抄送栏出现母亲的名字。\n- Q01：上一节留下的伪造合同迫使主角当面对质。\n- V01：私下怀疑升级为失去工作权限的公开对抗。\n- A01：主角把合同摊到桌上。\n- O01：对手威胁停掉她的工作。\n- P01：签名伪造得到证实。\n- R01：双方从暗中怀疑转为公开对抗。\n- K01：主角失去工作权限。\n- X01：主角当面拒绝继续包庇对手。\n- D01：主角将原始邮件交给独立审查。\n## 因果动作链\n[Q01] [V01] [A01] [B01] [O01] [B02] [P01] [C01] [R01] [K01] [X01] [D01] [H01]\n'
+    printf '# 第7节写作提要\n> 目标 1500-1700 个中文字符\n## 视角与人物\n第一人称，人物称谓固定，主角只能根据眼前证据判断。\n## 大纲覆盖映射\n- S00：中段升级。\n- B01：对手抢夺凭据。\n- B02：主角保留备份。\n- C01：主角拒绝删除备份。\n- H01：记录中出现另一名知情人。\n- Q01：上一节留下的异常凭据迫使主角当面对质。\n- V01：私下怀疑升级为失去行动权限的公开对抗。\n- A01：主角把凭据摊到桌上。\n- O01：对手威胁停掉主角的行动权限。\n- P01：记录异常得到证实。\n- R01：双方从暗中怀疑转为公开对抗。\n- K01：主角失去行动权限。\n- X01：主角当面拒绝继续包庇对手。\n- D01：主角将原始记录交给独立审查。\n## 因果动作链\n[Q01] [V01] [A01] [B01] [O01] [B02] [P01] [C01] [R01] [K01] [X01] [D01] [H01]\n'
     for i in $(seq 1 12); do printf '%s. 事件推进，主角根据上一项结果作出新的选择并承担代价。\n' "$i"; done
     printf '## 禁止漂移\n不越权，不引入新人物，不提前兑现后文反转。\n## 节尾钩子\n新证据出现，但真相尚未揭开。\n## 验收\n人物选择、因果变化和节尾钩子成立。\n'
   } > "$BOOK/写作Brief_第007节.md"
@@ -115,8 +125,30 @@ EOF
 
   run node "$SCRIPT" --project-root "$BOOK" --workflow-id "$WF" --apply --json
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"status":"brief_revision_exhausted"'* ]]
-  [[ "$output" == *'"requires_user_input":true'* ]]
+  [[ "$output" == *'"status":"workflow_choice_required"'* ]] || false
+  [[ "$output" == *'"selection_contract":"execute_command_or_route_intent"'* ]] || false
+  [[ "$output" == *'保留核心因果，压缩次要收束（推荐）'* ]] || false
+  [[ "$output" == *'"进入 Chat 指定保留、删减或拆分方式"'* ]] || false
+
+  run node "$REPO/scripts/workflow-state-machine.js" next-candidates --project-root "$BOOK" --compact --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"status": "workflow_choice_required"'* ]] || false
+  [[ "$output" == *'"pending_action_id": "pa-short-brief-overload-wf-brief-recovery-7"'* ]] || false
+  [[ "$output" == *'"number": 4'* ]] || false
+
+  cp -R "$BOOK" "$BATS_TEST_TMPDIR/book-retry"
+  run node "$REPO/scripts/workflow-state-machine.js" resolve-action --project-root "$BATS_TEST_TMPDIR/book-retry" --input 1 --bind-current --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"status": "stage_started"'* ]] || false
+  [[ "$output" == *'压缩次要关系余韵和重复承担项'* ]] || false
+
+  run node "$REPO/scripts/workflow-state-machine.js" resolve-action --project-root "$BOOK" --input 2 --bind-current --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"status": "short_brief_overload_revision_input_requested"'* ]] || false
+
+  run node "$REPO/scripts/workflow-state-machine.js" resolve-action --project-root "$BOOK" --input '保留全部关键后果，允许调整为两节，并重新给我确认方案' --bind-current --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"status": "short_feedback_impact_started"'* ]] || false
 }
 
 @test "accepted brief projects portable next-section state for cross-host recovery" {

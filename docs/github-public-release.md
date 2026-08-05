@@ -90,7 +90,7 @@ After sanitization, public workflow behavior must be:
 
 - `public-release-audit.js --json` must pass.
 - `production-smoke-matrix.js --json` must pass on the sanitized worktree.
-- `bats tests/test-short-workflow-production-e2e.bats` must complete the public short-writing production loop.
+- `bats tests/test-workflow-v3-new-short-e2e.bats` must complete the public V3 short-writing production loop.
 - `workflow-state-machine.js templates --json` must report `privateRegistryCount=0`.
 - `short_write` may use `story-workflow` for control stages; every professional short-form stage must use public `story-short-write`.
 - `private_short_startup` must not exist in public templates.

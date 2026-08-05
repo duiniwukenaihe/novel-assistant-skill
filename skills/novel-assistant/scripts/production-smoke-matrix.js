@@ -816,6 +816,21 @@ const GLOBAL_CHECKS = [
     },
   },
   {
+    id: 'short_workflow_v3_production',
+    label: '短篇 V3 单内核、兼容迁移与三宿主交互',
+    checks: [
+      check('script', 'scripts/workflow-v3.js', []),
+      check('bundle', 'skills/novel-assistant/scripts/workflow-v3.js', []),
+      check('script', 'scripts/lib/workflow-v3/engine.js', []),
+      check('bundle', 'skills/novel-assistant/scripts/lib/workflow-v3/engine.js', []),
+      check('script', 'scripts/lib/workflow-host-adapters.js', ['renderHostVisibleResponse']),
+      check('bundle', 'skills/novel-assistant/scripts/lib/workflow-host-adapters.js', ['renderHostVisibleResponse']),
+    ],
+    run() {
+      runShortWorkflowV3ProductionCase(repoRoot);
+    },
+  },
+  {
     id: 'AI_native_absorption',
     label: 'AI Native 小说生产吸收契约',
     checks: [
@@ -1427,6 +1442,177 @@ function runTask11BehaviorContractCase(repoRootValue) {
   if (!antiPandering || stableJson(antiPandering.facts) !== '["主角已经交出钥匙","守门人亲眼见证"]'
     || stableJson(antiPandering.structure) !== '["对质","交出钥匙","守门人放行"]') {
     throw new Error('anti-pandering changed story facts or structure');
+  }
+}
+
+function runShortWorkflowV3ProductionCase(repoRootValue) {
+  const verification = childProcess.spawnSync(process.execPath, [
+    path.join(repoRootValue, 'scripts', 'na-dev.js'),
+    'verify-v3-short',
+  ], { cwd: repoRootValue, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  if (verification.error) throw verification.error;
+  if (verification.status !== 0) {
+    throw new Error(`verify-v3-short failed: ${(verification.stderr || verification.stdout || '').slice(-2000)}`);
+  }
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'na-v3-production-smoke-'));
+  try {
+    const migratedRoot = path.join(tmp, 'legacy-v2');
+    const workflowId = 'wf-neutral-v2-production-smoke';
+    const fixture = JSON.parse(fs.readFileSync(path.join(
+      repoRootValue,
+      'tests', 'fixtures', 'workflow-v3', 'legacy-v2', 'planning-confirmed.json',
+    ), 'utf8'));
+    fixture.workflow_id = workflowId;
+    fixture.task_dir = `追踪/workflow/tasks/${workflowId}`;
+    fixture.stage_execution.stage_attempt_id = 'sa-neutral-v2-production-smoke';
+    const taskFile = path.join(migratedRoot, fixture.task_dir, 'task.json');
+    fs.mkdirSync(path.dirname(taskFile), { recursive: true });
+    fs.writeFileSync(taskFile, `${JSON.stringify(fixture, null, 2)}\n`);
+    fs.mkdirSync(path.join(migratedRoot, '追踪', 'workflow'), { recursive: true });
+    fs.writeFileSync(path.join(migratedRoot, '追踪', 'workflow', 'current-task.json'), `${JSON.stringify({
+      schemaVersion: '1.0.0',
+      workflow_id: workflowId,
+      task_dir: fixture.task_dir,
+      state_version: fixture.state_version,
+      focused_at: '2026-01-01T00:00:00.000Z',
+    }, null, 2)}\n`);
+    for (const directory of ['正文', '大纲', '设定']) fs.mkdirSync(path.join(migratedRoot, directory), { recursive: true });
+    fs.writeFileSync(path.join(migratedRoot, '正文.md'), '# 正文合稿\n\n中性迁移测试合稿。\n');
+    fs.writeFileSync(path.join(migratedRoot, '小节大纲.md'), '# 小节大纲\n\n第1节：发现并核对。\n');
+    fs.writeFileSync(path.join(migratedRoot, '设定.md'), '# 设定\n\n中性项目约束。\n');
+    fs.writeFileSync(path.join(migratedRoot, '正文', '第001节.md'), '# 正文\n\n中性迁移测试文本。\n');
+    fs.writeFileSync(path.join(migratedRoot, '大纲', '总纲.md'), '# 总纲\n\n发现、核对、处理。\n');
+    fs.writeFileSync(path.join(migratedRoot, '设定', '人物.md'), '# 人物\n\n主角坚持复核。\n');
+
+    const gateway = require(path.join(repoRootValue, 'scripts', 'lib', 'workflow-v3', 'compatibility-gateway.js'));
+    const creativeBefore = gateway.collectProtectedAssetDigests(migratedRoot);
+    const compatibility = gateway.inspectCompatibility(migratedRoot);
+    if (compatibility.status !== 'safe_auto_upgrade' || compatibility.target_stage !== 'section_brief') {
+      throw new Error(`V2 compatibility preview is invalid: ${JSON.stringify(compatibility)}`);
+    }
+    const plan = gateway.buildMigrationPlan(migratedRoot, workflowId);
+    const migrated = gateway.applyMigration(migratedRoot, plan.plan_digest);
+    const durable = JSON.parse(fs.readFileSync(taskFile, 'utf8'));
+    if (!migrated.migrated || migrated.target_stage !== 'section_brief'
+        || ![durable.engine_version, durable.task_schema_version, durable.workflow_contract_version].every(value => value === 3)
+        || durable.state_version !== fixture.state_version + 1) {
+      throw new Error(`V2 migration result is invalid: ${JSON.stringify(migrated)}`);
+    }
+    const creativeAfter = gateway.collectProtectedAssetDigests(migratedRoot);
+    if (stableJson(creativeBefore) !== stableJson(plan.protected_assets)
+        || stableJson(creativeBefore) !== stableJson(creativeAfter)) {
+      throw new Error('V3 production migration changed protected creative asset hashes');
+    }
+
+    const newRoot = path.join(tmp, 'new-v3');
+    fs.mkdirSync(newRoot, { recursive: true });
+    const v3Cli = path.join(repoRootValue, 'scripts', 'workflow-v3.js');
+    const created = runJson(process.execPath, [
+      v3Cli, 'create-short', '--project-root', newRoot,
+      '--profile', 'public', '--user-goal', '中性短篇生产验收', '--json',
+    ]);
+    const resultFile = path.join(tmp, 'choice-result.json');
+    fs.writeFileSync(resultFile, `${JSON.stringify({
+      kind: 'needs_author_choice',
+      code: 'neutral_production_choice',
+      stage_id: 'creative_entry',
+      question: '请选择下一步方向',
+      options: [
+        { action_id: 'continue_neutral_plan', label: '继续中性方案' },
+        { action_id: 'adjust_neutral_plan', label: '调整中性方案' },
+      ],
+    })}\n`);
+    const applied = runJson(process.execPath, [
+      v3Cli, 'apply-result', '--project-root', newRoot,
+      '--workflow-id', created.task.workflow_id,
+      '--expected-version', '1', '--result-file', resultFile, '--json',
+    ]);
+    const interaction = applied.visible_response;
+    const bindingKeys = Object.keys((interaction || {}).binding || {}).sort();
+    if (!interaction || stableJson(bindingKeys) !== stableJson([
+      'pending_action_id', 'state_version', 'visible_choice_hash', 'workflow_id',
+    ])) throw new Error('V3 committed interaction binding is invalid');
+    const adapters = require(path.join(repoRootValue, 'scripts', 'lib', 'workflow-host-adapters.js'));
+    const rendered = ['claude-code', 'codex', 'zcode']
+      .map(host => adapters.renderHostVisibleResponse(host, interaction));
+    if (!rendered.every(value => value.text === interaction.text
+        && stableJson(value.binding) === stableJson(interaction.binding))
+        || !rendered.every(value => stableJson(value) === stableJson(rendered[0]))) {
+      throw new Error('V3 host envelopes differ');
+    }
+
+    const feedbackFile = path.join(tmp, 'feedback.json');
+    fs.writeFileSync(feedbackFile, `${JSON.stringify({ text: '当前选择的代价不够清楚，请先调整方案。' })}\n`);
+    const feedback = runJson(process.execPath, [
+      v3Cli, 'submit-feedback', '--project-root', newRoot,
+      '--workflow-id', created.task.workflow_id,
+      '--expected-version', String(applied.task.state_version),
+      '--input-file', feedbackFile, '--json',
+    ]);
+    if (feedback.feedback_receipt.status !== 'pending_analysis'
+        || feedback.task.current_stage !== 'creative_entry'
+        || feedback.task.pending_action) {
+      throw new Error('V3 free Chat was not durably recorded without advancing the stage');
+    }
+    const proposalFile = path.join(tmp, 'feedback-plan.json');
+    fs.writeFileSync(proposalFile, `${JSON.stringify({
+      feedback_id: feedback.feedback_receipt.feedback_id,
+      summary: '补足选择的现实代价，再继续当前阶段。',
+      impact_level: 'planning_and_prose',
+      affected_sections: [1],
+      evidence: ['当前方案缺少可见代价'],
+      proposed_changes: ['补足现实阻力', '保持既定结局'],
+    })}\n`);
+    const proposal = runJson(process.execPath, [
+      v3Cli, 'propose-feedback', '--project-root', newRoot,
+      '--workflow-id', created.task.workflow_id,
+      '--expected-version', String(feedback.task.state_version),
+      '--input-file', proposalFile, '--json',
+    ]);
+    const proposalInput = path.join(tmp, 'feedback-accept.json');
+    fs.writeFileSync(proposalInput, `${JSON.stringify({
+      ...(proposal.visible_response || {}).binding,
+      choice: '1',
+    })}\n`);
+    const accepted = runJson(process.execPath, [
+      v3Cli, 'resolve', '--project-root', newRoot,
+      '--workflow-id', created.task.workflow_id,
+      '--expected-version', String(proposal.task.state_version),
+      '--input-file', proposalInput, '--json',
+    ]);
+    const acceptedTask = runJson(process.execPath, [
+      v3Cli, 'show', '--project-root', newRoot,
+      '--workflow-id', created.task.workflow_id, '--json',
+    ]).task;
+    if (accepted.selection.action_id !== 'accept_feedback_plan'
+        || acceptedTask.pending_feedback.status !== 'accepted'
+        || acceptedTask.current_stage !== 'creative_entry') {
+      throw new Error('V3 free Chat plan did not require and persist author confirmation');
+    }
+
+    const mirroredScripts = [
+      'workflow-v3.js',
+      'workflow-entry-guard.js',
+      'workflow-task-inbox.js',
+      'legacy-short-project-migrate.js',
+      'short-state-storage-migrate.js',
+      path.join('lib', 'workflow-host-adapters.js'),
+    ];
+    for (const relative of mirroredScripts) {
+      const source = path.join(repoRootValue, 'scripts', relative);
+      const bundle = path.join(repoRootValue, 'skills', 'novel-assistant', 'scripts', relative);
+      if (!fs.existsSync(bundle)) throw new Error(`V3 bundle runtime is missing: ${relative}`);
+      if (!fs.readFileSync(source).equals(fs.readFileSync(bundle))) {
+        throw new Error(`V3 bundle runtime drift: ${relative}`);
+      }
+    }
+    assertDirectoryMirror(
+      path.join(repoRootValue, 'scripts', 'lib', 'workflow-v3'),
+      path.join(repoRootValue, 'skills', 'novel-assistant', 'scripts', 'lib', 'workflow-v3'),
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 

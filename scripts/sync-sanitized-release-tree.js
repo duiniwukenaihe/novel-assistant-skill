@@ -5,6 +5,58 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const POLICY_FILE = 'config/github-public-release-files.json';
+const POLICY_NAME = 'sanitized_target_index_with_public_runtime_auto_approval';
+
+// Auto-approved public runtime roots. These are only honored AFTER the source
+// tree has been sanitized by the publisher (sanitize-github-public-tree.js)
+// and audited by public-release-audit.js — the publish script enforces that
+// ordering. Default deny still applies: anything outside these roots, or any
+// unknown top-level file in the repo root, must be opted in via
+// additionalFiles in the policy file.
+const AUTO_APPROVED_ROOTS = [
+  'scripts',
+  'skills/novel-assistant',
+  'src/internal-skills',
+];
+
+// Test roots that may ship with the public runtime. tests/fixtures/** is
+// explicitly excluded so demo/local content still requires explicit opt-in.
+const AUTO_APPROVED_TEST_FILES = (relative) => {
+  if (!relative.startsWith('tests/')) return false;
+  if (relative.startsWith('tests/fixtures/')) return false;
+  const base = relative.slice('tests/'.length);
+  if (base.includes('/')) return false; // only top-level files
+  return /^(test-.*\.bats|.*\.test\.mjs|.*\.test\.js)$/.test(base);
+};
+
+// Private skill trees are never publishable, even if a caller mistakenly puts
+// them in additionalFiles or they existed on an older public branch.
+const HARD_DENY_PREFIXES = [
+  'src/private-internal-skills/',
+  'skills/novel-assistant/references/private-internal-skills/',
+];
+
+// These trees are not automatically approved. Existing public files and
+// explicitly reviewed additions remain allowed so public docs and neutral test
+// fixtures can still support release verification.
+const AUTO_APPROVAL_EXCLUDED_PREFIXES = [
+  'docs/',
+  'reports/',
+  'tests/fixtures/',
+];
+
+function hasPrefix(relative, prefixes) {
+  return prefixes.some((prefix) => relative.startsWith(prefix));
+}
+
+function isAutoApprovedPublicRuntime(relative) {
+  if (hasPrefix(relative, HARD_DENY_PREFIXES)
+      || hasPrefix(relative, AUTO_APPROVAL_EXCLUDED_PREFIXES)) return false;
+  if (AUTO_APPROVED_ROOTS.some((root) => relative === root || relative.startsWith(`${root}/`))) {
+    return true;
+  }
+  return AUTO_APPROVED_TEST_FILES(relative);
+}
 
 function parseArgs(argv) {
   const args = { sourceRoot: '', targetRoot: '', write: false, json: false };
@@ -90,6 +142,42 @@ function copyFile(sourceRoot, targetRoot, relative) {
   return true;
 }
 
+function classifySourceFiles(sourceFiles, baselineFiles, policy) {
+  const baselineSet = new Set(baselineFiles);
+  const additionalSet = new Set(policy.additionalFiles);
+  const removedSet = new Set(policy.removedFiles);
+  const autoApproved = [];
+  const explicitAdditions = [];
+  const inherited = [];
+  const skippedUnapproved = [];
+  for (const relative of sourceFiles) {
+    if (removedSet.has(relative)) continue; // removedFiles always wins
+    if (hasPrefix(relative, HARD_DENY_PREFIXES)) {
+      skippedUnapproved.push(relative);
+      continue;
+    }
+    if (additionalSet.has(relative)) {
+      explicitAdditions.push(relative);
+      continue;
+    }
+    if (baselineSet.has(relative)) {
+      inherited.push(relative);
+      continue;
+    }
+    if (isAutoApprovedPublicRuntime(relative)) {
+      autoApproved.push(relative);
+      continue;
+    }
+    skippedUnapproved.push(relative);
+  }
+  return {
+    autoApproved: [...new Set(autoApproved)].sort(),
+    explicitAdditions: [...new Set(explicitAdditions)].sort(),
+    inherited: [...new Set(inherited)].sort(),
+    skippedUnapproved: [...new Set(skippedUnapproved)].sort(),
+  };
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!fs.existsSync(args.sourceRoot)) throw new Error(`source-root not found: ${args.sourceRoot}`);
@@ -105,25 +193,35 @@ function main() {
     if (!sourceFileSet.has(relative)) throw new Error(`missing explicit public release file: ${relative}`);
   }
   const baselineFiles = trackedFiles(args.targetRoot);
-  const approved = new Set([...baselineFiles, ...policy.additionalFiles]);
+  const classification = classifySourceFiles(sourceFiles, baselineFiles, policy);
+  const approved = new Set([
+    ...classification.inherited,
+    ...classification.explicitAdditions,
+    ...classification.autoApproved,
+  ]);
+  // removedFiles always win over inherited/auto-approval/explicit addition.
   for (const relative of policy.removedFiles) approved.delete(relative);
   if (fs.existsSync(path.join(args.sourceRoot, POLICY_FILE))) approved.add(POLICY_FILE);
   const targetEntries = topLevelEntries(args.targetRoot);
   const approvedFiles = [...approved].filter((relative) => sourceFileSet.has(relative)).sort();
-  const skippedUnapproved = sourceFiles.filter((relative) => !approved.has(relative));
   const result = {
     schemaVersion: '1.0.0',
     status: args.write ? 'synced' : 'dry_run',
     sourceRoot: args.sourceRoot,
     targetRoot: args.targetRoot,
-    policy: 'target_git_index_plus_explicit_additions',
+    policy: POLICY_NAME,
     sourceFiles: sourceFiles.length,
     baselineTrackedFiles: baselineFiles.length,
-    explicitAdditionalFiles: policy.additionalFiles,
+    autoApprovedRuntimeRoots: [...AUTO_APPROVED_ROOTS],
+    hardDenyPrefixes: [...HARD_DENY_PREFIXES],
+    autoApprovalExcludedPrefixes: [...AUTO_APPROVAL_EXCLUDED_PREFIXES],
+    autoApprovedRuntimeFiles: classification.autoApproved,
+    explicitAdditionalFiles: classification.explicitAdditions,
+    inheritedBaselineFiles: classification.inherited,
     removedFiles: policy.removedFiles,
     approvedFiles: approvedFiles.length,
-    skippedUnapprovedCount: skippedUnapproved.length,
-    skippedUnapprovedFiles: skippedUnapproved.slice(0, 100),
+    skippedUnapprovedCount: classification.skippedUnapproved.length,
+    skippedUnapprovedFiles: classification.skippedUnapproved.slice(0, 100),
     removedTopLevelEntries: targetEntries,
     copiedTopLevelEntries: [...new Set(approvedFiles.map((relative) => relative.split('/')[0]))].sort(),
     preserved: ['.git']

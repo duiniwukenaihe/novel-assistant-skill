@@ -36,8 +36,12 @@ function initializeShortFeedbackRevisionQueue(task = {}, result = {}, policy = {
   const recheckProse = new Set(sectionList(
     downstream.recheck_prose || downstream.recheck_sections || downstream.prose_recheck || affectedSections,
   ));
+  const qualityRepairRequired = (Array.isArray((((task || {}).pending_feedback || {}).items))
+    ? task.pending_feedback.items
+    : []).some(item => ['quality_gate', 'story_value_gate'].includes(String((item || {}).source_kind || '')));
   const now = new Date().toISOString();
-  const feedbackId = String(((task || {}).pending_feedback || {}).feedback_id || result.feedback_id || '');
+  const pendingFeedback = ((task || {}).pending_feedback || {});
+  const feedbackId = String(pendingFeedback.feedback_id || pendingFeedback.id || result.feedback_id || '');
   const previous = task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
     ? task.feedback_revision_queue
     : null;
@@ -53,7 +57,9 @@ function initializeShortFeedbackRevisionQueue(task = {}, result = {}, policy = {
       section_index: sectionIndex,
       status: 'pending',
       brief_status: invalidatedBriefs.has(sectionIndex) ? 'invalidated' : 'rebuild_required',
-      prose_status: recheckProse.has(sectionIndex) ? 'pending_recheck' : 'pending_reacceptance',
+      prose_status: qualityRepairRequired
+        ? 'revision_required'
+        : recheckProse.has(sectionIndex) ? 'pending_recheck' : 'pending_reacceptance',
       accepted_commit_id: '',
       completed_at: '',
     }
@@ -151,6 +157,31 @@ function mergeStructureImpactIntoRevisionQueue(task, result) {
 }
 
 function initializeAssemblyIntegrityRevisionQueue(task = {}, findings = {}) {
+  return initializeAcceptedSectionRevisionQueue(task, findings, {
+    sourceStage: 'full_story_assembly',
+    queueKind: 'assembly-integrity',
+    impactLevel: 'canonical_integrity',
+    event: 'assembly_integrity_queue_created',
+    status: 'assembly_integrity_revision_queue_created',
+  });
+}
+
+function initializeEditorialLengthRevisionQueue(task = {}, findings = {}) {
+  const invalidSections = (Array.isArray(findings.length_findings) ? findings.length_findings : [])
+    .map((item) => ({
+      section_index: Number((item || {}).section_index || 0),
+      reason: String((item || {}).code || 'section_length_repair_required'),
+    }));
+  return initializeAcceptedSectionRevisionQueue(task, { invalid_sections: invalidSections }, {
+    sourceStage: 'full_story_editorial_length',
+    queueKind: 'editorial-length',
+    impactLevel: 'section_length_repair',
+    event: 'editorial_length_queue_created',
+    status: 'editorial_length_revision_queue_created',
+  });
+}
+
+function initializeAcceptedSectionRevisionQueue(task = {}, findings = {}, options = {}) {
   if (!SHORT_WORKFLOWS.has(String(task.workflow_type || ''))) {
     return { status: 'not_applicable', queue: task.feedback_revision_queue || null };
   }
@@ -167,28 +198,30 @@ function initializeAssemblyIntegrityRevisionQueue(task = {}, findings = {}) {
   const previous = task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
     ? task.feedback_revision_queue
     : null;
+  const sourceStage = String(options.sourceStage || 'full_story_assembly');
+  const editorialLength = sourceStage === 'full_story_editorial_length';
   const items = affectedSections.map(sectionIndex => ({
     section_index: sectionIndex,
     status: 'pending',
     brief_status: missing.has(sectionIndex) ? 'missing' : 'current',
-    prose_status: missing.has(sectionIndex) ? 'missing' : 'pending_recheck',
+    prose_status: missing.has(sectionIndex) ? 'missing' : editorialLength ? 'revision_required' : 'pending_recheck',
     reason: missing.has(sectionIndex) ? 'missing_accepted_section' : invalidReasons.get(sectionIndex),
     accepted_commit_id: '',
     completed_at: '',
   }));
   const queue = {
     schema_version: '1.0.0',
-    queue_id: `revision.assembly-integrity.${Date.now()}`,
-    source_stage: 'full_story_assembly',
+    queue_id: `revision.${String(options.queueKind || 'accepted-sections')}.${Date.now()}`,
+    source_stage: sourceStage,
     status: 'running',
-    impact_level: 'canonical_integrity',
+    impact_level: String(options.impactLevel || 'canonical_integrity'),
     affected_sections: affectedSections,
     current_section_index: affectedSections[0],
     completed_sections: [],
     groups: buildRevisionGroups(affectedSections),
     items,
     checkpoints: [{
-      event: 'assembly_integrity_queue_created',
+      event: String(options.event || 'accepted_section_revision_queue_created'),
       section_index: affectedSections[0],
       affected_sections: affectedSections,
       missing_sections: missingSections,
@@ -205,7 +238,7 @@ function initializeAssemblyIntegrityRevisionQueue(task = {}, findings = {}) {
   syncRevisionGroupProgress(queue);
   task.feedback_revision_queue = queue;
   task.scope = `第${affectedSections[0]}节`;
-  return { status: 'assembly_integrity_revision_queue_created', queue };
+  return { status: String(options.status || 'accepted_section_revision_queue_created'), queue };
 }
 
 function reconcileShortRevisionQueueWithTitleLock(projectRoot, task = {}) {
@@ -412,6 +445,7 @@ function readJson(file) {
 module.exports = {
   initializeShortFeedbackRevisionQueue,
   initializeAssemblyIntegrityRevisionQueue,
+  initializeEditorialLengthRevisionQueue,
   activeShortFeedbackRevision,
   currentShortFeedbackRevisionSection,
   previewShortFeedbackRevisionAcceptance,

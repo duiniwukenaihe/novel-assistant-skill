@@ -30,6 +30,8 @@ description: |
 
 已确认阶段遵循原子收束不变量：`读取最小上下文 -> 生成或修订暂存产物 -> 执行阶段完成命令 -> 接受结果包 -> 自动进入下一安全阶段或显示数字菜单` 必须在同一轮完成。暂存产物存在但结果包缺失时，workflow 仍处于运行中，任何模块都不得向用户回复“只差提交命令”。内部质量恢复有界执行；连续两次仍无法收束时才保存断点并返回统一恢复菜单。
 
+宿主必须按状态机的停止字段执行：`presentation_allowed=false` 或 `visible_response.user_visible=false` 时，本轮不能生成用户可见回复；必须继续执行 `stage_completion_command`，直到返回值命中 `terminal_reply_allowed_on`。Brief、写作提要或其他内部候选质量失败先在当前写集内修订一次并重跑完成命令，不得临时向作者提出无落盘状态的自由文本问题。只有状态机返回 `workflow_choice_required`，或一次修订后返回带最后可信断点的 `blocked_*`，才允许停靠；需要作者判断时必须由 durable `pending_action` 统一显示数字菜单和 Chat 修改入口。
+
 ## 全局 Workflow / Memory 内核
 
 `story-workflow` 是所有专业模块共享的全局编排层；`story-memory` 是需要记忆装配阶段的统一决策层。这里的“全局”不是把所有记忆塞进每次提示词，而是每个阶段都必须经过同一个 Runner 决策点：
@@ -75,7 +77,7 @@ description: |
 ## 阶段路由
 
 1. 更新确认已收束后，先读取 `task-inbox-protocol.md`，执行 `workflow-entry-guard.js`，并根据真实状态决定首屏、恢复或业务路由。
-2. 已有活动任务时，用户输入的自然语言作品意见必须先走 `workflow-state-machine.js resolve-action --project-root . --input <用户原文> --bind-current --json`。不得用 `workflow-task-inbox.js` 代替反馈入账，也不得只把助手摘要留在聊天里。原始意见进入任务反馈证据层；助手归纳形成待确认方案；用户确认后才投影到 memory、设定、大纲、Brief 和修订队列。
+2. 已有活动任务时，用户输入的自然语言作品意见必须先落入当前任务，不能只把助手摘要留在聊天里。V3 短篇由 `workflow-entry-guard.js --user-intent <用户原文> --write` 调用 `workflow-v3.js submit-feedback`，逐字保存并返回 `v3_feedback_recorded / analyze_v3_feedback`；助手完成影响分析后，用 `workflow-v3.js propose-feedback` 持久化方案并生成“采用方案 / 继续讨论 / 查看依据 / 暂停并保存”四项确认。只有 `accept_feedback_plan` 被当前四字段绑定消费后，才能投影到 memory、设定、大纲、Brief、正文和修订队列。V2 与非短篇任务继续走 `workflow-state-machine.js resolve-action --project-root . --input <用户原文> --bind-current --json`。不得用 `workflow-task-inbox.js` 代替反馈入账，也不得把 V3 意见回落到已冻结的 V2 状态机。
 3. 需要创建、恢复、推进、阻塞或解析编号时，仍以 `workflow-state-machine.js` 为权威；进入执行前读取 `runner-execution-protocol.md`。
 4. L3 只执行 packet 指定的专业模块。若结果涉及正式资产或短篇根资产，必须先读取 `canonical-write-protocol.md`；事务证据不足不得写入或关闭阶段。
 5. 应用 result packet、处理缺失回执、生成完成声明或下一步候选前，必须读取 `completion-evidence-protocol.md`。
@@ -98,6 +100,32 @@ description: |
 ## 输出边界
 
 用户可见输出中文优先，不以宿主 UI 的 thinking trace 语言作为验收对象；英文只能作为技术字段名、脚本名、错误码、JSON key 或用户明确要求的英文输出。内部可用 `SSOT` / `ssot`，但对用户展示时改写为“权威设定”“设定基准”“唯一设定源”；`user-facing-jargon-leak` 先触发中文重写与复扫，只有同时命中硬污染时才进入阻断模板。完整词汇映射、污染处理和可见回复门禁见 [output-safety-contract.md](references/output-safety-contract.md)。
+
+### 用户可见术语必须中文化
+
+`user-facing-jargon-leak` 是重写信号，不是流程终点。面向作者的可见输出必须使用中文自然术语：显示“第 7 节”“写作提要”“质量检查”“下一步”“境界设定：第 1-50 章维持炼气阶段”“设定基准对齐建议”“目标权威设定”“设定基准词表”，禁止输出 `SSOT` 等内部工程缩写。完整规则由 `output-pollution-check.js` 负责识别与中文重写，runner 只复扫命中后落盘。
+
+### 可见回复门禁与硬污染恢复
+
+**前置自检比落盘门禁更早**：候选可见回复、阶段摘要、用户候选与恢复菜单写盘前，必须先做 `output-pollution-check.js --json` 的 `internal-workflow-narration` / `encoded-gibberish-blob` 自检；命中即视为污染源隔离，未隔离段不得继续输出。
+
+**污染恢复协议**：命中输出污染后不是继续润色。先定位最后可信事实点（最后一个有证据的 finding / 章节范围 / grep 或报告来源），丢弃污染段及其后内容；把未完成报告拆成“范围、证据、结论、修复建议、下一步”五块分块重写，每块写完复扫。连续 2 次复扫仍失败时停止生成长报告，落盘 `paused_after_output_pollution`，记录最后可信事实点、丢弃污染段、未完成块和“新会话”续跑句。
+
+### 模型退化 front-stop
+
+写作、回炉、扩容、审阅或大纲修订过程中出现 `blocked_model_degradation`：领域词无间隔重复、SSOT 词组循环、阶段标签循环、同一领域词几十次刷屏、长时间 thinking 但无新增可信产物，立即停止当前动作。此状态下不得写入正文/报告，不得继续 Write/Edit，不得把污染思路转成大纲、细纲或修复方案；只保留最后可信断点，缩小任务粒度重试一次；若重试仍出现循环，向用户显示干净候选：1. 缩小范围继续 2. 切换模型后续跑 3. 只保存诊断。
+
+### 自学习退化规则
+
+正文、细纲、回炉方案、修复方案和可见长回复生成前先读取 `追踪/schema/output-pollution-rules.jsonl`（生成前先读取已学习模型退化规则）。若规则含 `blockedStatus=blocked_model_degradation`，必须把对应 phrase 加入本轮前置阻断词表；生成草稿、候选或正文前先检查这些 phrase，命中即前置阻断，不进入 Write/Edit 或长回复生成。
+
+### 供应商敏感输出拦截
+
+写作或审阅时如果 API 返回 `output new_sensitive`、`new_sensitive (1027)` 或类似输出安全错误，记录 `blocked_provider_sensitive`。不得原样重试，不得继续 Write/Edit，不得调用 Agent/TaskCreate 继续撞同一任务，不得把被拦截内容补写到正文/报告；用户输入继续也不得直接恢复原任务，必须先进入恢复选项。保留最后可信断点，降低显性描写，改为概述式、侧写式、非露骨表达，保证剧情因果和人物状态不丢；缩小任务粒度后最多重试一次。若仍失败，提示用户选择：1. 降低描写尺度继续 2. 跳过敏感段保留剧情因果 3. 停止并只保存诊断。
+
+### 交互选项污染门禁
+
+阶段终态向作者展示的 `next_candidates`、状态机返回的数字菜单和恢复选项必须先写 `追踪/输出门禁/.option_payload_draft_{YYYYMMDD_HHMMSS}.md`（`option_payload_draft`），由 `output-pollution-check.js` 扫领域术语循环、SSOT 词组、修复报告正文片段。命中时不得展示选择器，必须回退到最后可信断点并输出干净的 2-4 个意图式候选；选项描述不超过 120 中文字符，承载最终可见回复（`visible_reply_draft`）的意图短语（也可以直接输入你的意见）。完整门禁见 `references/output-safety-contract.md`。
 
 ## 运行时巡检接口
 

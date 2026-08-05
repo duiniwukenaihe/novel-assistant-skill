@@ -6,10 +6,10 @@ setup() {
     TMP_DIR="$(mktemp -d)"
     PROJECT="$TMP_DIR/book"
     mkdir -p "$PROJECT/追踪/memory" "$PROJECT/追踪/context-pack" "$PROJECT/追踪/章节契约/第1卷"
-    printf '# 伏笔\n绿珠身份存在未解谜团。\n' > "$PROJECT/追踪/伏笔.md"
+    printf '# 伏笔\n苏禾身份存在未解谜团。\n' > "$PROJECT/追踪/伏笔.md"
     cat > "$PROJECT/追踪/章节契约/第1卷/第003章.md" <<'MD'
 # 第003章契约
-- 圣女身份因血脉觉醒显现。
+- 密使身份因身份线索显现。
 MD
 }
 
@@ -39,7 +39,7 @@ const path = require('path');
 const { projectAcceptedFacts } = require(process.argv[2]);
 const root = process.argv[3];
 const common = {
-  subject: '绿珠', predicate: '身份', aliases: ['绿珠'], dependencies: [],
+  subject: '苏禾', predicate: '身份', aliases: ['苏禾'], dependencies: [],
   scope: { book: 'current' }, evidence: [{ path: '追踪/伏笔.md', note: 'accepted packet' }], confidence: 1,
 };
 fs.mkdirSync(path.join(root, '追踪/story-system/commits'), { recursive: true });
@@ -57,7 +57,7 @@ fs.writeFileSync(path.join(root, '追踪/story-system/commits/commit-accepted-00
   workflow_id: 'wf-002',
   acceptance_status: 'accepted',
   provenance: { task_family_id: 'family-wf-002', workflow_id: 'wf-002', branch_id: 'wf-002', stage_attempt_id: 'sa-wf-002', acceptance_status: 'accepted' },
-  facts: [{ ...common, object: '圣女', aliases: ['绿珠', '圣女'], dependencies: ['血脉觉醒'] }],
+  facts: [{ ...common, object: '密使', aliases: ['苏禾', '密使'], dependencies: ['身份线索'] }],
 }));
 projectAcceptedFacts(root, {
   status: 'accepted', commit_id: 'commit-accepted-001', workflow_id: 'wf-001',
@@ -65,7 +65,7 @@ projectAcceptedFacts(root, {
 });
 const result = projectAcceptedFacts(root, {
   status: 'accepted', commit_id: 'commit-accepted-002', workflow_id: 'wf-002',
-  facts: [{ ...common, object: '圣女', aliases: ['绿珠', '圣女'], dependencies: ['血脉觉醒'] }],
+  facts: [{ ...common, object: '密使', aliases: ['苏禾', '密使'], dependencies: ['身份线索'] }],
 });
 if (result.factIds.length !== 1 || !result.eventFile.endsWith('追踪/memory/facts.jsonl')) throw new Error(JSON.stringify(result));
 NODE
@@ -82,7 +82,7 @@ if (oldRows[1].valid_to !== 'commit-accepted-002') throw new Error(JSON.stringif
 if (out.status !== 'ok') throw new Error(JSON.stringify(out));
 const packet = JSON.parse(fs.readFileSync(out.packetJson, 'utf8'));
 const activeFact = packet.relevant_lore.find(entry => entry.type === 'accepted_fact');
-if (!activeFact || !activeFact.content.includes('圣女') || activeFact.content.includes('魔女')) throw new Error(JSON.stringify(packet.relevant_lore));
+if (!activeFact || !activeFact.content.includes('密使') || activeFact.content.includes('魔女')) throw new Error(JSON.stringify(packet.relevant_lore));
 if (!activeFact.evidence || !activeFact.evidence.some(item => item.path === '追踪/伏笔.md')) throw new Error(JSON.stringify(activeFact));
 const evidence = activeFact.evidence.find(item => item.path === '追踪/伏笔.md');
 if (!/^sha256:[a-f0-9]{64}$/.test(evidence.hash || '')) throw new Error(JSON.stringify(evidence));
@@ -127,7 +127,7 @@ NODE
 }
 
 @test "fact store accepts only explicit facts and never infers canon from prose" {
-    printf '正文声称绿珠其实是妖王，但该信息没有进入 accepted facts。\n' > "$PROJECT/追踪/上下文.md"
+    printf '正文声称苏禾其实是敌方密探，但该信息没有进入 accepted facts。\n' > "$PROJECT/追踪/上下文.md"
     node - "$REPO/scripts/lib/memory-projection.js" "$PROJECT" <<'NODE'
 const fs = require('fs');
 const path = require('path');
@@ -154,7 +154,7 @@ const path = require('path');
 const { projectAcceptedFacts } = require(process.argv[2]);
 const root = process.argv[3];
 const fact = {
-  subject: '绿珠', predicate: '身份', object: '圣女', aliases: ['圣女'], dependencies: [],
+  subject: '苏禾', predicate: '身份', object: '密使', aliases: ['密使'], dependencies: [],
   scope: { book: 'current' }, evidence: [{ path: '追踪/伏笔.md' }], confidence: 1,
 };
 let blocked = false;
@@ -180,7 +180,7 @@ fs.writeFileSync(path.join(root, '追踪/story-system/commits/commit-prose-only.
   facts: [],
 }));
 const empty = projectAcceptedFacts(root, {
-  status: 'accepted', commit_id: 'commit-prose-only', content: '绿珠其实是妖王。', facts: [],
+  status: 'accepted', commit_id: 'commit-prose-only', content: '苏禾其实是敌方密探。', facts: [],
 });
 if (empty.factIds.length !== 0 || fs.existsSync(path.join(root, '追踪/memory/facts.jsonl'))) throw new Error(JSON.stringify(empty));
   fs.writeFileSync(path.join(root, '追踪/story-system/commits/commit-accepted.json'), JSON.stringify({
@@ -251,13 +251,13 @@ fs.mkdirSync(path.join(root, '追踪/story-system/commits'), { recursive: true }
 fs.writeFileSync(path.join(root, '追踪/story-system/commits/commit-no-evidence.json'), JSON.stringify({
   status: 'accepted', acceptance_status: 'accepted', commit_id: 'commit-no-evidence', workflow_id: 'wf-no-evidence',
   provenance: { task_family_id: 'family-wf-no-evidence', workflow_id: 'wf-no-evidence', branch_id: 'wf-no-evidence', stage_attempt_id: 'sa-wf-no-evidence', acceptance_status: 'accepted' },
-  facts: [{ subject: '绿珠', predicate: '身份', object: '圣女', aliases: [], dependencies: [], scope: { book: 'current' } }],
+  facts: [{ subject: '苏禾', predicate: '身份', object: '密使', aliases: [], dependencies: [], scope: { book: 'current' } }],
 }));
 projectAcceptedFacts(process.argv[3], {
   status: 'accepted',
   commit_id: 'commit-no-evidence',
   workflow_id: 'wf-no-evidence',
-  facts: [{ subject: '绿珠', predicate: '身份', object: '圣女', aliases: [], dependencies: [], scope: { book: 'current' } }],
+  facts: [{ subject: '苏禾', predicate: '身份', object: '密使', aliases: [], dependencies: [], scope: { book: 'current' } }],
 });
 NODE
     [ "$status" -ne 0 ]
@@ -270,7 +270,7 @@ NODE
     run node - "$REPO/scripts/lib/memory-projection.js" "$PROJECT" <<'NODE'
 const { projectAcceptedFacts } = require(process.argv[2]);
 const fs = require('fs'); const path = require('path'); const root = process.argv[3];
-const fact = { subject: '绿珠', predicate: '身份', object: '圣女', evidence: [{ path: '追踪/不存在.md' }] };
+const fact = { subject: '苏禾', predicate: '身份', object: '密使', evidence: [{ path: '追踪/不存在.md' }] };
 fs.mkdirSync(path.join(root, '追踪/story-system/commits'), { recursive: true });
 fs.writeFileSync(path.join(root, '追踪/story-system/commits/commit-bad-evidence.json'), JSON.stringify({
   status: 'accepted', acceptance_status: 'accepted', commit_id: 'commit-bad-evidence', workflow_id: 'wf-bad-evidence',
@@ -282,9 +282,9 @@ projectAcceptedFacts(process.argv[3], {
   commit_id: 'commit-bad-evidence',
   workflow_id: 'wf-bad-evidence',
   facts: [{
-    subject: '绿珠',
+    subject: '苏禾',
     predicate: '身份',
-    object: '圣女',
+    object: '密使',
     evidence: [{ path: '追踪/不存在.md' }],
   }],
 });
@@ -311,9 +311,9 @@ fs.writeFileSync(path.join(root, '追踪/story-system/commits/commit-symlink-evi
   acceptance_status: 'accepted',
   provenance: { task_family_id: 'family-wf-symlink-evidence', workflow_id: 'wf-symlink-evidence', branch_id: 'wf-symlink-evidence', stage_attempt_id: 'sa-wf-symlink-evidence', acceptance_status: 'accepted' },
   facts: [{
-    subject: '绿珠',
+    subject: '苏禾',
     predicate: '身份',
-    object: '圣女',
+    object: '密使',
     evidence: [{ path: '追踪/外部证据.md' }],
   }],
 }));
@@ -322,9 +322,9 @@ projectAcceptedFacts(root, {
   commit_id: 'commit-symlink-evidence',
   workflow_id: 'wf-symlink-evidence',
   facts: [{
-    subject: '绿珠',
+    subject: '苏禾',
     predicate: '身份',
-    object: '圣女',
+    object: '密使',
     evidence: [{ path: '追踪/外部证据.md' }],
   }],
 });
@@ -336,7 +336,7 @@ NODE
 
 @test "assembled markdown includes evidence for accepted facts" {
     write_fact_authority wf-md-evidence
-    printf '# 伏笔\n绿珠身份为圣女。\n' > "$PROJECT/追踪/伏笔.md"
+    printf '# 伏笔\n苏禾身份为密使。\n' > "$PROJECT/追踪/伏笔.md"
     node - "$REPO/scripts/lib/memory-projection.js" "$PROJECT" <<'NODE'
 const fs = require('fs');
 const path = require('path');
@@ -350,10 +350,10 @@ fs.writeFileSync(path.join(root, '追踪/story-system/commits/commit-md-evidence
   acceptance_status: 'accepted',
   provenance: { task_family_id: 'family-wf-md-evidence', workflow_id: 'wf-md-evidence', branch_id: 'wf-md-evidence', stage_attempt_id: 'sa-wf-md-evidence', acceptance_status: 'accepted' },
   facts: [{
-    subject: '绿珠',
+    subject: '苏禾',
     predicate: '身份',
-    object: '圣女',
-    aliases: ['圣女'],
+    object: '密使',
+    aliases: ['密使'],
     evidence: [{ path: '追踪/伏笔.md' }],
   }],
 }));
@@ -362,10 +362,10 @@ projectAcceptedFacts(root, {
   commit_id: 'commit-md-evidence',
   workflow_id: 'wf-md-evidence',
   facts: [{
-    subject: '绿珠',
+    subject: '苏禾',
     predicate: '身份',
-    object: '圣女',
-    aliases: ['圣女'],
+    object: '密使',
+    aliases: ['密使'],
     evidence: [{ path: '追踪/伏笔.md' }],
   }],
 });
@@ -379,8 +379,8 @@ NODE
     printf '外部证据\n' > "$TMP_DIR/outside.md"
     ln -s "$TMP_DIR/outside.md" "$PROJECT/追踪/外部证据.md"
     cat > "$PROJECT/追踪/memory/facts.jsonl" <<JSONL
-{"fact_id":"fact.missing","subject":"绿珠","predicate":"身份","object":"圣女","aliases":["圣女"],"dependencies":[],"scope":{"book":"current"},"valid_from":"commit-a","valid_to":null,"evidence":[{"path":"追踪/不存在.md"}],"provenance":{"commit_id":"commit-a","workflow_id":"wf-a","acceptance_status":"accepted"},"confidence":1,"status":"active"}
-{"fact_id":"fact.symlink","subject":"绿珠","predicate":"身份","object":"圣女","aliases":["圣女"],"dependencies":[],"scope":{"book":"current"},"valid_from":"commit-b","valid_to":null,"evidence":[{"path":"追踪/外部证据.md"}],"provenance":{"commit_id":"commit-b","workflow_id":"wf-b","acceptance_status":"accepted"},"confidence":1,"status":"active"}
+{"fact_id":"fact.missing","subject":"苏禾","predicate":"身份","object":"密使","aliases":["密使"],"dependencies":[],"scope":{"book":"current"},"valid_from":"commit-a","valid_to":null,"evidence":[{"path":"追踪/不存在.md"}],"provenance":{"commit_id":"commit-a","workflow_id":"wf-a","acceptance_status":"accepted"},"confidence":1,"status":"active"}
+{"fact_id":"fact.symlink","subject":"苏禾","predicate":"身份","object":"密使","aliases":["密使"],"dependencies":[],"scope":{"book":"current"},"valid_from":"commit-b","valid_to":null,"evidence":[{"path":"追踪/外部证据.md"}],"provenance":{"commit_id":"commit-b","workflow_id":"wf-b","acceptance_status":"accepted"},"confidence":1,"status":"active"}
 JSONL
     node "$ASSEMBLER" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章" --budget 1200 --json > "$TMP_DIR/invalid-evidence.json"
     node - "$TMP_DIR/invalid-evidence.json" <<'NODE'
@@ -396,7 +396,7 @@ NODE
 @test "context assembler blocks a relevant canonical fact when any evidence hash changed" {
     valid_hash="$(shasum -a 256 "$PROJECT/追踪/伏笔.md" | awk '{print $1}')"
     cat > "$PROJECT/追踪/memory/facts.jsonl" <<JSONL
-{"fact_id":"fact.mixed","subject":"绿珠","predicate":"身份","object":"圣女","aliases":["圣女"],"dependencies":[],"scope":{"book":"current"},"valid_from":"commit-a","valid_to":null,"evidence":[{"path":"追踪/伏笔.md","hash":"sha256:$valid_hash"},{"path":"追踪/伏笔.md","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}],"provenance":{"commit_id":"commit-a","workflow_id":"wf-a","acceptance_status":"accepted"},"confidence":1,"status":"active"}
+{"fact_id":"fact.mixed","subject":"苏禾","predicate":"身份","object":"密使","aliases":["密使"],"dependencies":[],"scope":{"book":"current"},"valid_from":"commit-a","valid_to":null,"evidence":[{"path":"追踪/伏笔.md","hash":"sha256:$valid_hash"},{"path":"追踪/伏笔.md","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}],"provenance":{"commit_id":"commit-a","workflow_id":"wf-a","acceptance_status":"accepted"},"confidence":1,"status":"active"}
 JSONL
     node "$ASSEMBLER" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章" --budget 1200 --json > "$TMP_DIR/mixed-evidence.json"
     node - "$TMP_DIR/mixed-evidence.json" <<'NODE'
@@ -416,9 +416,9 @@ NODE
 {"accepted_sections":[{"section_index":1,"canonical_path":"正文/第001节.md","section_commit_id":"commit-new","sha256":"$current_hash"}]}
 JSON
     cat > "$PROJECT/追踪/memory/facts.jsonl" <<'JSONL'
-{"fact_id":"fact.old","subject":"绿珠","predicate":"身份","object":"旧结论","aliases":["绿珠"],"dependencies":[],"scope":{"book":"current","section":1},"valid_from":"commit-old","valid_to":null,"evidence":[{"path":"正文/第001节.md","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","source_commit_id":"commit-old"}],"provenance":{"commit_id":"commit-old","workflow_id":"wf-old","acceptance_status":"accepted"},"confidence":1,"status":"active"}
+{"fact_id":"fact.old","subject":"苏禾","predicate":"身份","object":"旧结论","aliases":["苏禾"],"dependencies":[],"scope":{"book":"current","section":1},"valid_from":"commit-old","valid_to":null,"evidence":[{"path":"正文/第001节.md","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","source_commit_id":"commit-old"}],"provenance":{"commit_id":"commit-old","workflow_id":"wf-old","acceptance_status":"accepted"},"confidence":1,"status":"active"}
 JSONL
-    node "$ASSEMBLER" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章 绿珠" --budget 1200 --json > "$TMP_DIR/replaced-evidence.json"
+    node "$ASSEMBLER" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章 苏禾" --budget 1200 --json > "$TMP_DIR/replaced-evidence.json"
     node - "$TMP_DIR/replaced-evidence.json" <<'NODE'
 const fs = require('fs');
 const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));

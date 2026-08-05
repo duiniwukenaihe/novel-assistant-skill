@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { detectAdapters } = require('./lib/workflow-host-adapters');
@@ -17,9 +18,12 @@ const { normalizeExecutionBoundary } = require('./lib/workflow-execution-boundar
 const {
   assertNoSymlinkEscape,
   buildRunPreview,
+  classifyExistingManagedResultUnit,
+  normalizeManagedResultPacket,
   redactInvocation,
   resolveInsideProject,
   runHost,
+  writeDeterministicLongProseReceipt,
   writeRunnerPacket,
 } = require('./lib/workflow-runner-execution');
 
@@ -30,6 +34,7 @@ Options:
   --dry-run                                      Show the execution plan without launching a host
   --max-stages <n>                              Maximum stages for run (default: 8)
   --max-retries <n>                             Health recovery retries per stage (default: 1)
+  --max-turns <n>                               Claude Code turn cap per stage (default: 50)
   --idle-timeout-ms <n>                         Stop a silent host after this interval
   --max-budget-usd <n>                          Claude Code budget cap for one invocation
   --fake-executable <file>                      Test-only fake host fixture
@@ -93,7 +98,29 @@ async function executeOneStage(root, options) {
   if (inspection.status !== 'ok') return { status: inspection.status, project_root: root, detail: inspection };
 
   let task = inspection.task;
-  let execution = task.stage_execution && task.stage_execution.status === 'running' ? task.stage_execution : null;
+  const resumableMissingReceipt = task.stage_execution
+    && task.stage_execution.status === 'paused'
+    && [task.stage_execution.last_runner_stop_reason, task.stage_execution.stop_reason]
+      .includes('missing_result_packet');
+  if (resumableMissingReceipt) {
+    mutateTaskAuthority(root, task.workflow_id, Number(task.state_version || 0), (draft) => {
+      draft.status = 'running';
+      draft.lifecycle = { ...(draft.lifecycle || {}), status: 'active', updated_at: new Date().toISOString() };
+      draft.stage_execution = {
+        ...(draft.stage_execution || {}),
+        status: 'running',
+        stopped_at: '',
+        stop_reason: '',
+      };
+      return draft;
+    });
+    const refreshed = runState('inspect', root);
+    task = refreshed.task || task;
+  }
+  let execution = task.stage_execution
+    && task.stage_execution.status === 'running'
+    ? task.stage_execution
+    : null;
   if (!execution) {
     const next = runState('next-candidates', root);
     const candidates = Array.isArray(next.next_candidates) ? next.next_candidates : [];
@@ -133,9 +160,24 @@ async function executeOneStage(root, options) {
   if (!expectedAbs) return { status: 'blocked_unsafe_result_packet_path', project_root: root, result_packet: expectedRel };
   assertNoSymlinkEscape(root, expectedAbs);
 
+  let archivedStaleResult = '';
   if (fs.existsSync(expectedAbs)) {
-    const apply = runState('apply-result', root, ['--result', expectedAbs]);
-    return appliedResult(root, task, execution, apply, true, null, expectedAbs);
+    const existingUnit = classifyExistingManagedResultUnit(task, execution, expectedAbs);
+    if (['stale_long_chapter_unit', 'stale_stage_attempt', 'indeterminate_long_write_result'].includes(existingUnit.status)) {
+      archivedStaleResult = archiveRejectedManagedResult(root, task, execution, expectedAbs);
+      if (!archivedStaleResult) {
+        return {
+          status: 'blocked_stale_managed_result_archive_failed',
+          project_root: root,
+          stage_id: execution.stage_id || '',
+          detail: existingUnit,
+        };
+      }
+    } else {
+      normalizeManagedResultPacket(root, task, execution, expectedAbs);
+      const apply = runState('apply-result', root, ['--result', expectedAbs]);
+      return appliedResult(root, task, execution, apply, true, null, expectedAbs);
+    }
   }
 
   if (options.adapter === 'auto') {
@@ -158,8 +200,19 @@ async function executeOneStage(root, options) {
     return { status: 'blocked_memory_policy_missing', project_root: root, workflow_type: task.workflow_type };
   }
   // Build the minimum stage context packet for supported short- and long-form
-  // writing stages. Fail-open: packet assembly must not break the runner.
+  // writing stages. Long chapter packets fail closed when their exact target
+  // or candidate source is unavailable.
   const stageContextPacket = resolveStageContextPacket(root, task, execution);
+  if (stageContextPacket && stageContextPacket.blocking === true) {
+    return {
+      status: String(stageContextPacket.status || 'blocked_long_stage_context'),
+      message: String(stageContextPacket.reason || ''),
+      project_root: root,
+      workflow_id: task.workflow_id,
+      stage_id: execution.stage_id || '',
+      host_started: false,
+    };
+  }
   const dryRunMemoryContext = memoryPolicy.context_source === 'stage_context'
     ? memoryContextFromStagePacket(memoryPolicy, stageContextPacket)
     : memoryContextDecision(memoryPolicy, 'dry_run_not_assembled');
@@ -192,8 +245,10 @@ async function executeOneStage(root, options) {
   }
 
   let lastAttempt = null;
+  let lastRun = null;
   for (let attempt = 0; attempt <= options.maxRetries; attempt += 1) {
     const run = buildRunPreview(root, task, execution, options, attempt, memoryContext, stageContextPacket);
+    lastRun = run;
     writeRunnerPacket(root, run.runnerPacketRel, run.runnerPacket);
     lastAttempt = await runHost(root, task, execution, run, options);
     if (String(lastAttempt.status || '').startsWith('blocked_')) {
@@ -214,6 +269,10 @@ async function executeOneStage(root, options) {
         recovery_packet: blocked.recovery_packet,
       };
     }
+    if (!fs.existsSync(expectedAbs)) {
+      const deterministicReceipt = writeDeterministicLongProseReceipt(root, task, execution, run, lastAttempt);
+      if (deterministicReceipt.status === 'written') break;
+    }
     if (lastAttempt.health.status === 'healthy' && fs.existsSync(expectedAbs)) break;
     if (attempt < options.maxRetries && lastAttempt.health.status === 'blocked') {
       const recovery = writeRecoveryPacket(root, task, execution, lastAttempt, attempt + 1);
@@ -221,6 +280,10 @@ async function executeOneStage(root, options) {
       continue;
     }
     break;
+  }
+
+  if (!fs.existsSync(expectedAbs) && lastRun && lastAttempt) {
+    writeDeterministicLongProseReceipt(root, task, execution, lastRun, lastAttempt);
   }
 
   if (!fs.existsSync(expectedAbs)) {
@@ -239,8 +302,11 @@ async function executeOneStage(root, options) {
     };
   }
 
+  normalizeManagedResultPacket(root, task, execution, expectedAbs);
   const apply = runState('apply-result', root, ['--result', expectedAbs]);
-  return appliedResult(root, task, execution, apply, false, lastAttempt, expectedAbs);
+  const result = appliedResult(root, task, execution, apply, false, lastAttempt, expectedAbs);
+  if (archivedStaleResult) result.archived_stale_result_packet = archivedStaleResult;
+  return result;
 }
 
 // Returns the first applicable stage-scoped packet. Short and long builders
@@ -255,6 +321,7 @@ function resolveStageContextPacket(root, task, execution) {
     for (const buildPacket of [buildStageContextPacket, buildLongStageContextPacket]) {
       const packet = buildPacket(input);
       if (packet && packet.status === 'assembled' && packet.packet_md) return packet;
+      if (packet && packet.blocking === true) return packet;
     }
     return null;
   } catch (_) {
@@ -304,14 +371,26 @@ function markRunnerBlocked(root, task, execution, reason, lastAttempt) {
 
   try {
     mutateTaskAuthority(root, current.workflow_id, Number(current.state_version || 0), (draft) => {
-      draft.status = reason.startsWith('model_degradation') ? 'blocked_model_degradation' : 'paused_after_step';
+      const resumableMissingReceipt = reason === 'missing_result_packet'
+        && lastAttempt && lastAttempt.health && lastAttempt.health.status === 'healthy';
+      draft.status = resumableMissingReceipt
+        ? 'running'
+        : reason.startsWith('model_degradation') ? 'blocked_model_degradation' : 'paused_after_step';
+      draft.lifecycle = {
+        ...(draft.lifecycle || {}),
+        status: resumableMissingReceipt ? 'active' : 'paused',
+        updated_at: new Date().toISOString(),
+      };
       draft.stage_execution = {
         ...(draft.stage_execution || {}),
-      status: 'paused',
-      stopped_at: new Date().toISOString(),
-      stop_reason: reason,
-      resume_hint: '已停在最后可信断点；修复执行环境或缩小当前阶段后再恢复。',
-    };
+        status: resumableMissingReceipt ? 'running' : 'paused',
+        stopped_at: resumableMissingReceipt ? '' : new Date().toISOString(),
+        stop_reason: resumableMissingReceipt ? '' : reason,
+        last_runner_stop_reason: reason,
+        resume_hint: resumableMissingReceipt
+          ? '宿主健康退出但未写结果回执；沿用已确认阶段与候选资产继续完成回执。'
+          : '已停在最后可信断点；修复执行环境或缩小当前阶段后再恢复。',
+      };
       draft.runtime_guard = draft.runtime_guard || {};
       draft.runtime_guard.checkpoint_updated_at = new Date().toISOString();
       delete draft.runtime_guard.runner_lease;
@@ -331,6 +410,20 @@ function markRunnerBlocked(root, task, execution, reason, lastAttempt) {
 
 function appliedResult(root, task, execution, apply, reusedExistingResult, attempt, resultFile) {
   if (!['advanced', 'stage_started', 'completed', 'applied', 'stage_completed'].includes(String(apply.status || ''))) {
+    const archived = archiveRejectedManagedResult(root, task, execution, resultFile);
+    if (archived) {
+      const recovery = recordManagedResultRejection(root, task, execution, apply);
+      return {
+        status: 'blocked_managed_result_rejected',
+        project_root: root,
+        stage_id: execution.stage_id || '',
+        reused_existing_result: Boolean(reusedExistingResult),
+        rejection_status: apply.status || 'blocked_apply_result',
+        archived_result_packet: archived,
+        recovery_recorded: recovery.status === 'ok',
+        detail: apply,
+      };
+    }
     return {
       status: apply.status || 'blocked_apply_result',
       project_root: root,
@@ -366,6 +459,67 @@ function appliedResult(root, task, execution, apply, reusedExistingResult, attem
     visible_response: compactVisibleResponseForRunner(apply.visible_response || null),
     interaction_contract: String(apply.interaction_contract || ''),
   };
+}
+
+function recordManagedResultRejection(root, task, execution, apply) {
+  const resolved = resolveRunnerTask(root, task.workflow_id, task.task_dir);
+  if (resolved.status !== 'ok') return resolved;
+  const current = resolved.task;
+  const currentExecution = current.stage_execution || {};
+  if (String(currentExecution.stage_attempt_id || '') !== String(execution.stage_attempt_id || '')) {
+    return { status: 'stale_stage_attempt' };
+  }
+  const rejectionStatus = String((apply || {}).status || 'blocked_apply_result');
+  const messages = (Array.isArray((apply || {}).findings) ? apply.findings : [])
+    .map((finding) => String((finding || {}).message || '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const feedback = messages.length > 0 ? messages.join('；') : rejectionStatus;
+  try {
+    mutateTaskAuthority(root, current.workflow_id, Number(current.state_version || 0), (draft) => {
+      draft.stage_execution = {
+        ...(draft.stage_execution || {}),
+        status: 'running',
+        last_runner_stop_reason: rejectionStatus,
+        resume_hint: `上轮受控校验未通过：${feedback}。保留当前候选，只修这些缺口后重新提交当前阶段回执。`,
+        last_managed_result_rejection: {
+          status: rejectionStatus,
+          findings: messages,
+          recorded_at: new Date().toISOString(),
+        },
+      };
+      draft.status = 'running';
+      draft.lifecycle = { ...(draft.lifecycle || {}), status: 'active', updated_at: new Date().toISOString() };
+      return draft;
+    });
+    return { status: 'ok' };
+  } catch (error) {
+    return { status: error.status || 'blocked_workflow_state_conflict', message: error.message };
+  }
+}
+
+function archiveRejectedManagedResult(root, task, execution, resultFile) {
+  if (!resultFile || !fs.existsSync(resultFile) || !fs.statSync(resultFile).isFile()) return '';
+  let packet;
+  try { packet = JSON.parse(fs.readFileSync(resultFile, 'utf8')); } catch (_) { return ''; }
+  if (String(packet.host_execution_mode || '') !== 'managed_runner'
+      || String(packet.workflow_id || '') !== String(task.workflow_id || '')
+      || String(packet.stage_id || '') !== String(execution.stage_id || '')) return '';
+  const content = fs.readFileSync(resultFile);
+  const digest = crypto.createHash('sha256').update(content).digest('hex');
+  const stage = String(execution.stage_id || 'stage').replace(/[^A-Za-z0-9._-]/g, '_');
+  const archiveRel = `${task.task_dir}/audit/rejected-managed-results/${stage}.${digest.slice(0, 16)}.json`;
+  const archiveFile = resolveInsideProject(root, archiveRel);
+  if (!archiveFile) return '';
+  fs.mkdirSync(path.dirname(archiveFile), { recursive: true });
+  if (fs.existsSync(archiveFile)) {
+    const archivedDigest = crypto.createHash('sha256').update(fs.readFileSync(archiveFile)).digest('hex');
+    if (archivedDigest !== digest) return '';
+    fs.unlinkSync(resultFile);
+  } else {
+    fs.renameSync(resultFile, archiveFile);
+  }
+  return archiveRel;
 }
 
 function runState(command, root, extra = []) {
@@ -456,6 +610,7 @@ function parseArgs(argv) {
     json: false,
     maxStages: 8,
     maxRetries: 1,
+    maxTurns: 50,
     idleTimeoutMs: 5 * 60 * 1000,
     maxBudgetUsd: '',
     fakeExecutable: '',
@@ -470,6 +625,7 @@ function parseArgs(argv) {
     else if (arg === '--json') out.json = true;
     else if (arg === '--max-stages') out.maxStages = positiveInt(argv[++i], '--max-stages');
     else if (arg === '--max-retries') out.maxRetries = nonNegativeInt(argv[++i], '--max-retries');
+    else if (arg === '--max-turns') out.maxTurns = positiveInt(argv[++i], '--max-turns');
     else if (arg === '--idle-timeout-ms') out.idleTimeoutMs = positiveInt(argv[++i], '--idle-timeout-ms');
     else if (arg === '--max-budget-usd') out.maxBudgetUsd = argv[++i] || '';
     else if (arg === '--fake-executable') out.fakeExecutable = argv[++i] || '';

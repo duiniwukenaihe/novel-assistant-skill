@@ -6,7 +6,7 @@ setup() {
   BOOK="$(mktemp -d)"
   mkdir -p "$BOOK/追踪/private-short-extension"
   cat > "$BOOK/小节大纲.md" <<'MD'
-## 第1节：直播误切空车间
+## 第1节：复核误切编号空缺
 ## 第2节
 MD
 }
@@ -81,20 +81,20 @@ NODE
 
 - 总小节数：2 节；目标总字数：3000-4000 字。
 
-## 第1节：直播拍到空车间
-- 承接与场景动作：主角在直播中切到空车间。
-- 可见阻力与压力变化：哥哥要求她立刻按话术解释。
+## 第1节：复核拍到编号空缺
+- 承接与场景动作：主角在复核中发现凭证空缺。
+- 可见阻力与压力变化：主管要求她立刻按话术解释。
 - 主角选择与兑现：她拒绝把责任推给导播。
-- 关系后果、代价与钩子：家人停掉她的权限。
-- 因果链：误切监控 → 话术施压 → 拒绝甩锅。
+- 关系后果、代价与钩子：上级停掉她的权限。
+- 因果链：误切凭证 → 话术施压 → 拒绝甩锅。
 
-## 第2节：镜头里终于有了果子
-- 承接与场景动作：企业召回旧货并恢复真实鲜榨线。
-- 可见阻力与压力变化：停线后员工工资与渠道索赔同时压来。
-- 主角选择与兑现：她推动独立品控和公开生产直播。
-- 关系收束：哥哥停职，信任只能慢慢重建。
-- 终局兑现：真实鲜果重新进入工厂，全篇在生产公开后完稿。
-- 因果链：主动召回 → 承担停线代价 → 恢复鲜榨线。
+## 第2节：缺失凭证重新归档
+- 承接与场景动作：部门撤回错误结论并恢复可追溯复核链路。
+- 可见阻力与压力变化：延期问责与历史记录清理同时压来。
+- 主角选择与兑现：她推动独立审查和公开复核。
+- 关系收束：主管停职，信任只能慢慢重建。
+- 终局兑现：真实凭证重新进入档案，全篇在责任公开后完稿。
+- 因果链：撤回错误结论 → 承担延期代价 → 恢复复核链路。
 MD
 
   run node "$SCRIPT" --project-root "$BOOK" --workflow-id "wf-short" --json
@@ -102,7 +102,7 @@ MD
   [[ "$output" == *'"status":"awaiting_section_title_confirmation"'* ]]
   [[ "$output" != *'publication_shape_missing'* ]]
   [[ "$output" != *'section_function_missing'* ]]
-  printf '%s' "$output" | node -e 'let s=""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => { const j = JSON.parse(s); if (!String((j.visible_response || {}).text || "").includes("- 第 1 节：直播拍到空车间")) throw new Error(JSON.stringify(j)); });'
+  printf '%s' "$output" | node -e 'let s=""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => { const j = JSON.parse(s); if (!String((j.visible_response || {}).text || "").includes("- 第 1 节：复核拍到编号空缺")) throw new Error(JSON.stringify(j)); });'
 }
 
 @test "section plan lock accepts markdown headings and compact total budget line" {

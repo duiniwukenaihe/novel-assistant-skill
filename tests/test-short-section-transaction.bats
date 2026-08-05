@@ -13,8 +13,8 @@ setup() {
   run node - "$REPO/scripts/lib/short-project-state.js" "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');
 const state=require(process.argv[2]);const root=process.argv[3];
-const first=state.ensureShortProjectState(root,{workflowId:'wf-short-a',title:'果汁事件'});
-if(!first.project_id || first.project_title!=='果汁事件' || first.active_write_workflow_id!=='wf-short-a') throw new Error(JSON.stringify(first));
+const first=state.ensureShortProjectState(root,{workflowId:'wf-short-a',title:'档案复核'});
+if(!first.project_id || first.project_title!=='档案复核' || first.active_write_workflow_id!=='wf-short-a') throw new Error(JSON.stringify(first));
 let blocked=false;
 try { state.ensureShortProjectState(root,{workflowId:'wf-short-b'}); } catch(error) { blocked=error.code==='SHORT_PROJECT_OWNERSHIP_CONFLICT'; }
 if(!blocked) throw new Error('concurrent short workflow takeover was not blocked');
@@ -70,7 +70,7 @@ NODE
   mkdir -p "$BOOK"
   run node - "$REPO/scripts/lib/integration-outbox.js" "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');const outbox=require(process.argv[2]);const root=process.argv[3];
-const event={event_type:'section_accepted',workflow_id:'wf-short',project_id:'project-a',project_title:'果汁事件',artifact_path:'正文/第001节.md',artifact_digest:'sha256:abc',summary:'第1节已采用',tags:['short_write']};
+const event={event_type:'section_accepted',workflow_id:'wf-short',project_id:'project-a',project_title:'档案复核',artifact_path:'正文/第001节.md',artifact_digest:'sha256:abc',summary:'第1节已采用',tags:['short_write']};
 const first=outbox.appendIntegrationEvent(root,event);const second=outbox.appendIntegrationEvent(root,event);
 if(first.status!=='appended' || second.status!=='duplicate_ignored' || first.event.event_id!==second.event.event_id) throw new Error(JSON.stringify({first,second}));
 const rows=fs.readFileSync(path.join(root,'追踪/integration/outbox.jsonl'),'utf8').trim().split(/\n/).map(JSON.parse);
@@ -83,12 +83,12 @@ NODE
 @test "accepted short feedback emits one task-scoped outbox event" {
   BOOK="$BATS_TEST_TMPDIR/feedback-outbox-book"
   mkdir -p "$BOOK/追踪/private-short-extension"
-  printf '%s\n' '{"project_id":"short-project-feedback","project_title":"果汁事件","plan_revision":3}' > "$BOOK/追踪/private-short-extension/project-state.json"
+  printf '%s\n' '{"project_id":"short-project-feedback","project_title":"档案复核","plan_revision":3}' > "$BOOK/追踪/private-short-extension/project-state.json"
   printf '%s\n' '已按意见修订当前小节。' > "$BOOK/正文.md"
   run node - "$REPO/scripts/lib/short-feedback-outbox.js" "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');
 const {recordAcceptedShortFeedback}=require(process.argv[2]);const root=process.argv[3];
-const task={workflow_id:'wf-short-feedback',workflow_type:'private_short_startup',pending_feedback:{feedback_id:'feedback-001',text:'删掉哥哥救过公司的设定。'},short_feedback_impact:{impact_level:'expression_only'}};
+const task={workflow_id:'wf-short-feedback',workflow_type:'private_short_startup',pending_feedback:{feedback_id:'feedback-001',text:'删掉主管救过部门的设定。'},short_feedback_impact:{impact_level:'expression_only'}};
 const result={stage_id:'section_repair_loop',step_status:'completed',changed_files:['正文.md'],result_packet_path:'追踪/workflow/tasks/wf-short-feedback/result-packets/repair.result.json'};
 const first=recordAcceptedShortFeedback(root,task,result);const second=recordAcceptedShortFeedback(root,task,result);
 if(first.status!=='appended'||second.status!=='duplicate_ignored') throw new Error(JSON.stringify({first,second}));
@@ -103,43 +103,43 @@ NODE
   run node - "$REPO/scripts/lib/short-section-commit-store.js" <<'NODE'
 const assert = require('assert');
 const store = require(process.argv[2]);
-const text = store.buildCanonicalSectionText({ sectionIndex: 7, title: '父亲留下的字', text: '## 第7节 临时标题\n\n正文第一段。\n\n正文第二段。\n' });
-assert.equal(text, '## 第007节 父亲留下的字\n\n正文第一段。\n\n正文第二段。\n');
+const text = store.buildCanonicalSectionText({ sectionIndex: 7, title: '负责人留下的字', text: '## 第7节 临时标题\n\n正文第一段。\n\n正文第二段。\n' });
+assert.equal(text, '## 第007节 负责人留下的字\n\n正文第一段。\n\n正文第二段。\n');
 assert.equal(store.canonicalSectionPath(7), '正文/第007节.md');
 const facts = store.buildSectionFacts({
   sectionIndex: 7,
   canonicalPath: '正文/第007节.md',
-  title: '父亲留下的字',
-  projectTitle: '果汁事件',
+  title: '负责人留下的字',
+  projectTitle: '档案复核',
   metadata: {
-    section_summary: '林照确认父亲曾要求停用鲜榨字样。',
-    present_characters: ['林照', '母亲'],
-    revealed_information: ['母亲早已知道手写要求'],
-    character_state: { 林照: ['不再接受家人代替她决定'] },
-    relationship_state: { '林照-母亲': '从等待解释转为要求公开承担责任' },
-    knowledge_state: { 母亲: '知道父亲要求停用鲜榨字样，但尚未说明隐瞒原因' },
-    world_state: { '鲜榨产线': '尚未恢复，采购记录待公开' },
-    decisions: ['公开采购记录并拒绝删除直播回放'],
-    causal_links: [{ cause: '发现停用鲜榨字样的手写要求', effect: '转向追查母亲知情时间' }],
-    protagonist: '林照',
-    open_hook: '母亲为什么隐瞒三年仍未解释。',
+    section_summary: '阿岚确认负责人曾要求停用复核字样。',
+    present_characters: ['阿岚', '负责人'],
+    revealed_information: ['负责人早已知道手写要求'],
+    character_state: { 阿岚: ['不再接受家人代替她决定'] },
+    relationship_state: { '阿岚-负责人': '从等待解释转为要求公开承担责任' },
+    knowledge_state: { 负责人: '知道负责人要求停用复核字样，但尚未说明隐瞒原因' },
+    world_state: { '复核流程': '尚未恢复，凭证记录待公开' },
+    decisions: ['公开凭证记录并拒绝删除复核回放'],
+    causal_links: [{ cause: '发现停用复核字样的手写要求', effect: '转向追查负责人知情时间' }],
+    protagonist: '阿岚',
+    open_hook: '负责人为什么隐瞒三年仍未解释。',
   },
 });
 assert.ok(facts.length >= 11, JSON.stringify(facts));
 for (const fact of facts) assert.equal(fact.evidence[0].path, '正文/第007节.md');
 assert.ok(facts.some((fact) => fact.predicate === '第7节关系状态'), JSON.stringify(facts));
-assert.ok(facts.some((fact) => fact.predicate === '第7节出场' && fact.subject === '母亲'), JSON.stringify(facts));
+assert.ok(facts.some((fact) => fact.predicate === '第7节出场' && fact.subject === '负责人'), JSON.stringify(facts));
 assert.ok(facts.some((fact) => fact.predicate === '第7节认知边界'), JSON.stringify(facts));
 assert.ok(facts.some((fact) => fact.predicate === '第7节世界状态'), JSON.stringify(facts));
 assert.ok(facts.some((fact) => fact.predicate === '第7节做出选择'), JSON.stringify(facts));
-assert.ok(facts.some((fact) => fact.predicate.includes('因发现停用鲜榨字样')), JSON.stringify(facts));
+assert.ok(facts.some((fact) => fact.predicate.includes('因发现停用复核字样')), JSON.stringify(facts));
 const nested = store.buildSectionFacts({
   sectionIndex: 8,
   canonicalPath: '正文/第008节.md',
   title: '关系变化',
-  metadata: { character_state: { 林照: { relation: { 母亲: '决裂' }, decision: '公开证据' } } },
+  metadata: { character_state: { 阿岚: { relation: { 负责人: '决裂' }, decision: '公开证据' } } },
 });
-assert.ok(nested.some((fact) => fact.object.includes('"母亲":"决裂"')), JSON.stringify(nested));
+assert.ok(nested.some((fact) => fact.object.includes('"负责人":"决裂"')), JSON.stringify(nested));
 assert.ok(nested.every((fact) => !fact.predicate.includes('第本节')), JSON.stringify(nested));
 NODE
   [ "$status" -eq 0 ]
@@ -149,7 +149,7 @@ NODE
   BOOK="$BATS_TEST_TMPDIR/later-context-book"
   mkdir -p "$BOOK/追踪/private-short-extension" "$BOOK/追踪/workflow/tasks/wf-later"
   cat > "$BOOK/追踪/private-short-extension/project-state.json" <<'JSON'
-{"project_id":"short-later-context","project_title":"果汁事件","plan_revision":1,"current_section_index":9,"accepted_sections":[{"section_index":1},{"section_index":2},{"section_index":3},{"section_index":4},{"section_index":5},{"section_index":6}],"narrative":{"planned_sections":9}}
+{"project_id":"short-later-context","project_title":"档案复核","plan_revision":1,"current_section_index":9,"accepted_sections":[{"section_index":1},{"section_index":2},{"section_index":3},{"section_index":4},{"section_index":5},{"section_index":6}],"narrative":{"planned_sections":9}}
 JSON
   cat > "$BOOK/小节大纲.md" <<'MD'
 ## 第1节：错误入口
@@ -159,22 +159,22 @@ JSON
 ## 第4节：四
 ## 第5节：五
 ## 第6节：六
-## 第7节：公开账本
+## 第7节：公开复核
 - 结构功能：升级与关系决裂。
-- 承接上节：上一节留下的采购异常迫使林照公开完整账本。
-- 场景动作：林照在直播现场公开采购账本，并让母亲当面选择是否继续隐瞒。
-- 角色选择：林照拒绝删掉直播回放，坚持让账本接受公开核验。
-- 可见阻力：母亲以家族名誉和员工生计要求她立即停播。
-- 本节兑现：账本证明企业长期采购成品原浆而非现场鲜榨。
-- 关系变化：林照从等待母亲解释转为公开要求母亲承担责任。
-- 代价升级：她失去家族支持并承担直播失实责任。
+- 承接上节：上一节留下的凭证编号差异迫使阿岚公开完整凭证链。
+- 场景动作：阿岚在公开复核会上摊开凭证副本，并让负责人当面选择是否继续隐瞒。
+- 角色选择：阿岚拒绝删掉复核回放，坚持让凭证副本接受公开核验。
+- 可见阻力：负责人以机构名誉和员工生计要求她立即停止复核。
+- 本节兑现：凭证证明企业长期采购代签条目而非真实存档。
+- 关系变化：阿岚从等待负责人解释转为公开要求负责人承担责任。
+- 代价升级：她失去部门支持并承担公开失实责任。
 - 子事件：
-  1. 林照把采购账本投到直播画面。
-  2. 母亲在镜头前拒绝继续替公司圆谎。
+  1. 阿岚把凭证副本投到复核画面。
+  2. 负责人在镜头前拒绝继续替部门圆谎。
 - 情绪目标：犹疑到决绝。
-- 压力变化：家庭争执升级为公众问责。
-- 因果链：发现账本 -> 公开账本 -> 母亲表态。
-- 节尾钩子：母亲承认三年前就知道生产线停用。
+- 压力变化：内部争执升级为公众问责。
+- 因果链：发现凭证差异 -> 公开凭证 -> 负责人表态。
+- 节尾钩子：负责人承认三年前就知道凭证流程停用。
 ## 第8节：八
 ## 第9节：九
 MD
@@ -184,11 +184,11 @@ MD
   printf '%s\n' '候选正文。' > "$BOOK/草稿_第007节_候选.md"
   run node - "$REPO/scripts/lib/workflow-stage-context-packet.js" "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');const {buildStageContextPacket}=require(process.argv[2]);const root=process.argv[3];
-const out=buildStageContextPacket({projectRoot:root,task:{workflow_id:'wf-later',workflow_type:'short_write',current_stage:'feedback_apply_patch',scope:'第7节',task_dir:'追踪/workflow/tasks/wf-later',stage_execution:{stage_attempt_id:'sa-feedback-7'},pending_feedback:{feedback_id:'fb-7',section_index:7,text:'删除哥哥救过公司的设定，改为母亲主动隐瞒。'}},stage:'feedback_apply_patch'});
+const out=buildStageContextPacket({projectRoot:root,task:{workflow_id:'wf-later',workflow_type:'short_write',current_stage:'feedback_apply_patch',scope:'第7节',task_dir:'追踪/workflow/tasks/wf-later',stage_execution:{stage_attempt_id:'sa-feedback-7'},pending_feedback:{feedback_id:'fb-7',section_index:7,text:'删除主管救过部门的设定，改为负责人主动隐瞒。'}},stage:'feedback_apply_patch'});
 if(out.status!=='assembled'||out.section_index!==7) throw new Error(JSON.stringify(out));
 const text=fs.readFileSync(path.join(root,out.packet_md),'utf8');
-if(!text.includes('删除哥哥救过公司的设定，改为母亲主动隐瞒。')) throw new Error(text);
-if(!text.includes('林照在直播现场公开采购账本')) throw new Error(text);
+if(!text.includes('删除主管救过部门的设定，改为负责人主动隐瞒。')) throw new Error(text);
+if(!text.includes('阿岚在公开复核会上摊开凭证副本')) throw new Error(text);
 if(text.includes('错误入口')) throw new Error(text);
 NODE
   if [ "$status" -ne 0 ]; then printf '%s\n' "$output" >&2; fi
@@ -199,29 +199,29 @@ NODE
   BOOK="$BATS_TEST_TMPDIR/adaptive-context-book"
   mkdir -p "$BOOK/追踪/private-short-extension" "$BOOK/追踪/workflow/tasks/wf-adaptive"
   cat > "$BOOK/追踪/private-short-extension/project-state.json" <<'JSON'
-{"project_id":"short-adaptive-context","project_title":"果汁事件","plan_revision":1,"current_section_index":2,"accepted_sections":[{"section_index":1}],"narrative":{"planned_sections":3}}
+{"project_id":"short-adaptive-context","project_title":"档案复核","plan_revision":1,"current_section_index":2,"accepted_sections":[{"section_index":1}],"narrative":{"planned_sections":3}}
 JSON
   cat > "$BOOK/小节大纲.md" <<'MD'
 ## 第1节：误切
-## 第2节：收据
+## 第2节：凭证
 - 结构功能：冲突升级。
-- 承接上节：空车间画面迫使主角核对原料采购。
-- 场景动作：主角把采购收据推到会议桌中央要求逐项核验。
+- 承接上节：编号空缺画面迫使主角核对凭证原件。
+- 场景动作：主角把凭证副本推到会议桌中央要求逐项核验。
 - 角色选择：主角拒绝签署把责任推给员工的说明。
 - 可见阻力：管理层用停职和赔偿压力逼她沉默。
-- 本节兑现：收据证明原料来自外部成品供应商。
+- 本节兑现：凭证证明资料来自外部成品供应商。
 - 关系变化：主角不再信任负责采购的亲属。
 - 代价升级：她被撤销系统权限。
-- 核心承诺兑现：主角第一次用公开证据反制家族施压。
-- 决定性行动：她把收据交给独立审查方并拒绝撤回。
+- 核心承诺兑现：主角第一次用公开证据反制内部施压。
+- 决定性行动：她把凭证交给独立审查方并拒绝撤回。
 - 即时代价：她当场被撤销系统权限并承担调查责任。
 - 子事件：
-  1. 主角核对收据与直播日期。
+  1. 主角核对凭证与复核日期。
   2. 管理层当场撤销她的权限。
 - 情绪目标：怀疑到确认。
 - 压力变化：网络质疑升级为内部封锁。
-- 因果链：核对收据 -> 发现供应商 -> 权限被撤。
-- 节尾钩子：供应商联系人正是母亲旧友。
+- 因果链：核对凭证 -> 发现供应商 -> 权限被撤。
+- 节尾钩子：供应商联系人正是负责人旧友。
 ## 第3节：公开
 MD
   printf '%s\n' '## 本节任务' '完成一次真实行动。' '## 视角与称谓' '第一人称。' '## 禁止漂移' '不得新增亲属。' '## 验收标准' '行动产生结果。' > "$BOOK/写作Brief_第002节.md"
@@ -269,9 +269,9 @@ JSON
 - 不提前揭晓下一节证据。
 
 ## 节尾钩子
-- 直播画面出现无法解释的空车间。
+- 复核画面出现无法解释的编号空缺。
 MD
-  printf '%s\n' '# 第001节' '我把镜头转向空车间。' > "$BOOK/草稿_第001节_候选.md"
+  printf '%s\n' '# 第001节' '我把镜头转向编号空缺处。' > "$BOOK/草稿_第001节_候选.md"
   cat > "$BOOK/追踪/workflow/tasks/wf-current-brief/gate.json" <<'JSON'
 {"machine_gate_result":"blocking","blocking_findings":[{"code":"sentence-pattern","message":"修订句式。"}],"evidence":[{"check":"sentence-pattern","status":"blocking","blocking":true,"finding_count":1}]}
 JSON
@@ -281,7 +281,7 @@ const out=buildStageContextPacket({projectRoot:root,task:{workflow_id:'wf-curren
 if(out.status!=='assembled') throw new Error(JSON.stringify(out));
 if(!(out.source_files||[]).some(item=>item.kind==='repair_constraints')) throw new Error(JSON.stringify(out));
 const packet=require('fs').readFileSync(require('path').join(root,out.packet_md),'utf8');
-if(packet.includes('B01：主角主动进入直播间')) throw new Error('repair context must omit duplicate outline mapping');
+if(packet.includes('B01：主角主动进入复核会')) throw new Error('repair context must omit duplicate outline mapping');
 NODE
   if [ "$status" -ne 0 ]; then printf '%s\n' "$output" >&2; fi
   [ "$status" -eq 0 ]
@@ -290,7 +290,7 @@ NODE
 @test "short stage context blocks when an explicit budget cannot hold required assets" {
   BOOK="$BATS_TEST_TMPDIR/blocked-context-book"
   mkdir -p "$BOOK/追踪/private-short-extension" "$BOOK/追踪/workflow/tasks/wf-blocked"
-  printf '%s\n' '{"project_id":"short-blocked-context","project_title":"果汁事件","plan_revision":1,"current_section_index":1,"accepted_sections":[],"narrative":{"planned_sections":1}}' > "$BOOK/追踪/private-short-extension/project-state.json"
+  printf '%s\n' '{"project_id":"short-blocked-context","project_title":"档案复核","plan_revision":1,"current_section_index":1,"accepted_sections":[],"narrative":{"planned_sections":1}}' > "$BOOK/追踪/private-short-extension/project-state.json"
   printf '%s\n' '## 本节任务' "$(printf '关键约束%.0s' {1..100})" > "$BOOK/写作Brief_第001节.md"
   run node - "$REPO/scripts/lib/workflow-stage-context-packet.js" "$BOOK" <<'NODE'
 const {buildStageContextPacket}=require(process.argv[2]);const root=process.argv[3];
@@ -333,32 +333,32 @@ MD
 上一节真正的结尾。
 MD
   cat > "$BOOK/追踪/private-short-extension/section-001-anchor.json" <<'JSON'
-{"workflow_id":"wf-short","section_index":1,"status":"accepted","canonical_path":"正文/第001节.md","section_commit_id":"chapter-short-001","section_summary":"主角公开质疑宣传。","revealed_information":["生产线已经出售"],"character_state":{"林照":"决定继续查证"},"open_hook":"哥哥拿出工资账本。","next_section_handoff":{"must_carry":"工资账本"},"quality_result":{"machine_gate":"pass"}}
+{"workflow_id":"wf-short","section_index":1,"status":"accepted","canonical_path":"正文/第001节.md","section_commit_id":"chapter-short-001","section_summary":"主角公开质疑宣传。","revealed_information":["复核流程已经移交"],"character_state":{"阿岚":"决定继续查证"},"open_hook":"主管拿出成本账册。","next_section_handoff":{"must_carry":"成本账册"},"quality_result":{"machine_gate":"pass"}}
 JSON
   cat > "$BOOK/追踪/private-short-extension/project-state.json" <<'JSON'
-{"project_id":"short-next-context","project_title":"果汁事件","plan_revision":1,"current_section_index":1,"accepted_sections":[{"section_index":1,"canonical_path":"正文/第001节.md","anchor_path":"追踪/private-short-extension/section-001-anchor.json"}],"narrative":{"planned_sections":3}}
+{"project_id":"short-next-context","project_title":"档案复核","plan_revision":1,"current_section_index":1,"accepted_sections":[{"section_index":1,"canonical_path":"正文/第001节.md","anchor_path":"追踪/private-short-extension/section-001-anchor.json"}],"narrative":{"planned_sections":3}}
 JSON
   cat > "$BOOK/小节大纲.md" <<'MD'
 ## 第1节：开场
-## 第2节：账本
+## 第2节：凭证
 - 结构功能：证据升级。
-- 承接上节：哥哥拿出的工资账本成为下一轮核验入口。
-- 场景动作：主角逐页比对工资账本与生产线停工日期。
-- 角色选择：主角拒绝只听哥哥解释，决定把账本交给员工代表复核。
-- 可见阻力：哥哥要求她先删除直播回放再看账本。
-- 本节兑现：账本证明停工后仍有人领取虚构生产补贴。
-- 关系变化：主角与哥哥从合作查证转为公开对立。
-- 代价升级：她失去家族提供的法律支持。
-- 核心承诺兑现：主角把家族内部账本交给员工代表共同核验。
-- 决定性行动：她拒绝删除回放并公开提交账本副本。
-- 即时代价：她失去家族法律支持并被要求独自应诉。
+- 承接上节：主管拿出的成本账册成为下一轮核验入口。
+- 场景动作：主角逐页比对成本账册与凭证流程停用日期。
+- 角色选择：主角拒绝只听主管解释，决定把凭证交给员工代表复核。
+- 可见阻力：主管要求她先删除复核回放再看凭证。
+- 本节兑现：凭证证明停用后仍有人领取虚构复核补贴。
+- 关系变化：主角与主管从合作查证转为公开对立。
+- 代价升级：她失去部门提供的法律支持。
+- 核心承诺兑现：主角把内部凭证交给员工代表共同核验。
+- 决定性行动：她拒绝删除回放并公开提交凭证副本。
+- 即时代价：她失去部门法律支持并被要求独自应诉。
 - 子事件：
-  1. 主角核对工资账本与停工日期。
+  1. 主角核对成本账册与停用日期。
   2. 员工代表确认补贴名单存在冒名记录。
 - 情绪目标：期待到警觉。
-- 压力变化：产品质疑升级为内部账目造假。
-- 因果链：接过账本 -> 比对日期 -> 发现冒名补贴。
-- 节尾钩子：补贴审批人是母亲。
+- 压力变化：合规质疑升级为内部账目造假。
+- 因果链：接过凭证 -> 比对日期 -> 发现冒名补贴。
+- 节尾钩子：补贴审批人是负责人。
 ## 第3节：反转
 MD
   run node - "$REPO/scripts/lib/workflow-stage-context-packet.js" "$BOOK" <<'NODE'
@@ -374,7 +374,7 @@ if (out.status !== 'assembled') throw new Error(JSON.stringify(out));
 if (!out.packet_md.includes('/section-002/sa-next-2/')) throw new Error(out.packet_md);
 const markdown = fs.readFileSync(path.join(root, out.packet_md), 'utf8');
 if (!markdown.includes('上一节真正的结尾')) throw new Error(markdown);
-if (!markdown.includes('生产线已经出售') || !markdown.includes('工资账本')) throw new Error(markdown);
+if (!markdown.includes('复核流程已经移交') || !markdown.includes('成本账册')) throw new Error(markdown);
 if (markdown.includes('错误的累计正文尾巴')) throw new Error(markdown);
 NODE
   if [ "$status" -ne 0 ]; then printf '%s\n' "$output" >&2; fi
@@ -507,7 +507,7 @@ const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2
 const taskFile=path.join(root,'追踪/workflow/tasks',id,'task.json');const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
 const staged=`${task.task_dir}/artifacts/planning/material_card/sa-material/素材卡.md`;
 fs.mkdirSync(path.dirname(path.join(root,staged)),{recursive:true});
-fs.writeFileSync(path.join(root,staged),'# 素材卡\n\n现实入口：消费者质疑果汁宣传。\n核心冲突：企业必须公开生产线证据。\n');
+fs.writeFileSync(path.join(root,staged),'# 素材卡\n\n现实入口：消费者质疑档案复核宣传。\n核心冲突：企业必须公开生产线证据。\n');
 task.current_stage='material_card';task.current_step='material_card';task.status='running';
 const stages=Object.keys((task.unit_lifecycle||{}).stage_roles||{});const current=stages.indexOf('material_card');
 if(current<0) throw new Error(JSON.stringify(task));
@@ -521,7 +521,7 @@ NODE
   [ "$status" -eq 0 ]
   node -e 'const x=JSON.parse(process.argv[1]); if(x.status!=="applied") { console.error(JSON.stringify(x)); process.exit(1); }' "$output"
   [ -f "$BOOK/素材卡.md" ]
-  grep -q '消费者质疑果汁宣传' "$BOOK/素材卡.md"
+  grep -q '消费者质疑档案复核宣传' "$BOOK/素材卡.md"
   node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
 const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
 const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));
@@ -546,7 +546,7 @@ const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2
 const taskFile=path.join(root,'追踪/workflow/tasks',id,'task.json');const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
 const staged=`${task.task_dir}/artifacts/planning/short_setting/sa-setting/设定.md`;
 fs.mkdirSync(path.dirname(path.join(root,staged)),{recursive:true});
-fs.writeFileSync(path.join(root,staged),`# 人物与剧情设定候选\n\n### 林栖｜主角\n林栖，女主，29岁广告文案，第一人称。目标：查清私密话语被盗用。软肋与缺陷：害怕真人评判，误信沉默就不会受伤。能力边界：只能合法保存公开广告和本地记录。主动选择：拒绝封口并建立证据链。\n\n### 周叙｜主要压力角色\n周叙，31岁技术公司负责人。目标：保住发布项目与公司估值；他认为匿名训练可以惠及更多用户。可用资源是法务、公关和平台解释权。行动边界：不能删除林栖本地证据，也不能威胁家人；他利用旧情逼她沉默。\n\n### 唐禾｜支撑角色\n唐禾，29岁自由制片。目标：帮助朋友保全公开广告版本，也要守住自己的行业信誉。行动边界：不能替林栖决定是否公开，也不能伪造内部证据。\n\n## 人物关系与责任债\n林栖与周叙存在亲密知识被滥用的关系债，关系从信任走向公开对抗；林栖欠唐禾一次真实求助。\n\n## 核心冲突\n私密倾诉被前男友公司用于广告。\n\n## 三级升级\n第一层公开否认；第二层高额封口；第三层发布会前删除记录并反咬炒作。\n\n## 关键反转\n审稿记录揭示周叙主动要求模仿她的语气。\n\n## 结局兑现\n广告下架、责任人停职，林栖拒绝复合并重新向真人朋友求助。\n`);
+fs.writeFileSync(path.join(root,staged),`# 人物与剧情设定候选\n\n### 林栖｜主角\n林栖，女主，29岁广告文案，第一人称。目标：查清私密话语被盗用。软肋与缺陷：害怕真人评判，误信沉默就不会受伤。能力边界：只能合法保存公开广告和本地记录。主动选择：拒绝封口并建立证据链。\n\n### 周叙｜主要压力角色\n周叙，31岁技术公司负责人。目标：保住发布项目与公司估值；他认为匿名训练可以惠及更多用户。可用资源是法务、公关和平台解释权。行动边界：不能删除林栖本地证据，也不能威胁家人；他利用旧情逼她沉默。\n\n### 宋宁｜支撑角色\n宋宁，29岁自由制片。目标：帮助朋友保全公开广告版本，也要守住自己的行业信誉。行动边界：不能替林栖决定是否公开，也不能伪造内部证据。\n\n## 人物关系与责任债\n林栖与周叙存在亲密知识被滥用的关系债，关系从信任走向公开对抗；林栖欠宋宁一次真实求助。\n\n## 核心冲突\n私密倾诉被前男友公司用于广告。\n\n## 三级升级\n第一层公开否认；第二层高额封口；第三层发布会前删除记录并反咬炒作。\n\n## 关键反转\n审稿记录揭示周叙主动要求模仿她的语气。\n\n## 结局兑现\n广告下架、责任人停职，林栖拒绝复合并重新向真人朋友求助。\n`);
 task.current_stage='short_setting';task.current_step='short_setting';task.status='running';task.pending_action=null;
 task.stage_execution={status:'running',stage_attempt_id:'sa-setting',stage_id:'short_setting',step_id:'short_setting',owner_module:'story-short-write',expected_result_packet:`${task.task_dir}/result-packets/short_setting.result.json`,planning_target:staged,planning_canonical_target:'设定.md',write_set:[staged]};
 fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
@@ -584,7 +584,7 @@ if(task.stage_execution.status!=='running'||task.pending_action) throw new Error
 if(!packet.chapter_commit||packet.chapter_commit.mode!=='transactional'||!packet.chapter_commit.accepted_commit_id) throw new Error(JSON.stringify(packet));
 if(JSON.stringify(packet).includes('占位第 1 节')||JSON.stringify(packet).includes('最小占位')) throw new Error(JSON.stringify(packet));
 const cast=JSON.parse(fs.readFileSync(path.join(root,'追踪/memory/active-cast.json'),'utf8'));
-if(!cast.characters.林栖||!cast.characters.周叙||!cast.characters.唐禾) throw new Error(JSON.stringify(cast));
+if(!cast.characters.林栖||!cast.characters.周叙||!cast.characters.宋宁) throw new Error(JSON.stringify(cast));
 NODE
 }
 
@@ -595,69 +595,69 @@ NODE
   cat > "$BOOK/设定.md" <<'EOF'
 # 设定
 
-作品名：果汁事件
+作品名：档案复核
 计划 2 节
 叙事方式：第一人称
 主节奏：揭露后承担现实代价
 
 ## 主要人物
-### 林照，22岁，女主
-第一人称“我”。她要查清直播事故并保护被甩锅的员工，最怕失去家人的爱；误区是把哥哥的保证当成事实。她不懂生产、财务和法律，最终必须亲自撤回错误背书并推动召回。
-### 林建川，37岁，哥哥
-集团负责人。他要保住公司、订单和员工工资，认为隐瞒能救企业；拥有经营权限，但不能无成本伤人，也必须承担错误决策的职位代价。
+### 阿岚，27岁，女主
+第一人称“我”。她要查清凭证事故并保护被甩锅的员工，最怕失去家人的爱；误区是把主管的保证当成事实。她不懂凭证、财务和法律，最终必须亲自撤回错误背书并推动纠错。
+### 主管，39岁，压力角色
+部门负责人。他要保住部门、订单和员工工资，认为隐瞒能救机构；拥有经营权限，但不能无成本伤人，也必须承担错误决策的职位代价。
 ## 角色锁定卡
 | 角色名 | 性别/称谓/视角身份 | 年龄/职业 | 与主角关系 | 本篇目标 | 行动边界 |
 |---|---|---|---|---|---|
-| 林照 | 女，第一人称“我” | 22岁，毕业生 | 妹妹 | 查清事故并保护员工 | 不突然精通商业与法律 |
-| 林建川 | 男，称“哥” | 37岁，负责人 | 哥哥/压力角色 | 保住公司与控制权 | 不调用神秘关系解决危机 |
+| 阿岚 | 女，第一人称“我” | 27岁，合规专员 | 当事人 | 查清事故并保护员工 | 不突然精通商业与法律 |
+| 主管 | 男，称“主管” | 39岁，负责人 | 上级/压力角色 | 保住部门与控制权 | 不调用神秘关系解决危机 |
 ## 人物关系与责任债
-- 林照欠哥哥保护家庭的现实债；哥哥欠林照被滥用的公众信用，两人的关系从保护与依赖走向公开冲突。
+- 阿岚欠部门保护团队的现实债；主管欠阿岚被借用的公众信用，两人的关系从保护与依赖走向公开冲突。
 EOF
   cat > "$BOOK/小节大纲.md" <<'EOF'
 # 小节大纲
 
-核心路线：直播揭穿假鲜榨，再用真实生产恢复消费者选择权。
+核心路线：复核会揭穿代签条目，再用真实凭证恢复部门选择权。
 
-## 第1节：镜头里没有水果
+## 第1节：编号空缺
 - 结构功能：黄金开篇，兑现标题画面
 - 情绪目标：疑惑到警觉
-- 因果链：直播扫到空线，林照拒绝关播并追查
-- 场景动作：林照移动镜头，当面拒绝哥哥关播
-- 主角选择：她选择保留直播回放
+- 因果链：复核会扫到编号空缺，阿岚停止复核并追查
+- 场景动作：阿岚放大镜头，当面拒绝主管叫停
+- 主角选择：她选择保留复核回放
 - 子事件：
-  1. 林照直播时看见压榨线旁没有水果
-  2. 哥哥逼她关播，她拒绝并公开追问
-- 节尾钩子：哥哥承认仓库只有浓缩原料
+  1. 阿岚复核时看见流程旁没有凭证
+  2. 主管逼她停止，她拒绝并公开追问
+- 节尾钩子：主管承认档案只有代签条目
 
-## 第2节：让水果重新进厂
+## 第2节：让凭证重新归档
 - 结构功能：结尾收束责任与产品承诺
 - 情绪目标：压力升高到责任落地
-- 因果链：承接哥哥承认浓缩原料，林照推动召回和真实鲜榨复产
-- 承接上节：哥哥承认仓库只有浓缩原料
-- 场景动作：林照在董事会提交召回和停职方案
-- 主角选择：她选择召回旧货并公开新线
+- 因果链：承接主管承认代签条目，阿岚推动纠错和真实复核复产
+- 承接上节：主管承认档案只有代签条目
+- 场景动作：阿岚在董事会提交纠错和停职方案
+- 主角选择：她选择纠错旧档并公开新流程
 - 子事件：
-  1. 林照提交召回退款方案并暂停哥哥职务
-  2. 她启动真实鲜果入厂直播，承担渠道损失
-- 现实后果：旧货召回退款，哥哥停职，渠道和工资承压
-- 关系收束：林照与家人保持裂痕，不用亲情替责任结账
-- 结尾回扣：镜头里终于有真实水果，消费者可以自行核验
-- 节尾钩子：真实鲜榨线接受长期公开监督
+  1. 阿岚提交纠错方案并暂停主管职务
+  2. 她启动真实凭证回流，承担渠道损失
+- 现实后果：旧档纠错，主管停职，渠道和工资承压
+- 关系收束：阿岚与部门保持裂痕，不用亲情替责任结账
+- 结尾回扣：复核里终于有真实凭证，消费者可以自行核验
+- 节尾钩子：真实复核流程接受长期公开监督
 EOF
   node "$REPO/scripts/workflow-state-machine.js" create --workflow-type short_write --project-root "$BOOK" --scope "全篇" --user-goal "整篇回炉" --no-private-registry --json > "$BATS_TEST_TMPDIR/feedback-create.json"
   WORKFLOW_ID="$(node -e 'console.log(require(process.argv[1]).task.workflow_id)' "$BATS_TEST_TMPDIR/feedback-create.json")"
   node - "$BOOK" "$WORKFLOW_ID" "$REPO/scripts/lib/short-project-state.js" <<'NODE'
 const fs=require('fs'),path=require('path');const [root,id,stateModule]=process.argv.slice(2);const state=require(stateModule);
-state.ensureShortProjectState(root,{workflowId:id,title:'果汁事件'});state.advanceShortPlanRevision(root,{workflowId:id,outlinePath:'小节大纲.md'});
+state.ensureShortProjectState(root,{workflowId:id,title:'档案复核'});state.advanceShortPlanRevision(root,{workflowId:id,outlinePath:'小节大纲.md'});
 const taskFile=path.join(root,'追踪/workflow/tasks',id,'task.json');const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
 const attempt='sa-feedback-patch';const base=`${task.task_dir}/artifacts/planning/feedback_apply_patch/${attempt}`;
 const targets=['设定.md','小节大纲.md'].map(canonical=>({canonical,staged:`${base}/${canonical}`}));
 for(const target of targets){fs.mkdirSync(path.dirname(path.join(root,target.staged)),{recursive:true});fs.copyFileSync(path.join(root,target.canonical),path.join(root,target.staged));}
 const feedbackId='feedback-batch-plan';const planId='accepted-plan.feedback-batch-plan';
 task.current_stage='feedback_apply_patch';task.current_step='feedback_apply_patch';task.status='running';task.scope='全篇';
-task.pending_feedback={feedback_id:feedbackId,text:'恢复真实鲜榨并重做结尾。',scope_snapshot:'全篇',status:'pending'};
+task.pending_feedback={feedback_id:feedbackId,text:'恢复真实复核并重做结尾。',scope_snapshot:'全篇',status:'pending'};
 task.short_feedback_impact={status:'ok',feedback_id:feedbackId,impact_level:'planning',affected_sections:[1,2],downstream_impact:{invalidate_briefs:['写作Brief_第001节.md','写作Brief_第002节.md'],recheck_prose:['正文/第001节.md','正文/第002节.md']}};
-task.accepted_plan={plan_id:planId,status:'accepted_pending_projection',feedback_id:feedbackId,impact_level:'planning',summary:'恢复真实鲜榨并重做结尾。',requirements:[{requirement_id:'req-1',text:'旧货召回退款，新线恢复真实鲜果并公开生产。',impact_level:'planning'}],affected_sections:[1,2],projection_plan:{planning_assets:['设定.md','小节大纲.md'],invalidate_briefs:['写作Brief_第001节.md','写作Brief_第002节.md'],recheck_prose:['正文/第001节.md','正文/第002节.md']}};
+task.accepted_plan={plan_id:planId,status:'accepted_pending_projection',feedback_id:feedbackId,impact_level:'planning',summary:'恢复真实复核并重做结尾。',requirements:[{requirement_id:'req-1',text:'旧档纠错，新流程恢复真实凭证并公开生产。',impact_level:'planning'}],affected_sections:[1,2],projection_plan:{planning_assets:['设定.md','小节大纲.md'],invalidate_briefs:['写作Brief_第001节.md','写作Brief_第002节.md'],recheck_prose:['正文/第001节.md','正文/第002节.md']}};
 task.accepted_plan_path=`${task.task_dir}/artifacts/accepted-plan.json`;fs.mkdirSync(path.dirname(path.join(root,task.accepted_plan_path)),{recursive:true});fs.writeFileSync(path.join(root,task.accepted_plan_path),JSON.stringify(task.accepted_plan,null,2)+'\n');
 const token='feedback-confirmation';const expires=new Date(Date.now()+3600000).toISOString();const hash='feedback-choice';
 task.pending_action={id:'pa-feedback',status:'resolved',visible_choice_hash:hash};task.last_selection={confirmation_token:token,selected_number:1,action_id:'continue_next_stage',visible_choice_hash:hash,requires_user_confirm:true};
@@ -684,7 +684,7 @@ NODE
   task_file="$BOOK/追踪/workflow/tasks/$WORKFLOW_ID/task.json"
   [ "$(jq -r '.feedback_revision_queue.affected_sections|join(",")' "$task_file")" = "1,2" ]
   [ "$(jq -r '.accepted_plan.projection_status' "$task_file")" = "completed" ]
-  grep -q '旧货召回退款' "$BOOK/追踪/memory/planning-constraints.jsonl"
+  grep -q '旧档纠错' "$BOOK/追踪/memory/planning-constraints.jsonl"
   node - "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');const root=process.argv[2];
 const commits=fs.readdirSync(path.join(root,'追踪/story-system/commits')).map(name=>JSON.parse(fs.readFileSync(path.join(root,'追踪/story-system/commits',name),'utf8')));
@@ -705,7 +705,7 @@ NODE
   WORKFLOW_ID="$(node -e 'console.log(require(process.argv[1]).task.workflow_id)' "$BATS_TEST_TMPDIR/current-brief-create.json")"
   node - "$BOOK" "$WORKFLOW_ID" "$REPO/scripts/lib/short-project-state.js" <<'NODE'
 const fs=require('fs'),path=require('path');const [root,id,stateModule]=process.argv.slice(2);const state=require(stateModule);
-state.ensureShortProjectState(root,{workflowId:id,title:'果汁事件'});state.advanceShortPlanRevision(root,{workflowId:id,outlinePath:'小节大纲.md'});
+state.ensureShortProjectState(root,{workflowId:id,title:'档案复核'});state.advanceShortPlanRevision(root,{workflowId:id,outlinePath:'小节大纲.md'});
 const file=path.join(root,'追踪/workflow/tasks',id,'task.json'),task=JSON.parse(fs.readFileSync(file,'utf8'));const feedbackId='feedback-current-brief',proposalId='proposal.feedback-current-brief';
 task.current_stage='feedback_apply_patch';task.current_step='feedback_apply_patch';task.status='running';task.scope='第7节';
 task.pending_feedback={feedback_id:feedbackId,text:'补足母亲当面承认。',scope_snapshot:'第7节',status:'pending'};
@@ -754,7 +754,7 @@ if(task.workflow_profile!=='private') throw new Error(JSON.stringify(task));
 const stages=task.machine.remaining_stages.slice();const current=stages.indexOf('project_seed');
 if(current<0) throw new Error(JSON.stringify(stages));
 const staged=`${task.task_dir}/artifacts/planning/project_seed/sa-seed/素材卡.md`;
-fs.mkdirSync(path.dirname(path.join(root,staged)),{recursive:true});fs.writeFileSync(path.join(root,staged),'# 素材卡\n\n热点冲突：消费者追问果汁生产证据。\n');
+fs.mkdirSync(path.dirname(path.join(root,staged)),{recursive:true});fs.writeFileSync(path.join(root,staged),'# 素材卡\n\n热点冲突：消费者追问档案复核生产证据。\n');
 task.current_stage='project_seed';task.current_step='project_seed';task.status='running';task.machine.completed_stages=stages.slice(0,current);task.machine.remaining_stages=stages.slice(current+1);
 const token='test-confirmation-token';const expires=new Date(Date.now()+3600000).toISOString();const choiceHash='test-choice-hash';
 task.pending_action={id:'pa-project_seed',status:'resolved',visible_choice_hash:choiceHash};
@@ -767,6 +767,59 @@ NODE
   [ "$status" -eq 0 ]
   node -e 'const x=JSON.parse(process.argv[1]); if(x.status!=="applied") { console.error(JSON.stringify(x)); process.exit(1); }' "$output"
   node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
-const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));if(task.current_stage!=='short_setting') throw new Error(JSON.stringify(task));if(!fs.readFileSync(path.join(root,'素材卡.md'),'utf8').includes('果汁生产证据')) throw new Error('material card missing');const state=JSON.parse(fs.readFileSync(path.join(root,'追踪/story-system/short/project-state.json'),'utf8'));if(!state.project_id||state.active_write_workflow_id!==id) throw new Error(JSON.stringify(state));
+const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));if(task.current_stage!=='short_setting') throw new Error(JSON.stringify(task));if(!fs.readFileSync(path.join(root,'素材卡.md'),'utf8').includes('档案复核生产证据')) throw new Error('material card missing');const state=JSON.parse(fs.readFileSync(path.join(root,'追踪/story-system/short/project-state.json'),'utf8'));if(!state.project_id||state.active_write_workflow_id!==id) throw new Error(JSON.stringify(state));
 NODE
+}
+
+# Task 5 Step 6 RED: the V2 wrapper must run the reusable-commit check AND
+# validatePlanningMemoryBeforeCommit BEFORE the shared service commits with
+# apply:true. A stale planning memory must block BEFORE the transaction, leaving
+# the canonical artifact and accepted-commit inventory unchanged. The shared
+# planning service must not perform the real chapter-commit when memory is stale.
+
+@test "V2 planning --apply with stale memory blocks before the shared service commits, leaving canonical artifact and commits unchanged" {
+  BOOK="$BATS_TEST_TMPDIR/planning-memory-gate-book"
+  mkdir -p "$BOOK/追踪/story-system" "$BOOK/追踪/workflow"
+  printf '%s\n' '{"schemaVersion":"1.0.0","mode":"strict"}' > "$BOOK/追踪/story-system/write-policy.json"
+  node "$REPO/scripts/workflow-state-machine.js" create --workflow-type short_write --project-root "$BOOK" --scope "新短篇" --user-goal "创建短篇" --no-private-registry --json > "$BATS_TEST_TMPDIR/mem-create.json"
+  WORKFLOW_ID="$(node -e 'console.log(require(process.argv[1]).task.workflow_id)' "$BATS_TEST_TMPDIR/mem-create.json")"
+
+  # Snapshot the canonical artifact absence and the accepted-commit inventory
+  # BEFORE the apply. A stale-memory block must leave both unchanged.
+  [ ! -f "$BOOK/素材卡.md" ]
+  COMMITS_DIR="$BOOK/追踪/story-system/commits"
+  COMMITS_BEFORE=$(ls "$COMMITS_DIR" 2>/dev/null | sort | tr '\n' ',')
+
+  # Stage a neutral material card and advance the V2 task to material_card, with
+  # a stage_context_packet pointing at a NON-EXISTENT packet file AND
+  # context_refresh_count=1. The refresh-count cap makes the missing packet
+  # DETERMINISTICALLY blocking: ensureCurrentShortMemoryStage will not auto-
+  # refresh and continue (it blocks once the count is exhausted), so the gate
+  # must classify this as a blocking stale/missing memory context.
+  node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
+const taskFile=path.join(root,'追踪/workflow/tasks',id,'task.json');const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const staged=`${task.task_dir}/artifacts/planning/material_card/sa-material/素材卡.md`;
+fs.mkdirSync(path.dirname(path.join(root,staged)),{recursive:true});
+fs.writeFileSync(path.join(root,staged),'# 素材卡\n\n现实入口：用户质疑公开承诺与宣传不一致。\n核心冲突：组织必须公开可核验的证据。\n');
+const stages=Object.keys((task.unit_lifecycle||{}).stage_roles||{});const current=stages.indexOf('material_card');
+if(current<0) throw new Error(JSON.stringify({stages,stage:'material_card'}));
+task.current_stage='material_card';task.current_step='material_card';task.status='running';
+task.machine.completed_stages=stages.slice(0,current);task.machine.remaining_stages=stages.slice(current+1);
+task.stage_execution={status:'running',stage_attempt_id:'sa-material',stage_id:'material_card',step_id:'material_card',owner_module:task.workflow_owner||'story-short-write',expected_result_packet:`${task.task_dir}/result-packets/material_card.result.json`,planning_target:staged,planning_canonical_target:'素材卡.md',write_set:[staged],context_refresh_count:1,stage_context_packet:{packet_json:`${task.task_dir}/packets/missing.json`,section_index:0},memory_context:{context_source:'stage_context'}};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+
+  run node "$REPO/scripts/short-planning-stage-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+
+  # The memory gate must block BEFORE the transaction: the response is the
+  # refresh-required status, NOT an applied commit.
+  node -e 'const x=JSON.parse(process.argv[1]); if(x.status!=="short_planning_memory_context_refresh_required") { console.error(JSON.stringify(x)); process.exit(1); }' "$output"
+
+  # The canonical artifact must NOT exist (the shared service did not commit).
+  [ ! -f "$BOOK/素材卡.md" ]
+  # The accepted-commit inventory must be unchanged (no new commit was written).
+  COMMITS_AFTER=$(ls "$COMMITS_DIR" 2>/dev/null | sort | tr '\n' ',')
+  [ "$COMMITS_BEFORE" = "$COMMITS_AFTER" ]
 }

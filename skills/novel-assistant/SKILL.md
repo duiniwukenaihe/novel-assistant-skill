@@ -48,12 +48,12 @@ node scripts/short-review-entry.js --project-root <book-root> --json --compact
 对写作项目先运行：
 
 ```bash
-node <当前 skill 包>/scripts/novel-assistant-update-check.js <project-root> --json
+node <当前 skill 包>/scripts/novel-assistant-update-check.js <project-root> --user-intent "<本轮用户输入>" --write --json
 ```
 
 更新检查脚本会从自身安装目录发现相邻的 `novel-assistant-manifest.json`。必须直接运行这一条 `node` 命令；不得先 `cd` 到 skill 目录，不得追加 `&&`、管道、重定向、命令替换或 `|| true`。项目内旧脚本仅作兼容 fallback。
 
-`.story-deployed.novel_assistant_bundle_id` 与当前 `bundleId` 不一致，或结果为 `not_deployed` / `update_available` 时，更新确认是硬前置门禁：第一屏只能是更新确认，不得读取项目状态、章节进度或生成业务候选；不得同时输出更新确认和写作意图候选。确认更新或暂不更新后，才允许读取项目状态并判断写作意图。
+`.story-deployed.novel_assistant_bundle_id` 与当前 `bundleId` 不一致，或结果为 `not_deployed` / `update_available` 时，更新确认是硬前置门禁：第一屏只能是更新确认，不得读取项目状态、章节进度或生成业务候选；不得同时输出更新确认和写作意图候选。脚本会把 `original_intent` 和更新选项持久化。下一轮仍先把**当前这一条**用户消息传给同一更新检查命令：返回 `update_declined` 时只能逐字执行其 `entry_guard_command`，返回 `update_confirmed` 时只能逐字执行其 `execution_command`；绝不能把用于更新确认的 `1/2/确认/否` 直接传给 workflow 入口或记成作品反馈。确认更新或暂不更新后，才允许读取项目状态并判断写作意图。
 
 启动阶段禁止先调用 `Glob`、复合 Bash、目录遍历或 Claude 自带 `TaskCreate/TaskUpdate` 探查项目。更新检查收束后只运行一次 `workflow-entry-guard.js`，其返回值就是 workflow 入口证据；小说任务只由 `story-workflow` 状态机维护，不在宿主任务列表中复制第二份。
 
@@ -75,7 +75,7 @@ node <当前 skill 包>/scripts/workflow-entry-guard.js --project-root <book-roo
 
 当 guard 返回 `visible_response.selection_contract=execute_direct_intent_command` 时，用户已经给出完整意图：不显示任务收件箱，不让用户再选“开启新目标”，也不得声称已完成任务被“最终检查锁定”。必须立即逐字执行 `visible_response.execution_command`，再按返回的 `stage_execution` 继续。已完成任务是可追溯证据；同一作品的新反馈或整篇回炉会重新激活反馈影响链，不重跑短篇启动菜单。
 
-当 `visible_response.selection_contract=resume_running_stage` 时，当前选择已经确认、阶段已经启动。该合同是一个**同轮原子执行单元**：切换到当前书籍根目录，执行 `context_read_command`，按 `resume_hint` 只改 `write_set`；写完 `write_set` 后必须立即执行 `stage_completion_command`（缺失时回退到 `execution_command`），再消费其返回的下一阶段或数字菜单。`render_mode=silent_resume` 是内部续跑合同，不得渲染、复述或改写为用户可见正文。结果包被状态机接受前不得产生普通可见回复；“暂存稿已完成，只差提交命令”“下一步运行提交命令”均属于未完成阶段，不得发送给用户。只有返回 `workflow_choice_required`、`workflow_completed`，或宿主工具在一次最小重试后仍失败，才允许停下来回复。内部可恢复质量问题最多连续修复两次；仍未通过时保存断点并显示统一的 `1-4` 恢复菜单，不得无限烧 token。
+当 `visible_response.selection_contract=resume_running_stage` 时，当前选择已经确认、阶段已经启动。该合同是一个**同轮原子执行单元**：切换到当前书籍根目录，逐字执行返回的 `context_read_command`，按 `resume_hint` 只改 `write_set`；写完 `write_set` 后必须逐字执行返回的 `stage_completion_command`（缺失时回退到 `execution_command`），再消费其返回的下一阶段或数字菜单。V3 阶段命令由 `scripts/workflow-v3.js` 承载；禁止替换成 `workflow-state-machine.js`，也禁止用 `help`、`list`、目录扫描或猜测子命令代替已返回的完整命令。`render_mode=silent_resume` 是内部续跑合同，不得渲染、复述或改写为用户可见正文。结果包被状态机接受前不得产生普通可见回复；“暂存稿已完成，只差提交命令”“下一步运行提交命令”均属于未完成阶段，不得发送给用户。只有返回 `workflow_choice_required`、`workflow_completed`，或宿主工具在一次最小重试后仍失败，才允许停下来回复。内部可恢复质量问题最多连续修复两次；仍未通过时保存断点并显示统一的 `1-4` 恢复菜单，不得无限烧 token。
 
 短篇写作中的每条可执行意见都必须在回复内容建议之前调用状态机 `resolve-action` 落入任务反馈收件箱。不得只在聊天里表示理解，也不得等用户说“开始修改”时才记录最后一句。结局、主题、人物功能、因果与现实规则先进入反馈影响链；局部对白、动作与表达进入当前 Brief/正文修订链。只有规划回写和正文验收完成后，才投影为正式作品记忆。
 
@@ -116,3 +116,7 @@ Codex Desktop 没有稳定的 Claude `AskUserQuestion` 方向键控件时，必�
 - 专业写作、拆文、审阅、去 AI 味、扫榜、导入和封面：仅在 router 选中 owner 后读取 `references/internal-skills/<module>/SKILL.md`。
 
 新增长规则应放入当前阶段的 workflow reference 或目标模块 reference，避免顶层入口继续膨胀。
+
+## 可见回复前置健康自检
+
+router 直接回复用户的可见长回复必须先做可见回复前置健康自检：候选回复写盘前先查 `internal-workflow-narration` / `encoded-gibberish-blob` / `user-facing-jargon-leak` / `domain-token-flood`；命中时记为污染段，证据只给文件路径/行号，并以 `污染段#N` 标记；命中 `blocked_model_degradation` 时调用 `node scripts/blocked-recovery-template.js --status blocked_model_degradation` 短模板。前置自检与源污染隔离同义：发现旧报告或正文里残留重复填充时，先把污染起点到文件尾部标记为 `polluted_source_segment` 并做污染源隔离，从污染段之后的内容不得作为事实依据，也不得把污染短语复述为标题或“核心情节”。完整门禁见 `references/internal-skills/story-workflow/references/output-safety-contract.md`。

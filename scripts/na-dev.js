@@ -9,6 +9,7 @@ stable while giving maintainers one place to run common workflows.
 
 Commands:
   verify              Run the default local verification suite
+  verify-v3-short     Run the complete deterministic V3 short workflow suite
   smoke [args...]     Run production-smoke-matrix.js
   audit [args...]     Run maintainability-audit.js
   release-audit       Run public-release-audit.js against the current branch
@@ -106,6 +107,19 @@ console.log('local private novel-assistant install verified:', targets.join(', '
 const [command, ...args] = process.argv.slice(2);
 
 switch (command || 'help') {
+  case 'verify-v3-short':
+    run('bash', ['scripts/run-bats-tests.sh',
+      'tests/test-workflow-v3-contracts.bats',
+      'tests/test-workflow-v3-interaction.bats',
+      'tests/test-workflow-v3-engine.bats',
+      'tests/test-workflow-v3-new-project.bats',
+      'tests/test-workflow-v3-feedback.bats',
+      'tests/test-workflow-v3-planning.bats',
+      'tests/test-workflow-v3-section-loop.bats',
+      'tests/test-workflow-v3-closure.bats',
+      'tests/test-workflow-v3-new-short-e2e.bats'
+    ]);
+    break;
   case 'verify':
     runMany([
       ['bash', ['scripts/run-bats-lite.sh',

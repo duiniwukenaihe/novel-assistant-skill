@@ -102,7 +102,7 @@
 | `short-plan-contract.js` | 短篇全篇规划门；验证素材卡、设定、全篇小节大纲、总节数、视角与节奏锁定，未完成时阻止正文 |
 | `short-review-entry.js` | 完整短篇验收唯一入口；固定路由到 `story-review`，只读审阅允许带规划风险继续并逐节生成补全清单 |
 | `short-brief-freshness.js` | 记录并检查单节 Brief 对素材卡、设定、小节大纲和上一节锚点的依赖摘要；上游变化后阻止陈旧 Brief 写正文 |
-| `workflow-runner.js` | 工作流运行器；以 `status/once/run` 串联状态机、Claude Code/Codex/ZCode 适配器、流式健康早停、一次受控恢复、结果包应用和成本账本；默认 `auto` 只探测，不静默启动收费模型 |
+| `workflow-runner.js` | 工作流运行器；以 `status/once/run` 串联状态机、Claude Code/Codex/ZCode 适配器、流式健康早停、一次受控恢复、结果包应用和成本账本；默认 `auto` 只探测，不静默启动收费模型。Claude Code 每阶段默认 `--max-turns 30`，可由 runner 的同名参数下调或上调 |
 | `workflow-supervisor.js` | 可选持久督导器；以 `once/watch` 逐次委托既有 runner，落盘监督状态与事件。遇到确认、选择、预算、provider、质量门或事务阻断立即停靠；不改宿主权限配置 |
 | `workflow-state-validate.js` | 校验 current/durable 双副本、阶段执行、可信产物、state version 等 workflow 不变量 |
 | `workflow-recover.js` | 确定性恢复缺失 result packet；可从已完成阶段摘要重建并推进。旧范围审阅若只有边界抽样、没有完整覆盖证明，则迁移为分批状态并从首个未完成批次恢复，绝不冒充审阅完成 |

@@ -10,6 +10,7 @@ const HOSTS = Object.freeze({
   zcode: ['~/.zcode/skills/novel-assistant'],
   opencode: ['<project>/.opencode/skills/novel-assistant', '~/.config/opencode/skills/novel-assistant'],
   openclaw: ['<workspace>/skills/novel-assistant'],
+  qclaw: ['<workspace>/skills/novel-assistant'],
 });
 
 const REQUIRED_FILES = Object.freeze([

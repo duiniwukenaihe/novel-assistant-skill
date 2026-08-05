@@ -14,10 +14,10 @@ const path=require('path');
 const api=require(process.argv[2]);
 const root=process.argv[3];
 const task={workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/workflow/tasks/wf-short',current_stage:'final_check',scope:'全篇'};
-api.enqueueShortFeedback(root,task,'结局必须恢复真实鲜榨，不能把浓缩当成新价值。',{receivedAt:'2026-07-22T01:00:00.000Z'});
-api.enqueueShortFeedback(root,task,'宿舍线要区分真朋友、塑料朋友和普通消费者。',{receivedAt:'2026-07-22T01:01:00.000Z'});
+api.enqueueShortFeedback(root,task,'结局必须恢复真实复核，不能把违规账目当成新价值。',{receivedAt:'2026-07-22T01:00:00.000Z'});
+api.enqueueShortFeedback(root,task,'同事关系线要区分真朋友、塑料朋友和普通协作者。',{receivedAt:'2026-07-22T01:01:00.000Z'});
 if(task.pending_feedback.item_count!==2) throw new Error(JSON.stringify(task.pending_feedback));
-if(!/恢复真实鲜榨/.test(task.pending_feedback.text)||!/塑料朋友/.test(task.pending_feedback.text)) throw new Error(task.pending_feedback.text);
+if(!/恢复真实复核/.test(task.pending_feedback.text)||!/塑料朋友/.test(task.pending_feedback.text)) throw new Error(task.pending_feedback.text);
 if(task.pending_feedback.impact_level_hint!=='planning') throw new Error(task.pending_feedback.impact_level_hint);
 if(task.pending_feedback.scope_snapshot!=='全篇') throw new Error(task.pending_feedback.scope_snapshot);
 const rows=fs.readFileSync(path.join(root,task.pending_feedback.feedback_inbox_path),'utf8').trim().split('\n').map(JSON.parse);
@@ -46,7 +46,7 @@ NODE
 @test "feedback impact routing keeps plans separate from accepted story facts" {
   run node - "$REPO/scripts/lib/short-feedback-working-memory.js" <<'NODE'
 const api=require(process.argv[2]);
-const planning=api.inferFeedbackImpact('结局要恢复鲜榨，并补足母亲退出治理和宿舍人物关系。');
+const planning=api.inferFeedbackImpact('结局要恢复真实复核，并补足负责人退出治理和同事人物关系。');
 const local=api.inferFeedbackImpact('第7节把这句对白改得自然一点。');
 if(planning.impact_level!=='planning'||!planning.affected_assets.includes('小节大纲.md')) throw new Error(JSON.stringify(planning));
 if(local.impact_level!=='current_brief') throw new Error(JSON.stringify(local));
@@ -59,7 +59,7 @@ NODE
   run node - "$REPO/scripts/lib/short-feedback-working-memory.js" "$REPO/scripts/lib/short-planning-memory.js" "$BOOK" <<'NODE'
 const feedbackApi=require(process.argv[2]);const planningApi=require(process.argv[3]);const root=process.argv[4];
 const task={workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/workflow/tasks/wf-short',current_stage:'feedback_apply_patch',scope:'全篇'};
-feedbackApi.enqueueShortFeedback(root,task,'结局必须恢复真实鲜榨。',{scopeSnapshot:'全篇'});
+feedbackApi.enqueueShortFeedback(root,task,'结局必须恢复真实复核。',{scopeSnapshot:'全篇'});
 const out=planningApi.projectAcceptedShortPlanningFeedback(root,task,{stage_id:'feedback_apply_patch',step_status:'completed',impact_level:'planning',changed_files:['正文.md']});
 if(out.status!=='blocked_planning_memory_evidence_missing') throw new Error(JSON.stringify(out));
 NODE
@@ -72,14 +72,14 @@ NODE
 const fs=require('fs'),path=require('path');
 const feedbackApi=require(process.argv[2]);const planningApi=require(process.argv[3]);const root=process.argv[4];
 const task={workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/workflow/tasks/wf-short',scope:'全篇'};
-feedbackApi.enqueueShortFeedback(root,task,'终局恢复真实鲜榨；宿舍线贯穿第1、2、8、9节。',{scopeSnapshot:'全篇'});
-task.short_feedback_impact={impact_level:'planning',affected_sections:[1,2,8,9],affected_assets:['设定.md','小节大纲.md'],downstream_impact:{replan:['设定.md：终局边界','小节大纲.md：宿舍线'],invalidate_briefs:['写作Brief_第001节.md','写作Brief_第002节.md','写作Brief_第008节.md','写作Brief_第009节.md'],recheck_prose:['正文/第001节.md','正文/第002节.md','正文/第008节.md','正文/第009节.md']}};
-task.proposed_plan={proposal_id:'proposal.fruit-ending-v2',feedback_id:task.pending_feedback.feedback_id,status:'awaiting_user_confirmation',summary:'让鲜果回到工厂，宿舍三人分别承担真友情、塑料关系和普通消费者视角。',execution_summary:'先改设定和小节大纲，再使 1/2/8/9 节 Brief 与正文进入待复检。',requirements:[{requirement_id:'req-ending',text:'恢复真实鲜榨与公开可验证生产',impact_level:'planning'}]};
+feedbackApi.enqueueShortFeedback(root,task,'终局恢复真实复核；同事关系线贯穿第1、2、8、9节。',{scopeSnapshot:'全篇'});
+task.short_feedback_impact={impact_level:'planning',affected_sections:[1,2,8,9],affected_assets:['设定.md','小节大纲.md'],downstream_impact:{replan:['设定.md：终局边界','小节大纲.md：同事关系线'],invalidate_briefs:['写作Brief_第001节.md','写作Brief_第002节.md','写作Brief_第008节.md','写作Brief_第009节.md'],recheck_prose:['正文/第001节.md','正文/第002节.md','正文/第008节.md','正文/第009节.md']}};
+task.proposed_plan={proposal_id:'proposal.archive-ending-v2',feedback_id:task.pending_feedback.feedback_id,status:'awaiting_user_confirmation',summary:'让真实凭证回到复核现场，三位同事分别承担真友情、塑料关系和普通协作者视角。',execution_summary:'先改设定和小节大纲，再使 1/2/8/9 节 Brief 与正文进入待复检。',requirements:[{requirement_id:'req-ending',text:'恢复真实复核与公开可验证生产',impact_level:'planning'}]};
 const out=planningApi.acceptShortPlanningDecision(root,task,{selected_number:1,action_id:'continue_next_stage',confirmation_input:'1',accepted_at:'2026-07-22T10:00:00.000Z',feedback_id:task.pending_feedback.feedback_id,proposal_id:task.proposed_plan.proposal_id});
 if(out.status!=='short_plan_accepted'||task.accepted_plan.status!=='accepted_pending_projection') throw new Error(JSON.stringify(out));
 if(task.accepted_plan.affected_sections.join(',')!=='1,2,8,9') throw new Error(JSON.stringify(task.accepted_plan));
-if(task.accepted_plan.proposal_id!=='proposal.fruit-ending-v2'||task.accepted_plan.summary!==task.proposed_plan.summary||task.proposed_plan.status!=='accepted') throw new Error(JSON.stringify(task));
-if(task.accepted_plan.acceptance.confirmation_input!=='1'||task.accepted_plan.acceptance.confirmed_proposal_id!=='proposal.fruit-ending-v2'||task.accepted_plan.acceptance.confirmed_summary!==task.accepted_plan.summary) throw new Error(JSON.stringify(task.accepted_plan.acceptance));
+if(task.accepted_plan.proposal_id!=='proposal.archive-ending-v2'||task.accepted_plan.summary!==task.proposed_plan.summary||task.proposed_plan.status!=='accepted') throw new Error(JSON.stringify(task));
+if(task.accepted_plan.acceptance.confirmation_input!=='1'||task.accepted_plan.acceptance.confirmed_proposal_id!=='proposal.archive-ending-v2'||task.accepted_plan.acceptance.confirmed_summary!==task.accepted_plan.summary) throw new Error(JSON.stringify(task.accepted_plan.acceptance));
 if(task.accepted_plan.projection_plan.order.join(',')!=='planning_assets,briefs,prose_recheck,memory_projection') throw new Error(JSON.stringify(task.accepted_plan));
 if(!fs.existsSync(path.join(root,task.accepted_plan_path))) throw new Error(task.accepted_plan_path);
 const events=fs.readFileSync(path.join(root,task.task_dir,'decision-journal.jsonl'),'utf8').trim().split(/\n/).map(JSON.parse);
@@ -105,21 +105,21 @@ NODE
 }
 
 @test "planning projection stores the confirmed proposal instead of raw chat fragments" {
-  printf '%s\n' '# 设定' '终局恢复真实鲜榨。' > "$BOOK/设定.md"
-  printf '%s\n' '# 小节大纲' '第9节：公开可验证的新鲜榨线。' > "$BOOK/小节大纲.md"
+  printf '%s\n' '# 设定' '终局恢复真实复核。' > "$BOOK/设定.md"
+  printf '%s\n' '# 小节大纲' '第9节：公开可验证的新复核链路。' > "$BOOK/小节大纲.md"
   run node - "$REPO/scripts/lib/short-feedback-working-memory.js" "$REPO/scripts/lib/short-planning-memory.js" "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');
 const feedbackApi=require(process.argv[2]),planningApi=require(process.argv[3]),root=process.argv[4];
 const task={workflow_id:'wf-short',workflow_type:'short_write',task_dir:'追踪/workflow/tasks/wf-short',scope:'全篇'};
 feedbackApi.enqueueShortFeedback(root,task,'酸就是酸。',{scopeSnapshot:'全篇'});
 task.short_feedback_impact={impact_level:'planning',affected_sections:[9],affected_assets:['设定.md','小节大纲.md'],downstream_impact:{}};
-task.proposed_plan={proposal_id:'proposal.fresh-juice-final',feedback_id:task.pending_feedback.feedback_id,status:'awaiting_user_confirmation',summary:'结局让鲜果回到工厂并公开可验证生产。',requirements:[{requirement_id:'req-real-fresh-juice',text:'恢复真实鲜榨，旧货主动召回退款，新线公开生产证据。',impact_level:'planning'}]};
+task.proposed_plan={proposal_id:'proposal.real-archive-final',feedback_id:task.pending_feedback.feedback_id,status:'awaiting_user_confirmation',summary:'结局让真实凭证回到复核现场并公开可验证生产。',requirements:[{requirement_id:'req-real-archive',text:'恢复真实复核，旧凭证主动召回退款，新链路公开生产证据。',impact_level:'planning'}]};
 planningApi.acceptShortPlanningDecision(root,task,{selected_number:1,action_id:'continue_next_stage',confirmation_input:'采用上面的方案',feedback_id:task.pending_feedback.feedback_id,proposal_id:task.proposed_plan.proposal_id});
 const out=planningApi.projectAcceptedShortPlanningFeedback(root,task,{stage_id:'feedback_apply_patch',step_status:'completed',impact_level:'planning',affected_sections:[9],changed_files:['设定.md','小节大纲.md'],result_packet_path:'result.json'});
-if(out.status!=='planning_constraints_projected'||out.constraint_ids[0]!=='constraint.req-real-fresh-juice') throw new Error(JSON.stringify(out));
+if(out.status!=='planning_constraints_projected'||out.constraint_ids[0]!=='constraint.req-real-archive') throw new Error(JSON.stringify(out));
 const rows=fs.readFileSync(path.join(root,'追踪/memory/planning-constraints.jsonl'),'utf8').trim().split(/\n/).map(JSON.parse);
-if(rows.length!==1||!/恢复真实鲜榨/.test(rows[0].content)||/酸就是酸/.test(rows[0].content)) throw new Error(JSON.stringify(rows));
-if(rows[0].source_kind!=='user_confirmed_plan'||rows[0].provenance.proposal_id!=='proposal.fresh-juice-final') throw new Error(JSON.stringify(rows[0]));
+if(rows.length!==1||!/恢复真实复核/.test(rows[0].content)||/酸就是酸/.test(rows[0].content)) throw new Error(JSON.stringify(rows));
+if(rows[0].source_kind!=='user_confirmed_plan'||rows[0].provenance.proposal_id!=='proposal.real-archive-final') throw new Error(JSON.stringify(rows[0]));
 NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
@@ -144,8 +144,8 @@ NODE
 @test "accepted cross-section feedback creates and advances a durable revision queue" {
   run node - "$REPO/scripts/lib/short-feedback-revision-queue.js" <<'NODE'
 const api=require(process.argv[2]);
-const task={workflow_id:'wf-short',workflow_type:'private_short_startup',scope:'全篇',pending_feedback:{feedback_id:'feedback-fruit'}};
-const result={stage_id:'feedback_apply_patch',step_status:'completed',feedback_id:'feedback-fruit',affected_sections:[1,2,8,9],downstream_impact:{invalidate_briefs:['写作Brief_第001节.md','写作Brief_第002节.md','写作Brief_第008节.md','写作Brief_第009节.md'],recheck_prose:['正文/第001节.md','正文/第002节.md','正文/第008节.md','正文/第009节.md']}};
+const task={workflow_id:'wf-short',workflow_type:'private_short_startup',scope:'全篇',pending_feedback:{feedback_id:'feedback-archive'}};
+const result={stage_id:'feedback_apply_patch',step_status:'completed',feedback_id:'feedback-archive',affected_sections:[1,2,8,9],downstream_impact:{invalidate_briefs:['写作Brief_第001节.md','写作Brief_第002节.md','写作Brief_第008节.md','写作Brief_第009节.md'],recheck_prose:['正文/第001节.md','正文/第002节.md','正文/第008节.md','正文/第009节.md']}};
 const policy={impact_level:'planning',affected_sections:[1,2,8,9]};
 const created=api.initializeShortFeedbackRevisionQueue(task,result,policy);
 if(created.status!=='feedback_revision_queue_created'||task.scope!=='第1节'||task.feedback_revision_queue.items.length!==4||task.feedback_revision_queue.items.some(item=>item.brief_status!=='invalidated'||item.prose_status!=='pending_recheck')) throw new Error(JSON.stringify(created));
@@ -156,6 +156,47 @@ if(advanced.next_section!==8||task.scope!=='第8节') throw new Error(JSON.strin
 api.acceptShortFeedbackRevisionSection(task,8,{section_commit_id:'commit-8'});
 advanced=api.acceptShortFeedbackRevisionSection(task,9,{section_commit_id:'commit-9'});
 if(advanced.status!=='feedback_revision_queue_completed'||task.feedback_revision_queue.status!=='completed'||task.feedback_revision_queue.completed_sections.join(',')!=='1,2,8,9') throw new Error(JSON.stringify(advanced));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "quality-gate feedback requires a prose edit before recheck and renders that action directly" {
+  run node - "$REPO/scripts/lib/short-feedback-revision-queue.js" "$REPO/scripts/lib/workflow-action-renderer.js" <<'NODE'
+const queueApi=require(process.argv[2]);
+const renderer=require(process.argv[3]);
+const task={
+  workflow_id:'wf-quality-repair',workflow_type:'private_short_startup',scope:'第3节',
+  pending_feedback:{feedback_id:'feedback-quality-3',items:[{source_kind:'quality_gate',section_index:3}]},
+};
+const result={
+  stage_id:'feedback_apply_patch',step_status:'completed',feedback_id:'feedback-quality-3',affected_sections:[3],
+  downstream_impact:{invalidate_briefs:[3],recheck_prose:[3],required_repair:'补足关键人物的直接行动。'},
+};
+const created=queueApi.initializeShortFeedbackRevisionQueue(task,result,{impact_level:'current_brief',affected_sections:[3]});
+const item=task.feedback_revision_queue.items[0];
+if(created.status!=='feedback_revision_queue_created'||item.prose_status!=='revision_required') throw new Error(JSON.stringify(created));
+task.current_stage='draft_next_section';
+const pending=renderer.buildShortDraftPendingAction({stage_id:'draft_next_section'},task);
+const primary=pending.options[0]||{};
+if(primary.action_id!=='repair_required_section'||primary.target_stage!=='section_repair_loop') throw new Error(JSON.stringify(primary));
+if(!String(primary.label||'').includes('修订第 3 节正文')) throw new Error(JSON.stringify(primary));
+const description=renderer.stageDescriptionForAction(primary,{description:'只修机器门 blocking。'});
+if(!description.includes('故事质量反馈')||description.includes('只修机器门')) throw new Error(description);
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "legacy quality feedback is upgraded to author-readable Chinese" {
+  run node - "$REPO/scripts/lib/short-quality-feedback-visibility.js" <<'NODE'
+const api=require(process.argv[2]);
+const raw='第3节质量门要求回炉。\n关键人物的决定没有落到正文，因果链仍须局部回炉。\n未通过项：causal_progression：causal_progression 需要修订；outline_B02：outline_B02 需要修订；professional_reader_milestone：professional_reader_milestone 需要修订';
+const visible=api.normalizeLegacyQualityFeedbackText(raw);
+for(const leaked of ['causal_progression','outline_B02','professional_reader_milestone']) {
+  if(visible.includes(leaked)) throw new Error(visible);
+}
+for(const expected of ['关键人物的决定没有落到正文','因果推进','大纲兑现','读者体验']) {
+  if(!visible.includes(expected)) throw new Error(visible);
+}
 NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }

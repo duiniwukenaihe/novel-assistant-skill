@@ -6,8 +6,8 @@ setup() {
     PROJECT="$TMP_DIR/book"
     mkdir -p "$PROJECT/追踪/memory"
     cat > "$PROJECT/追踪/memory/facts.jsonl" <<'JSONL'
-{"fact_id":"fact.a","subject":"绿珠","predicate":"身份","object":"圣女","aliases":["绿珠"],"dependencies":["血脉觉醒"],"evidence":[{"path":"追踪/伏笔.md"}],"status":"active"}
-{"fact_id":"fact.b","subject":"血脉觉醒","predicate":"触发","object":"圣女印记","aliases":[],"dependencies":[],"evidence":[{"path":"追踪/时间线.md"}],"status":"active"}
+{"fact_id":"fact.a","subject":"苏禾","predicate":"身份","object":"密使","aliases":["苏禾"],"dependencies":["身份线索"],"evidence":[{"path":"追踪/伏笔.md"}],"status":"active"}
+{"fact_id":"fact.b","subject":"身份线索","predicate":"触发","object":"密使印记","aliases":[],"dependencies":[],"evidence":[{"path":"追踪/时间线.md"}],"status":"active"}
 JSONL
 }
 
@@ -25,7 +25,7 @@ teardown() {
 const fs=require('fs'); const index=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 if(index.sourceDigest!==process.argv[3]) throw new Error(JSON.stringify(index));
 if(index.statistics.active_documents!==2) throw new Error(JSON.stringify(index.statistics));
-if(!index.aliases['绿珠'] || !index.dependencies['血脉觉醒']) throw new Error(JSON.stringify(index));
+if(!index.aliases['苏禾'] || !index.dependencies['身份线索']) throw new Error(JSON.stringify(index));
 NODE
 }
 

@@ -641,3 +641,22 @@ MD
     ! grep -q "GitHub Discussions" "$README"
     ! grep -q "这套 skill 现在能让我度过找工作的过渡期" "$README"
 }
+
+@test "novel-assistant bundle publishes legacy task-authority recovery runtime" {
+    # The legacy recovery runtime must be listed in the shared build manifest
+    # so the generator mirrors it into skills/novel-assistant/scripts/.
+    node -e "const m = require('$REPO/config/novel-assistant-bundle-files.json'); if (!Array.isArray(m.scriptFiles) || !m.scriptFiles.includes('legacy-task-authority-recover.js')) process.exit(1)"
+
+    # Mirror must exist, be executable, and be byte-identical to the source script.
+    test -x "$BUNDLE/scripts/legacy-task-authority-recover.js"
+    cmp -s "$REPO/scripts/legacy-task-authority-recover.js" "$BUNDLE/scripts/legacy-task-authority-recover.js"
+
+    # task-inbox-protocol must declare the project-neutral ordering rule for
+    # old-project recovery (write policy before task authority).
+    protocol="$BUNDLE/references/internal-skills/story-workflow/references/task-inbox-protocol.md"
+    source_protocol="$SOURCE_ROOT/story-workflow/references/task-inbox-protocol.md"
+    for path in "$protocol" "$source_protocol"; do
+        grep -q "写入策略" "$path"
+        grep -q "任务权威" "$path"
+    done
+}

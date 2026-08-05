@@ -57,6 +57,21 @@ The skill checks its own `novel-assistant-manifest.json`, update source, current
 
 If the local source repository is dirty, self-update refuses to overwrite it.
 
+## Short Workflow V3 And Project Upgrade
+
+短篇生产内核现在是 V3 单内核。新项目与已有项目对 V3 的处理不同：
+
+- 新短篇项目：默认直接进入 V3，由 `workflow-v3.js` 创建任务与持久字段。不需要先存在 V2 任务，也不需要手动迁移。
+- 已有 V2 短篇项目：升级由兼容迁移网关单向处理。V2 任务被检视为 `safe_auto_upgrade` 后才会一次性升级到 V3 持久字段，并映射到 `section_brief / section_draft / section_repair / assembly` 四个可信断点之一；未通过兼容门的旧任务保持只读，不会被自动改写。
+- V2 资产在迁移前视为只读，迁移过程不改写 `正文 / 大纲 / 设定`。
+
+升级到 V3 单内核属于 skill 包升级的一部分，不要与单个书项目的协作环境更新混为一步。两层更新协议仍然适用：
+
+1. 先 `更新 skill`：拉取含 V3 单内核与迁移网关的 skill 包，刷新全局 skill 文件。
+2. 再在具体书项目里 `更新写作协作环境`：刷新 `.story-deployed`、hooks、agents、rules、scripts 与 references 等协作文件，让该项目能调用新的 V3 入口与迁移脚本。
+
+只有当 hooks / agents / scripts / references 实际变化时，第二步才需要执行。两层更新一次只走一层，避免在更新确认未完成时就读取项目状态或产出写作候选。
+
 ## Writing Collaboration Environment Update
 
 Updating the skill package does not automatically update a book project. Each book project has deployed collaboration files:

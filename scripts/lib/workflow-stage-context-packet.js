@@ -32,7 +32,12 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { readShortProjectState, resolveShortStateRelative, shortStateFile } = require('./short-project-state');
+const {
+  readShortProjectState,
+  resolveShortProjectTitle,
+  resolveShortStateRelative,
+  shortStateFile,
+} = require('./short-project-state');
 const { compactToTokens, estimateTokens } = require('./context-budget');
 const { inferShortSectionIndex } = require('./short-workflow-state');
 const { currentShortFeedbackRevisionSection } = require('./short-feedback-revision-queue');
@@ -50,6 +55,12 @@ const BRIEF_STAGES = new Set(['first_section_brief', 'section_brief', 'next_sect
 const ACCEPTANCE_STAGES = new Set(['section_accept_anchor']);
 const FEEDBACK_STAGES = new Set(['feedback_impact_sync', 'feedback_apply_patch']);
 const CONTEXT_STAGES = new Set([...DRAFT_STAGES, ...REVIEW_STAGES, ...BRIEF_STAGES, ...ACCEPTANCE_STAGES, ...FEEDBACK_STAGES]);
+const STAGE_ALIASES = Object.freeze({
+  section_draft: 'draft_section',
+  section_repair: 'section_repair_loop',
+  story_gate: 'story_value_gate',
+  section_accept: 'section_accept_anchor',
+});
 const PACKET_SCHEMA_VERSION = '1.0.0';
 const CONTINUITY_TAIL_PARAGRAPHS = 2;
 
@@ -60,13 +71,18 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
   }
   const workflowType = String((task || {}).workflow_type || '');
   if (!SHORT_WORKFLOW_TYPES.has(workflowType)) return notApplicable('workflow_type_not_short');
-  const stageId = String(stage || (task || {}).current_stage || '');
+  const requestedStageId = String(stage || (task || {}).current_stage || '');
+  const stageId = STAGE_ALIASES[requestedStageId] || requestedStageId;
   if (!CONTEXT_STAGES.has(stageId)) return notApplicable('stage_not_short_section');
 
   const projectState = readProjectState(root);
   const wholeStoryFeedback = FEEDBACK_STAGES.has(stageId) && isWholeStoryFeedback(task);
   const sectionIndex = positiveInteger(
     currentShortFeedbackRevisionSection(task)
+    ||
+    (((task || {}).stage_execution || {}).section_index)
+    ||
+    (task || {}).current_section_index
     ||
     inferShortSectionIndex({
       projectState,
@@ -176,6 +192,7 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
 
   return {
     status: 'assembled',
+    stage_id: stageId,
     packet_md: packetMdRel,
     packet_json: packetJsonRel,
     estimated_tokens: assembled.used_tokens,
@@ -341,13 +358,14 @@ function collectAllowedAssets({ root, sectionIndex, stageId, task, memorySnapsho
       };
     }
     const gatePacket = String((((task || {}).machine || {}).last_result_packet) || '');
-    const repairOutlineContract = buildShortSectionOutlineContract(root, sectionIndex).status === 'current'
-      ? outlineContract
-      : null;
+    const repairContract = buildShortSectionOutlineContract(root, sectionIndex);
+    const repairOutlineContract = repairContract.status === 'current' ? outlineContract : null;
+    const storyRevision = storyRevisionFindingsAsset(root, task, sectionIndex, repairContract);
+    const machineFindings = machineGateFindingsAsset(root, task, sectionIndex);
     return {
-      gateFindings: gatePacket
+      gateFindings: storyRevision || machineFindings || (gatePacket
         ? { id: gatePacket, path: gatePacket, kind: 'gate_findings', required: true }
-        : null,
+        : null),
       memorySnapshot: memoryAsset,
       acceptedRevisionPlan,
       outlineContract: repairOutlineContract,
@@ -409,6 +427,107 @@ function collectAllowedAssets({ root, sectionIndex, stageId, task, memorySnapsho
   };
 }
 
+function machineGateFindingsAsset(root, task, sectionIndex) {
+  const padded = String(sectionIndex).padStart(3, '0');
+  const relative = `${String((task || {}).task_dir || '')}/artifacts/section-${padded}-machine-gate.json`;
+  const file = safeResolve(root, relative);
+  const evidence = file ? readJsonFile(file) : null;
+  if (!evidence || Number(evidence.section_index || 0) !== Number(sectionIndex)) return null;
+  if (!(Array.isArray(evidence.checks) && evidence.checks.some(row => (row || {}).blocking === true))) return null;
+  const draft = currentDraftAsset(root, sectionIndex);
+  const draftFile = safeResolve(root, draft.path);
+  const draftDigest = draftFile && fs.existsSync(draftFile)
+    ? `sha256:${sha256(fs.readFileSync(draftFile))}`
+    : '';
+  if (draftDigest && String(evidence.draft_digest || '') !== draftDigest) return null;
+  return {
+    id: relative,
+    path: relative,
+    kind: 'machine_gate_findings',
+    required: true,
+  };
+}
+
+function storyRevisionFindingsAsset(root, task, sectionIndex, outlineContract) {
+  const taskDir = String((task || {}).task_dir || '');
+  const artifactsDir = safeResolve(root, `${taskDir}/artifacts`);
+  if (!artifactsDir || !fs.existsSync(artifactsDir) || !fs.statSync(artifactsDir).isDirectory()) return null;
+  const padded = String(sectionIndex).padStart(3, '0');
+  const draft = currentDraftAsset(root, sectionIndex);
+  const draftFile = safeResolve(root, draft.path);
+  const draftDigest = draftFile && fs.existsSync(draftFile)
+    ? `sha256:${sha256(fs.readFileSync(draftFile))}`
+    : '';
+  const candidates = fs.readdirSync(artifactsDir)
+    .filter(name => new RegExp(`^section-${padded}-story-review.*\\.json$`, 'u').test(name))
+    .map(name => ({ name, file: path.join(artifactsDir, name) }))
+    .sort((left, right) => fs.statSync(right.file).mtimeMs - fs.statSync(left.file).mtimeMs);
+  for (const candidate of candidates) {
+    const evidence = readJsonFile(candidate.file);
+    if (!evidence || Number(evidence.section_index || 0) !== Number(sectionIndex)) continue;
+    if (draftDigest && String(evidence.draft_digest || '') !== draftDigest) continue;
+    const requirements = storyRevisionRequirements(evidence, outlineContract);
+    if (!requirements.length) continue;
+    const relative = path.relative(root, candidate.file);
+    return {
+      id: `${relative}#revision-requirements`,
+      path: relative,
+      kind: 'story_revision_findings',
+      required: true,
+      inline: JSON.stringify({
+        section_index: sectionIndex,
+        decision: 'revise',
+        revision_requirements: requirements,
+        instruction: '只修复这些已确认缺口，保留已通过内容，不要重写整节。',
+      }, null, 2),
+    };
+  }
+  return null;
+}
+
+function storyRevisionRequirements(evidence, outlineContract) {
+  const labels = {
+    causal_progression: '因果推进',
+    protagonist_agency: '主角主动性',
+    emotional_tension: '情绪张力',
+    reader_pull: '读者追读力',
+  };
+  const obligations = new Map((Array.isArray((outlineContract || {}).obligations)
+    ? outlineContract.obligations : []).map(item => [String((item || {}).id || ''), item || {}]));
+  const requirements = [];
+  for (const check of Array.isArray((evidence || {}).checks) ? evidence.checks : []) {
+    if (String((check || {}).status || '') !== 'revise') continue;
+    const id = String((check || {}).id || '');
+    requirements.push({
+      kind: 'quality_dimension',
+      id,
+      label: labels[id] || id,
+      requirement: String((check || {}).evidence || '').trim(),
+    });
+  }
+  for (const row of Array.isArray((evidence || {}).outline_coverage) ? evidence.outline_coverage : []) {
+    if (String((row || {}).status || '') !== 'revise') continue;
+    const id = String((row || {}).id || '');
+    const obligation = obligations.get(id) || {};
+    requirements.push({
+      kind: 'outline_obligation',
+      id,
+      label: String((row || {}).requirement || obligation.source_text || id),
+      requirement: String((row || {}).requirement || obligation.source_text || '').trim(),
+    });
+  }
+  const milestone = (evidence || {}).reader_milestone || {};
+  if (String(milestone.status || '') === 'revise') {
+    requirements.push({
+      kind: 'reader_milestone',
+      id: 'professional_reader_milestone',
+      label: '专业读者追读判断',
+      requirement: String(milestone.repair_direction || milestone.biggest_resistance || '').trim(),
+    });
+  }
+  return requirements;
+}
+
 function activeRevisionPlanAsset(root, task = {}, sectionIndex) {
   const queue = task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
     ? task.feedback_revision_queue
@@ -434,11 +553,16 @@ function activeRevisionPlanAsset(root, task = {}, sectionIndex) {
       plan_status: String((plan || {}).status || canonicalConstraints[0]?.status || ''),
       memory_constraint_source: '当前作品记忆快照.canon_constraints',
       task_accepted_requirements: (Array.isArray((plan || {}).requirements) ? plan.requirements : [])
-        .map((row, index) => ({
-          requirement_id: String((row || {}).requirement_id || `requirement-${index + 1}`),
-          text: String((row || {}).text || (row || {}).content || '').trim(),
-          affected_sections: sectionListFromRequirement(row, plan, queue),
-        }))
+        .map((row, index) => {
+          const affectedSections = sectionListFromRequirement(row, plan, queue);
+          if (affectedSections === null) return null;
+          return {
+            requirement_id: String((row || {}).requirement_id || `requirement-${index + 1}`),
+            text: String((row || {}).text || (row || {}).content || '').trim(),
+            affected_sections: affectedSections,
+          };
+        })
+        .filter(Boolean)
         .filter(row => row.text && sectionApplies(row.affected_sections, sectionIndex)),
       canonical_planning_constraints: canonicalConstraints.map(row => ({
         constraint_id: String(row.constraint_id || ''),
@@ -515,11 +639,15 @@ function isActiveRow(row) {
 }
 
 function sectionListFromRequirement(row, plan = {}, queue = {}) {
-  const textSections = inferSectionsFromText(`${String((row || {}).text || '')}\n${String((row || {}).content || '')}`);
-  if (textSections.length) return textSections;
   const rowSections = Array.isArray((row || {}).affected_sections) ? row.affected_sections.map(Number).filter(Boolean) : [];
-  if (rowSections.length) return rowSections;
+  const textSections = inferSectionsFromText(`${String((row || {}).text || '')}\n${String((row || {}).content || '')}`);
   const planSections = Array.isArray((plan || {}).affected_sections) ? plan.affected_sections.map(Number).filter(Boolean) : [];
+  const specific = rowSections.length ? rowSections : textSections;
+  if (specific.length && planSections.length) {
+    const bounded = specific.filter(section => planSections.includes(section));
+    return bounded.length ? bounded : null;
+  }
+  if (specific.length) return specific;
   if (planSections.length) return planSections;
   return Array.isArray((queue || {}).affected_sections) ? queue.affected_sections.map(Number).filter(Boolean) : [];
 }
@@ -895,7 +1023,6 @@ function extractPayload(asset, fileText, sectionIndex, stageId) {
           open_hook: anchor.open_hook || '',
           style_anchor: Array.isArray(anchor.style_anchor) ? anchor.style_anchor : [],
           next_section_handoff: anchor.next_section_handoff && typeof anchor.next_section_handoff === 'object' ? anchor.next_section_handoff : {},
-          quality_result: anchor.quality_result || null,
         }, null, 2);
       } catch {
         // Fall back to a trimmed raw snapshot — still exclude other fields.
@@ -1127,7 +1254,7 @@ function shortProjectIdentity(root, projectState, sectionIndex) {
   const lock = readJsonFile(shortStateFile(root, 'section-title-lock.json')) || {};
   const item = (Array.isArray(lock.sections) ? lock.sections : []).find((entry) => Number((entry || {}).section_index) === sectionIndex);
   return {
-    project_title: String(projectState.working_title || projectState.book_title || projectState.title || '').trim(),
+    project_title: resolveShortProjectTitle(projectState, path.basename(root)),
     current_section_title: item && item.confirmed === true ? String(item.title || '').trim() : '',
   };
 }

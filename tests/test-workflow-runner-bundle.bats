@@ -29,8 +29,8 @@ setup() {
 }
 
 @test "workflow runner contract is documented for users and internal modules" {
-    grep -q '工作流运行器' "$README"
-    grep -qi 'workflow runner' "$README_EN"
+    grep -q '托管早停' "$README"
+    grep -qi 'managed early stop' "$README_EN"
     grep -q 'workflow-runner.js' "$SCRIPTS_README"
     grep -q 'workflow-runner.js' "$WORKFLOW"
     grep -q 'workflow-runner.js' "$CONTRACT"

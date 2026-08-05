@@ -145,6 +145,55 @@ if (!report.findings.find(f => f.type === 'fake-completion-sentinel' && /CREATED
 NODE
 }
 
+@test "output pollution check blocks escaped smart quotes in prose" {
+    report="$TMP_DIR/escaped-quotes.md"
+    cat > "$report" <<'EOF'
+## 第八节 公开复核
+
+\“这不是网络波动。\”我把记录推到镜头前，\“完整材料已经交给独立复核。\”
+EOF
+
+    if node "$SCRIPT" --json "$report" > "$TMP_DIR/out.json"; then
+        echo "expected escaped smart quotes to fail"
+        cat "$TMP_DIR/out.json"
+        return 1
+    fi
+
+    node - "$TMP_DIR/out.json" <<'NODE'
+const fs = require('fs');
+const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const hit = report.findings.find(f => f.type === 'escaped-smart-quote');
+if (!hit) throw new Error(`expected escaped-smart-quote finding: ${JSON.stringify(report.findings)}`);
+if (!/删除反斜杠/u.test(hit.message)) throw new Error(`repair message must be deterministic: ${hit.message}`);
+NODE
+}
+
+@test "output pollution check accepts a normal long Chinese story" {
+    report="$TMP_DIR/normal-long-story.md"
+    node - "$report" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+const times = ['清晨', '午后', '黄昏', '深夜'];
+const places = ['河岸', '旧街', '山路', '院门'];
+const actions = ['收起雨伞', '推开木窗', '捡起纸页', '点亮灯火'];
+const endings = ['风从远处吹来。', '脚步声渐渐靠近。', '檐下水珠落成一线。', '远山露出淡青颜色。'];
+const lines = ['# 长篇正文'];
+for (let i = 0; i < 520; i += 1) {
+  lines.push(`${times[i % times.length]}，人物走过${places[(i * 3) % places.length]}，${actions[(i * 5) % actions.length]}。这是第${i + 1}次转身，他记得来路，也看清眼前的选择。${endings[(i * 7) % endings.length]}`);
+}
+fs.writeFileSync(file, `${lines.join('\n\n')}\n`);
+NODE
+
+    node "$SCRIPT" --json "$report" > "$TMP_DIR/out.json"
+    node - "$TMP_DIR/out.json" <<'NODE'
+const fs = require('fs');
+const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (report.findings.some(f => f.type === 'low-information-output')) {
+  throw new Error(`normal Chinese story must not be classified as low information: ${JSON.stringify(report.findings)}`);
+}
+NODE
+}
+
 @test "output health gate detects repeated lines and engineering term leaks" {
     report="$TMP_DIR/report.md"
     cat > "$report" <<'EOF'
@@ -551,7 +600,9 @@ NODE
 }
 
 @test "setup and bundle deploy output pollution runtime script" {
-    grep -q "output-pollution-check.js" "$REPO/scripts/build-oh-story-bundle.sh"
+    node - "$REPO/config/novel-assistant-bundle-files.json" <<'NODE'
+const manifest = require(process.argv[2]);
+if (!(manifest.scriptFiles || []).includes('output-pollution-check.js')) process.exit(1);
+NODE
     grep -q "output-pollution-check.js" "$REPO/src/internal-skills/story-setup/SKILL.md"
-    grep -q "output-pollution-check.js" "$REPO/scripts/check-story-setup-deployment.sh"
 }

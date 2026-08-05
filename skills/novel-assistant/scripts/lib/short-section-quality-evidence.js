@@ -31,6 +31,8 @@ function buildShortQualityEvidenceSchema({ workflowId, sectionIndex, draftDigest
       .filter((item) => item.required_in_draft)
       .map((item) => ({
         id: item.id,
+        kind: item.kind,
+        requirement: item.source_text,
         status: 'pass|revise',
         evidence_quote: '正文中兑现该大纲义务的原句',
       })),

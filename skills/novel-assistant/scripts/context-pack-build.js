@@ -12,10 +12,10 @@ const {
 } = require('./lib/oh-story-artifacts');
 
 const args = process.argv.slice(2);
-const projectRoot = firstPositional(args, ['--chapter', '--volume', '--mode']);
+const projectRoot = firstPositional(args, ['--chapter', '--volume', '--mode', '--outline-path', '--contract-path']);
 const chapterIndex = args.indexOf('--chapter');
 if (!projectRoot || chapterIndex === -1 || !args[chapterIndex + 1]) {
-  fail('usage: context-pack-build.js <project-root> --chapter N [--volume 第X卷] [--mode writing|review] [--write] [--json]');
+  fail('usage: context-pack-build.js <project-root> --chapter N [--volume 第X卷] [--outline-path PATH] [--contract-path PATH] [--mode writing|review] [--write] [--json]');
 }
 
 const root = path.resolve(projectRoot);
@@ -23,11 +23,13 @@ const chapterNo = Number(args[chapterIndex + 1]);
 if (!Number.isInteger(chapterNo) || chapterNo <= 0) fail('--chapter must be positive integer');
 
 const volume = optionValue(args, '--volume') || null;
+const outlinePath = optionValue(args, '--outline-path') || null;
+const contractPath = optionValue(args, '--contract-path') || null;
 const mode = optionValue(args, '--mode') || 'writing';
 const shouldWrite = args.includes('--write');
 const jsonOutput = args.includes('--json');
 
-const pack = buildContextPack(root, { chapterNo, volume, mode });
+const pack = buildContextPack(root, { chapterNo, volume, mode, outlinePath, contractPath });
 if (shouldWrite) {
   writeJson(contextPackPath(root, pack.target.chapterNo, pack.target.volume), pack);
 }
@@ -44,9 +46,13 @@ function buildContextPack(projectDir, options) {
   const targetVolume = options.volume || inferCurrentVolume(projectDir, targetChapter);
   const previousChapter = targetChapter - 1;
 
-  const outline = findChapterFile(projectDir, '大纲', /^细纲_第.+\.md$/, targetChapter, targetVolume);
+  const outline = options.outlinePath
+    ? readExactProjectFile(projectDir, options.outlinePath)
+    : findChapterFile(projectDir, '大纲', /^细纲_第.+\.md$/, targetChapter, targetVolume);
   const volumeOutline = findVolumeOutline(projectDir, targetVolume);
-  const currentContract = findChapterFile(projectDir, path.join('追踪', '章节契约'), /^第.+\.md$/, targetChapter, targetVolume);
+  const currentContract = options.contractPath
+    ? readExactProjectFile(projectDir, options.contractPath)
+    : findChapterFile(projectDir, path.join('追踪', '章节契约'), /^第.+\.md$/, targetChapter, targetVolume);
   const previousContract = previousChapter > 0
     ? findChapterFile(projectDir, path.join('追踪', '章节契约'), /^第.+\.md$/, previousChapter, targetVolume)
     : null;
@@ -234,6 +240,18 @@ function readProjectFile(projectDir, relPath) {
   const absPath = path.join(projectDir, relPath);
   if (!fs.existsSync(absPath)) return { relPath: null, absPath, text: '' };
   return { relPath, absPath, text: readText(absPath) };
+}
+
+function readExactProjectFile(projectDir, relPath) {
+  const root = path.resolve(projectDir);
+  const realRoot = fs.realpathSync(root);
+  const normalized = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  const absPath = path.resolve(root, normalized);
+  if (!normalized || (absPath !== root && !absPath.startsWith(`${root}${path.sep}`))) return null;
+  if (!fs.existsSync(absPath) || !fs.lstatSync(absPath).isFile()) return null;
+  const realPath = fs.realpathSync(absPath);
+  if (realPath !== realRoot && !realPath.startsWith(`${realRoot}${path.sep}`)) return null;
+  return { relPath: normalized, absPath, text: readText(absPath) };
 }
 
 function readProjectJson(projectDir, relPath) {

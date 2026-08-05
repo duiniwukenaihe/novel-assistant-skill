@@ -7,7 +7,12 @@ const { commitAcceptedSection } = require('./lib/short-section-commit-store');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
-const { readShortProjectState, resolveShortStateRelative, shortStateFile } = require('./lib/short-project-state');
+const {
+  readShortProjectState,
+  resolveShortProjectTitle,
+  resolveShortStateRelative,
+  shortStateFile,
+} = require('./lib/short-project-state');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -125,7 +130,7 @@ function main() {
         sectionIndex: entry.sectionIndex,
         title: String(entry.item.title || entry.anchor.section_title || ''),
         text: entry.sectionText,
-        projectTitle: String(state.working_title || state.project_title || state.title || ''),
+        projectTitle: resolveShortProjectTitle(state, path.basename(root)),
         metadata: {
           section_summary: entry.anchor.section_summary || '',
           revealed_information: entry.anchor.revealed_information || [],

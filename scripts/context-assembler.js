@@ -858,20 +858,32 @@ function detectConflicts(selected, context) {
 
   if (blockedReveals.size === 0) return conflicts;
 
-  for (const entry of selected) {
-    const content = normalize(`${entry.content || ''}\n${(entry.constraints || []).join('\n')}`);
-    const includesBlockedReveal = [...blockedReveals].some(reveal => reveal && content.includes(reveal));
-    if (!includesBlockedReveal) continue;
+  const revealStatements = selected.map(entry => ({
+    entry,
+    sentences: normalize(`${entry.content || ''}\n${(entry.constraints || []).join('\n')}`)
+      .split(/[。！？；\n]+/)
+      .filter(Boolean),
+  }));
 
-    const related = selected.find(other => {
-      if (other.id === entry.id) return false;
-      const otherText = normalize(`${other.content || ''}\n${(other.constraints || []).join('\n')}`);
-      return otherText.includes('不得在第010章前直说') || otherText.includes('不能暴露系统真相') || otherText.includes('公开系统真相');
-    });
-    if (related) {
+  for (const reveal of blockedReveals) {
+    if (!reveal) continue;
+    const related = revealStatements.filter(item => item.sentences.some(sentence => sentence.includes(reveal)));
+    const blockers = related.filter(item => item.sentences.some(sentence => (
+      sentence.includes(reveal) && /不得|不能|不可|禁止|暂不|尚未|保密|隐藏|不应/.test(sentence)
+    )));
+    const revealers = related.filter(item => item.sentences.some(sentence => (
+      sentence.includes(reveal)
+      && /必须|需要|应当|务必|立即/.test(sentence)
+      && !/不得|不能|不可|禁止|暂不|尚未|保密|隐藏|不应/.test(sentence)
+    )));
+
+    for (const revealer of revealers) {
+      const blocker = blockers.find(item => item.entry.id !== revealer.entry.id);
       conflicts.push({
         type: 'blocked_reveal_conflict',
-        entryIds: [related.id, entry.id].sort(),
+        entryIds: blocker
+          ? [blocker.entry.id, revealer.entry.id].sort()
+          : [revealer.entry.id],
         message: 'active cast blocks a reveal that another selected entry requires',
       });
     }

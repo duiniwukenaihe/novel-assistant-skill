@@ -16,6 +16,70 @@ setup() {
     BUNDLE="$REPO/skills/novel-assistant"
     export WORKFLOW_TASK_FIXTURE="$REPO/tests/helpers/workflow-task-fixture.js"
     TMP_DIR="$(mktemp -d)"
+
+    # V2 short creation and mutation are intentionally frozen.  These cases
+    # exercise the retired V2-only menus/state transitions, whose production
+    # replacements live in test-workflow-v3-{new-project,interaction,feedback,
+    # section-loop,closure,new-short-e2e}.bats.  Keep the skip list exact so
+    # generic state-machine and migration-facade assertions still run here.
+    case "$BATS_TEST_DESCRIPTION" in
+      "activation repairs a short revision task that incorrectly jumped to whole-story assembly"|\
+      "activation skips a legacy plan relock when a planning revision queue already identifies current sections"|\
+      "next-candidates and resolve-action share the grouped queue menu"|\
+      "short revision brief menu presents the user task instead of the internal brief step"|\
+      "confirmed feedback revision skips the redundant prose entry confirmation"|\
+      "activating a whole-story revision opens task overview without starting its section"|\
+      "task overview adjustment enters chat impact analysis instead of resolving to nowhere"|\
+      "workflow state machine routes short free text feedback into impact analysis"|\
+      "new short tasks keep one workflow identity and select the installed owner profile"|\
+      "private shortform startup workflow is explicit and UI friendly"|\
+      "new private short startup shows freshness menu before bounded discovery"|\
+      "material learning stage always carries a bounded deterministic execution contract"|\
+      "project seed uses one numeric card namespace and promotes the selected card directly"|\
+      "project seed multi selection creates isolated child projects"|\
+      "project seed text commands inspect reject and regenerate without a second menu namespace"|\
+      "legacy project seed cards must re-enter material learning before selection"|\
+      "private short startup restart preserves old workflow and creates a clean successor"|\
+      "private short free text can restart info discovery without reading skill internals"|\
+      "short feedback patch cannot bypass upstream planning"|\
+      "whole story short feedback uses a story result packet instead of the last section suffix"|\
+      "short feedback impact stage exposes a writable completion contract"|\
+      "stale running feedback impact contract returns one deterministic recovery command"|\
+      "feedback impact completion rejects a result from another feedback batch"|\
+      "running feedback impact normalizes a stale host command to the authoritative completion command"|\
+      "natural whole story rework feedback enters the existing short workflow"|\
+      "pending short feedback recovery ignores an older feedback impact result"|\
+      "pending planning feedback recovery returns to the bound proposal menu before canonical writes"|\
+      "feedback proposal choice rejects a proposal changed after the menu was rendered"|\
+      "pending expression-only short feedback resumes section repair without impact reanalysis"|\
+      "new short feedback invalidates an older completed impact stage and gets a batch-scoped packet"|\
+      "continue an accepted feedback plan does not become a second feedback item"|\
+      "a repeated numeric reply resumes the running stage instead of reopening the resolved menu"|\
+      "next-candidates silently resumes a running stage without an active menu"|\
+      "running stage menu keeps inspect pause and free text distinct from resume"|\
+      "discarding a host continuation echo restores the matching trusted feedback analysis"|\
+      "free text short feedback starts impact analysis instead of binding an old menu"|\
+      "short structure feedback is detected before generic edit feedback"|\
+      "deleting one sentence remains artifact feedback instead of structure feedback"|\
+      "workflow state machine branches private short section machine gate by pass or blocking result"|\
+      "workflow state machine rejects stale short section result packet"|\
+      "private workflow registry authority: moved book still resumes private overlay; unavailable registry blocks instead of degrading"|\
+      "workflow state machine blocks ambiguous machine gate result packets"|\
+      "workflow state machine locks one-section-and-stop option boundaries"|\
+      "invalid explicit next stage cannot falsely complete a workflow"|\
+      "runtime reconciliation resumes a private short project from its latest accepted section and brief"|\
+      "runtime reconciliation rejects a stale accepted-section brief and returns to next title confirmation"|\
+      "runtime reconciliation prefers the current section quality receipt over a stale brief-ready project status"|\
+      "runtime reconciliation closes a nine-section plan instead of inventing section ten"|\
+      "v2 result packet cannot omit the authoritative owner module"|\
+      "feedback audit reclassification binds only to the accepted plan"|\
+      "internal short planning stages receive an applying completion command"|\
+      "fresh short setting candidate still stops before applying"|\
+      "short revision queue advances to next pending section after accepting current section"|\
+      "short revision queue routes to whole-story assembly after accepting the last pending section")
+        skip "retired V2 short-only behavior; covered by the dedicated V3 short workflow suites"
+        ;;
+    esac
 }
 
 @test "source checkout prefers canonical src private registry before generated bundle copies" {
@@ -32,6 +96,99 @@ NODE
     run node "$SCRIPT" templates --help
     [ "$status" -eq 0 ]
     [[ "$output" == *'apply-result --project-root <book-dir> --workflow-id <id> --result <file>'* ]]
+}
+
+@test "reconcile repairs premature longform volume acceptance with one coherent continuation scope" {
+    run node - "$SCRIPT" "$TMP_DIR/book" "$REPO" <<'NODE'
+const cp=require('child_process'),crypto=require('crypto'),fs=require('fs'),path=require('path');
+const script=process.argv[2],root=process.argv[3],repo=process.argv[4];
+const created=cp.spawnSync(process.execPath,[script,'create','--workflow-type','long_write','--project-root',root,'--user-goal','继续长篇','--json'],{encoding:'utf8'});
+if(created.status!==0) throw new Error(created.stdout||created.stderr);
+const task=JSON.parse(created.stdout).task;
+const taskFile=path.join(root,task.task_dir,'task.json');
+const stageIds=task.lifecycle_graph.nodes.map((node)=>node.id);
+const volumeIndex=stageIds.indexOf('volume_acceptance');
+const reviewIndex=stageIds.indexOf('detail_outline_review');
+const outlineDir=path.join(root,'大纲','第2卷');
+fs.mkdirSync(outlineDir,{recursive:true});
+for(let chapter=3;chapter<=5;chapter+=1) fs.writeFileSync(path.join(outlineDir,`细纲_第${String(chapter).padStart(3,'0')}章.md`),`# 第${chapter}章\n\n中性细纲 ${chapter}\n`);
+fs.mkdirSync(path.join(root,'追踪/schema'),{recursive:true});
+fs.writeFileSync(path.join(root,'追踪/schema/chapters.jsonl'),[3,4,5].map((chapter)=>JSON.stringify({
+  chapterId:`第${String(chapter+26).padStart(3,'0')}章`,chapterNo:chapter+26,volume:'第2卷',volumeChapterNo:chapter,globalDraftOrder:chapter+26,
+  outlinePath:`大纲/第2卷/细纲_第${String(chapter).padStart(3,'0')}章.md`,contractPath:`追踪/章节契约/第2卷/第${String(chapter).padStart(3,'0')}章.md`,
+  draftPath:chapter<5?`正文/第2卷/第${String(chapter).padStart(3,'0')}章.md`:''
+})).join('\n')+'\n');
+const acceptedRel='大纲/第2卷/细纲_第003章.md';
+task.current_stage='volume_acceptance';task.current_step='volume_acceptance';task.status='running';
+task.scope='第2卷验收';
+task.accepted_detail_outline_targets=[{
+  outline_path:acceptedRel,
+  outline_sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,acceptedRel))).digest('hex'),
+  volume_chapter_no:3,
+}];
+task.machine={...task.machine,completed_stages:stageIds.slice(0,volumeIndex),remaining_stages:stageIds.slice(volumeIndex)};
+task.lifecycle={...(task.lifecycle||{}),scope:'第2卷验收'};
+task.lifecycle_graph.current_node='volume_acceptance';
+task.lifecycle_graph.completed_nodes=stageIds.slice(0,volumeIndex);
+task.lifecycle_graph.invalidated_nodes=[];
+task.lifecycle_graph.review_results={
+  master_outline_review:{status:'accepted',verification_result:'pass',result_packet_path:`${task.task_dir}/result-packets/master_outline_review.result.json`},
+  volume_outline_review:{status:'accepted',verification_result:'pass',result_packet_path:`${task.task_dir}/result-packets/volume_outline_review.result.json`},
+};
+fs.mkdirSync(path.join(root,task.task_dir,'result-packets'),{recursive:true});
+for(const stageId of ['master_outline_review','volume_outline_review']) {
+  const packetRel=`${task.task_dir}/result-packets/${stageId}.result.json`;
+  fs.writeFileSync(path.join(root,packetRel),JSON.stringify({workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:stageId,step_id:stageId,step_status:'completed',verification_result:'pass',review_decision:'accepted'}));
+}
+const staleDetailRel=`${task.task_dir}/result-packets/detail_outline_review.result.json`;
+fs.writeFileSync(path.join(root,staleDetailRel),JSON.stringify({workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:'detail_outline_review',step_id:'detail_outline_review',step_status:'completed',verification_result:'pass',review_decision:'accepted',outputs:{detail_outline_quality:{version:'detail_outline_quality_v2',identities:[{outline_path:acceptedRel}]}}}));
+task.stage_attempt_history=['master_outline_review','volume_outline_review'].map(stageId=>({stage_attempt_id:`sa-${stageId}`,work_unit_id:`wu-${stageId}`,stage_id:stageId,status:'completed',accepted_result_packet:`${task.task_dir}/result-packets/${stageId}.result.json`,expected_result_packet:`${task.task_dir}/result-packets/${stageId}.result.json`}));
+task.stage_execution={
+  status:'running',stage_id:'volume_acceptance',step_id:'volume_acceptance',
+  stage_attempt_id:'sa-premature-volume',work_unit_id:'wu-premature-volume',
+  work_unit_scope:'第2卷验收',requires_user_confirm:true,
+  expected_result_packet:`${task.task_dir}/result-packets/volume_acceptance.result.json`,
+  write_set:[],result_contract:'long_write_result_v2',
+};
+task.longform_target_revalidation={status:'running',previous_scope:'第27至29章',write_snapshot_refreshed_at:'2026-08-03T00:00:00.000Z'};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+const repaired=cp.spawnSync(process.execPath,[script,'reconcile-runtime','--project-root',root,'--workflow-id',task.workflow_id,'--session-id','test:scope-continuation','--json'],{encoding:'utf8'});
+if(repaired.status!==0) throw new Error(repaired.stdout||repaired.stderr);
+const out=JSON.parse(repaired.stdout),next=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+if(out.status!=='runtime_reconciled'||out.premature_volume_acceptance_repaired!==true) throw new Error(JSON.stringify(out));
+const expected='后续阶段细纲复核（2项）';
+const scopes=[next.scope,next.lifecycle&&next.lifecycle.scope,next.unit_lifecycle&&next.unit_lifecycle.current_scope];
+if(scopes.some((scope)=>scope!==expected)) throw new Error(JSON.stringify({expected,scopes}));
+if(next.current_stage!=='detail_outline_review'||next.stage_execution!==null||!next.pending_action||!String((next.pending_action.options||[])[0]?.label||'').includes('复核后续阶段细纲')) throw new Error(JSON.stringify(next));
+if(String(((next.longform_target_revalidation||{}).status)||'')==='running') throw new Error(JSON.stringify(next.longform_target_revalidation));
+if((next.machine.completed_stages||[]).length!==reviewIndex) throw new Error(JSON.stringify(next.machine));
+if(!next.lifecycle_graph.review_results.master_outline_review||!next.lifecycle_graph.review_results.volume_outline_review) throw new Error(JSON.stringify(next.lifecycle_graph.review_results));
+if(fs.existsSync(path.join(root,staleDetailRel))||!next.longform_scope_continuation.archived_result_packet||!fs.existsSync(path.join(root,next.longform_scope_continuation.archived_result_packet))) throw new Error(JSON.stringify(next.longform_scope_continuation));
+const started=cp.spawnSync(process.execPath,[script,'resolve-action','--project-root',root,'--input','1','--bind-current','--json'],{encoding:'utf8'});
+if(started.status!==0) throw new Error(started.stdout||started.stderr);
+const running=JSON.parse(fs.readFileSync(taskFile,'utf8')),runningExecution=running.stage_execution||{};
+const runningScopes=[running.scope,running.lifecycle&&running.lifecycle.scope,running.unit_lifecycle&&running.unit_lifecycle.current_scope,runningExecution.work_unit_scope,runningExecution.confirmation_context&&runningExecution.confirmation_context.target_scope,runningExecution.memory_context&&runningExecution.memory_context.memory_contract&&runningExecution.memory_context.memory_contract.query&&runningExecution.memory_context.memory_contract.query.scope&&runningExecution.memory_context.memory_contract.query.scope.target];
+if(runningScopes.some((scope)=>scope!==expected)||runningExecution.stage_id!=='detail_outline_review'||(runningExecution.review_targets||[]).length!==2) throw new Error(JSON.stringify({runningScopes,runningExecution}));
+const schemaRows=fs.readFileSync(path.join(root,'追踪/schema/chapters.jsonl'),'utf8').trim().split(/\r?\n/).map(JSON.parse);
+const planned=schemaRows.find((row)=>row.outlinePath==='大纲/第2卷/细纲_第005章.md');
+if(!planned||planned.draftPath!==''||planned.plannedDraftPath!=='正文/第2卷/第005章.md'||((runningExecution.schema_migration||{}).changed_count)!==1) throw new Error(JSON.stringify({planned,migration:runningExecution.schema_migration}));
+running.longform_target_revalidation={status:'running',previous_scope:'第27至29章',write_snapshot_refreshed_at:'2026-08-03T00:00:00.000Z'};
+running.lifecycle.scope='全书第029章 / 第2卷第003章';
+running.stage_execution.work_unit_scope='全书第029章 / 第2卷第003章';
+running.stage_execution.confirmation_context={status:'confirmed',confirmation_token:'legacy-invalid',target_scope:'全书第029章 / 第2卷第003章'};
+running.stage_execution.confirmation_token='legacy-invalid';
+running.stage_execution.memory_context.memory_contract.query.scope.target='全书第029章 / 第2卷第003章';
+running.lifecycle_graph.review_results={};
+fs.writeFileSync(taskFile,JSON.stringify(running,null,2)+'\n');
+const second=cp.spawnSync(process.execPath,[script,'reconcile-runtime','--project-root',root,'--workflow-id',task.workflow_id,'--session-id','test:scope-continuation','--json'],{encoding:'utf8'});
+if(second.status!==0) throw new Error(second.stdout||second.stderr);
+const secondOut=JSON.parse(second.stdout);
+if(secondOut.status!=='runtime_reconciled') throw new Error(JSON.stringify(secondOut));
+const migrated=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const migratedScopes=[migrated.scope,migrated.lifecycle&&migrated.lifecycle.scope,migrated.unit_lifecycle&&migrated.unit_lifecycle.current_scope];
+if(migratedScopes.some((scope)=>scope!==expected)||String(((migrated.longform_target_revalidation||{}).status)||'')==='running'||migrated.stage_execution!==null||!migrated.pending_action||secondOut.scope_continuation_confirmation_reset!==true||!migrated.lifecycle_graph.review_results.master_outline_review||!migrated.lifecycle_graph.review_results.volume_outline_review) throw new Error(JSON.stringify({migratedScopes,revalidation:migrated.longform_target_revalidation,review_results:migrated.lifecycle_graph.review_results,secondOut}));
+NODE
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
 @test "short draft stop recommends the concrete section instead of saying continue continue" {
@@ -76,26 +233,25 @@ NODE
     [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
-@test "activating a paused short feedback stage recommends resuming that stage" {
-  run node - "$SCRIPT" "$TMP_DIR/paused-feedback-book" <<'NODE'
+@test "activating a paused review stage recommends resuming that stage" {
+  run node - "$SCRIPT" "$TMP_DIR/paused-review-book" <<'NODE'
 const cp=require('child_process'),fs=require('fs'),path=require('path');
 const script=process.argv[2],root=process.argv[3];
-const create=cp.spawnSync(process.execPath,[script,'create','--workflow-type','short_write','--project-root',root,'--user-goal','回炉短篇','--json'],{encoding:'utf8'});
+const create=cp.spawnSync(process.execPath,[script,'create','--workflow-type','long_write','--project-root',root,'--user-goal','继续长篇','--json'],{encoding:'utf8'});
 if(create.status!==0) throw new Error(create.stdout||create.stderr);
 const task=create.stdout?JSON.parse(create.stdout).task:null;
 const taskFile=path.join(root,task.task_dir,'task.json');
-task.current_stage='feedback_impact_sync';task.current_step='feedback_impact_sync';task.status='running';
-task.pending_feedback={feedback_id:'feedback-batch-test',text:'人物成长太快，需要检查全篇影响',items:[],status:'pending'};
-task.stage_execution={status:'paused',stage_id:'feedback_impact_sync',step_id:'feedback_impact_sync',stop_reason:'user_paused_from_running_stage_menu'};
-task.pending_action={id:'pa-stale-long-menu',question:'请选择下一步',options:[{number:1,action_id:'resume_paused_stage',target_stage:'feedback_impact_sync',label:'继续分析反馈影响（推荐）',description:'这是一段不应出现在 compact 控制台输出中的长描述'.repeat(30),recommended:true}],free_text_enabled:true};
+task.current_stage='master_outline_review';task.current_step='master_outline_review';task.status='running';
+task.stage_execution={status:'paused',stage_id:'master_outline_review',step_id:'master_outline_review',stop_reason:'user_paused_from_running_stage_menu'};
+task.pending_action={id:'pa-stale-long-menu',question:'请选择下一步',options:[{number:1,action_id:'resume_paused_stage',target_stage:'master_outline_review',label:'继续总纲审阅（推荐）',description:'这是一段不应出现在 compact 控制台输出中的长描述'.repeat(30),recommended:true}],free_text_enabled:true};
 fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
 const activate=cp.spawnSync(process.execPath,[script,'activate','--project-root',root,'--workflow-id',task.workflow_id,'--compact','--json'],{encoding:'utf8'});
 if(activate.status!==0) throw new Error(activate.stdout||activate.stderr);
 const out=JSON.parse(activate.stdout);
 const options=((out.task||{}).pending_action||{}).options||[];
 if(!options.length) throw new Error(activate.stdout);
-if(options[0].action_id!=='resume_paused_stage'||options[0].target_stage!=='feedback_impact_sync') throw new Error(activate.stdout);
-if(!options[0].label.includes('继续分析反馈影响')) throw new Error(activate.stdout);
+if(options[0].action_id!=='resume_paused_stage'||options[0].target_stage!=='master_outline_review') throw new Error(activate.stdout);
+if(!options[0].label.includes('继续当前任务')) throw new Error(activate.stdout);
 if(JSON.stringify(out.task.pending_action).includes('长描述')) throw new Error(activate.stdout);
 if(JSON.stringify(out.task_overview || {}).includes('description')) throw new Error(activate.stdout);
 NODE
@@ -106,18 +262,18 @@ NODE
   run node - "$SCRIPT" "$TMP_DIR/running-context-book" <<'NODE'
 const cp=require('child_process'),fs=require('fs'),path=require('path');
 const script=process.argv[2],root=process.argv[3];
-const create=cp.spawnSync(process.execPath,[script,'create','--workflow-type','short_write','--project-root',root,'--user-goal','回炉短篇','--json'],{encoding:'utf8'});
+const create=cp.spawnSync(process.execPath,[script,'create','--workflow-type','long_write','--project-root',root,'--user-goal','继续长篇','--json'],{encoding:'utf8'});
 if(create.status!==0) throw new Error(create.stdout||create.stderr);
 const task=JSON.parse(create.stdout).task;
 const taskFile=path.join(root,task.task_dir,'task.json');
-task.current_stage='section_machine_gate';task.current_step='section_machine_gate';task.status='running';
+task.current_stage='master_outline';task.current_step='master_outline';task.status='running';
 task.stage_execution={
   status:'running',
-  stage_id:'section_machine_gate',
-  step_id:'section_machine_gate',
-  expected_result_packet:'追踪/workflow/tasks/'+task.workflow_id+'/result-packets/section_machine_gate.result.json',
+  stage_id:'master_outline',
+  step_id:'master_outline',
+  expected_result_packet:'追踪/workflow/tasks/'+task.workflow_id+'/result-packets/master_outline.result.json',
   context_read_command:'node scripts/workflow-stage-context.js read-current --project-root . --json',
-  execution_command:'node scripts/short-section-machine-gate.js --project-root . --workflow-id '+task.workflow_id+' --apply --json',
+  execution_command:'node scripts/long-planning-stage-finalize.js --project-root . --workflow-id '+task.workflow_id+' --json',
   stage_context_packet:{
     packet_md:'这是一段不应出现在 compact 输出中的长上下文'.repeat(200),
     estimated_tokens:3200,
@@ -141,14 +297,12 @@ NODE
   run node - "$SCRIPT" "$TMP_DIR/compact-overview-book" <<'NODE'
 const cp=require('child_process'),fs=require('fs'),path=require('path');
 const script=process.argv[2],root=process.argv[3];
-const create=cp.spawnSync(process.execPath,[script,'create','--workflow-type','short_write','--project-root',root,'--user-goal','写短篇','--json'],{encoding:'utf8'});
+const create=cp.spawnSync(process.execPath,[script,'create','--workflow-type','long_write','--project-root',root,'--user-goal','写长篇','--json'],{encoding:'utf8'});
 if(create.status!==0) throw new Error(create.stdout||create.stderr);
 const task=JSON.parse(create.stdout).task;
 const taskFile=path.join(root,task.task_dir,'task.json');
-task.current_stage='section_machine_gate';task.current_step='section_machine_gate';task.status='running';
-task.stage_execution={status:'paused',stage_id:'section_machine_gate',step_id:'section_machine_gate'};
-fs.mkdirSync(path.join(root,'追踪/story-system/short'),{recursive:true});
-fs.writeFileSync(path.join(root,'追踪/story-system/short/project-state.json'),JSON.stringify({project_id:'p1',project_title:'测试短篇',planned_sections:3,current_section_index:1})+'\n');
+task.current_stage='master_outline_review';task.current_step='master_outline_review';task.status='running';
+task.stage_execution={status:'paused',stage_id:'master_outline_review',step_id:'master_outline_review'};
 fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
 const overview=cp.spawnSync(process.execPath,[script,'task-overview','--project-root',root,'--compact','--json'],{encoding:'utf8'});
 if(overview.status!==0) throw new Error(overview.stdout||overview.stderr);
@@ -313,7 +467,7 @@ if(result.status!=='revision_input_requested') throw new Error(resolve.stdout);
 if(result.revision_scope!=='current_section_only'||result.section_index!==1) throw new Error(resolve.stdout);
 if(!String((result.visible_response||{}).text||'').includes('第 1 节当前回炉要求')) throw new Error(resolve.stdout);
 if(!String((result.visible_response||{}).text||'').includes('主角要拿到账本')) throw new Error(resolve.stdout);
-const feedback=cp.spawnSync(process.execPath,[script,'resolve-action','--project-root',root,'--input','母亲的语气再克制一些','--json'],{encoding:'utf8'});
+const feedback=cp.spawnSync(process.execPath,[script,'resolve-action','--project-root',root,'--input','负责人的语气再克制一些','--json'],{encoding:'utf8'});
 if(feedback.status!==0) throw new Error(feedback.stdout||feedback.stderr);
 const saved=JSON.parse(fs.readFileSync(taskFile,'utf8'));
 const item=(((saved.pending_feedback||{}).items)||[])[0]||{};
@@ -360,6 +514,37 @@ NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
+@test "confirmed feedback revision skips the redundant prose entry confirmation" {
+  run node - "$SCRIPT" "$TMP_DIR/confirmed-revision" <<'NODE'
+const cp=require('child_process'),fs=require('fs'),path=require('path');
+const script=process.argv[2],root=process.argv[3];
+let run=cp.spawnSync(process.execPath,[script,'create','--workflow-type','short_write','--project-root',root,'--user-goal','回炉现有短篇','--json'],{encoding:'utf8'});
+if(run.status!==0) throw new Error(run.stdout||run.stderr);
+const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
+const file=path.join(root,pointer.task_dir,'task.json');
+const task=JSON.parse(fs.readFileSync(file,'utf8'));
+task.current_stage='draft_next_section';task.current_step='draft_next_section';task.scope='第2节';task.stage_execution=null;
+task.accepted_plan={plan_id:'accepted-plan.generic-revision',proposal_id:'proposal.generic-revision',feedback_id:'feedback-generic-revision',status:'completed',projection_status:'completed'};
+task.proposed_plan={proposal_id:'proposal.generic-revision',feedback_id:'feedback-generic-revision',status:'accepted'};
+task.feedback_revision_queue={status:'running',feedback_id:'feedback-generic-revision',current_section_index:2,items:[{section_index:2,status:'current',brief_status:'rebuilt_and_used',prose_status:'pending_recheck'}]};
+task.pending_action={id:'pa-draft-next-section',question:'第 2 节写作提要已通过，推荐下一步',options:[{number:1,action_id:'recheck_existing_section',label:'复检并局部回炉第 2 节现有正文（推荐）',target_stage:'section_machine_gate',requires_user_confirm:true},{number:2,action_id:'pause',label:'暂停并保存断点'}],free_text_enabled:true};
+task.machine={completed_stages:['next_section_brief'],remaining_stages:['draft_next_section','section_machine_gate','section_repair_loop','quality_gate','story_value_gate','section_accept_anchor']};
+fs.mkdirSync(path.join(root,'正文'),{recursive:true});
+fs.writeFileSync(path.join(root,'写作Brief_第002节.md'),'# 写作提要：第 2 节\n\n## 承接\n接住上一节。\n\n## 目标与阻力\n主角核对证据，负责人阻拦。\n\n## 因果动作\n拒绝签字后失去权限。\n\n## 人物与视角锁\n第一人称。\n\n## 禁写项\n不提前揭底。\n\n## 节尾钩子\n新证据出现。\n');
+fs.writeFileSync(path.join(root,'正文','第002节.md'),'现有正文。\n');
+fs.mkdirSync(path.join(root,'追踪/private-short-extension'),{recursive:true});
+fs.writeFileSync(path.join(root,'追踪/private-short-extension/project-state.json'),JSON.stringify({current_section_index:2,accepted_sections:[{section_index:1}]})+'\n');
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+run=cp.spawnSync(process.execPath,[script,'next-candidates','--project-root',root,'--json'],{encoding:'utf8'});
+if(run.status!==0) throw new Error(run.stdout||run.stderr);
+const out=JSON.parse(run.stdout),saved=JSON.parse(fs.readFileSync(file,'utf8')),execution=saved.stage_execution||{};
+if(out.status!=='stage_execution_resume_ready'||saved.current_stage!=='section_machine_gate') throw new Error(run.stdout);
+if(execution.action_id!=='auto_recheck_confirmed_feedback_revision'||execution.completion_boundary!=='section_reaccepted') throw new Error(JSON.stringify(execution));
+if(saved.pending_action!==null||((out.visible_response||{}).user_visible)!==false) throw new Error(JSON.stringify(out));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 @test "activating a whole-story revision opens task overview without starting its section" {
   run node - "$SCRIPT" "$TMP_DIR/overview-book" <<'NODE'
 const cp=require('child_process'),fs=require('fs'),path=require('path');
@@ -374,7 +559,7 @@ task.feedback_revision_queue={status:'running',current_section_index:1,items:[1,
 task.stage_execution={status:'paused',stop_reason:'focus_switched'};
 fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
 fs.mkdirSync(path.join(root,'追踪/private-short-extension'),{recursive:true});
-fs.writeFileSync(path.join(root,'追踪/private-short-extension/project-state.json'),JSON.stringify({working_title:'测试果汁',planned_sections:9}));
+fs.writeFileSync(path.join(root,'追踪/private-short-extension/project-state.json'),JSON.stringify({working_title:'测试档案复核',planned_sections:9}));
 fs.writeFileSync(path.join(root,'追踪/private-short-extension/section-title-lock.json'),JSON.stringify({sections:Array.from({length:9},(_,i)=>({section_index:i+1,title:`标题${i+1}`}))}));
 const activate=cp.spawnSync(process.execPath,[script,'activate','--project-root',root,'--workflow-id',task.workflow_id,'--compact','--json'],{encoding:'utf8'});
 if(activate.status!==0) throw new Error(activate.stdout||activate.stderr);
@@ -475,9 +660,9 @@ NODE
 }
 
 apply_long_write_v2_result() {
-    node - "$SCRIPT" "$1" "${2:-}" "${3:-completed}" "${4-pass}" "${5:-}" "${6:-}" "${7:-}" "${8:-}" <<'NODE'
+    node - "$SCRIPT" "$1" "${2:-}" "${3:-completed}" "${4-pass}" "${5:-}" "${6:-}" "${7:-}" "${8:-}" "${9:-}" <<'NODE'
 const fs=require('fs'), path=require('path'), cp=require('child_process');
-const [script,root,ownerOverride,stepStatus,verificationResult,nextStage,corruptField,reviewResult,declaredFile]=process.argv.slice(2);
+const [script,root,ownerOverride,stepStatus,verificationResult,nextStage,corruptField,reviewResult,declaredFile,targetCorruptField]=process.argv.slice(2);
 const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
 const lifecycleNode=(task.lifecycle_graph.nodes||[]).find(node=>node.id===task.current_stage);
 if(!lifecycleNode) throw new Error(`missing lifecycle node ${task.current_stage}`);
@@ -493,6 +678,8 @@ const result={
   workflow_id:task.workflow_id,
   workflow_type:'long_write',
   stage_id:task.current_stage,
+  stage_attempt_id:task.stage_execution.stage_attempt_id,
+  work_unit_id:task.stage_execution.work_unit_id,
   step_id:task.current_step,
   owner_module:ownerOverride||lifecycleNode.owner_module,
   lifecycle_node:lifecycleNode.id,
@@ -514,12 +701,31 @@ const result={
     : {action:'advance',target:lifecycleNode.id},
   result_write_set:effectiveDeclaredFile?[effectiveDeclaredFile]:[]
 };
+if(failedResult&&['master_outline_review','volume_outline_review'].includes(task.current_stage)) {
+  result.planning_revision_plan={
+    version:'planning_revision_plan_v1',
+    summary:'统一当前规划资产中的阶段边界与编号口径。',
+    requirements:['保留已确认故事核，只修正冲突的阶段边界。'],
+    targets:[task.current_stage==='master_outline_review'?'大纲/总纲.md':'大纲/第1卷/卷纲.md'],
+  };
+}
+if(corruptField==='unsafe_planning_revision_plan'&&result.planning_revision_plan) {
+  result.planning_revision_plan.targets=['../总纲.md'];
+}
+const chapterTarget=((task.stage_execution||{}).chapter_target)||null;
+if(chapterTarget) {
+  result.chapter_target={...chapterTarget};
+  if(targetCorruptField) {
+    if(targetCorruptField==='global_chapter_no') result.chapter_target.global_chapter_no=Number(result.chapter_target.global_chapter_no||0)+1;
+    else result.chapter_target[targetCorruptField]=`tampered-${String(result.chapter_target[targetCorruptField]||'')}`;
+  }
+}
 if(reviewResult) result.review_result=reviewResult;
 if(nextStage) result.next_stage_id=nextStage;
 if(corruptField==='lifecycle_node') result.lifecycle_node='prose';
 if(corruptField==='asset_target') result.asset_target={kind:'chapter',id:'wrong-asset'};
 if(corruptField==='review_requirement') result.review_requirement={required:true,failure_return:'prose'};
-if(['asset_revision','review_decision','downstream_effects','lifecycle_transition_request','result_write_set'].includes(corruptField)) delete result[corruptField];
+if(['asset_revision','review_decision','downstream_effects','lifecycle_transition_request','result_write_set','planning_revision_plan'].includes(corruptField)) delete result[corruptField];
 const packet=path.resolve(root,task.stage_execution.expected_result_packet);
 fs.mkdirSync(path.dirname(packet),{recursive:true});
 fs.writeFileSync(packet,JSON.stringify(result,null,2));
@@ -539,6 +745,10 @@ advance_long_write_stage() {
 
 prepare_detail_outline_review() {
     local book="$1"
+    mkdir -p "$book/追踪/schema"
+    cat > "$book/追踪/schema/chapters.jsonl" <<'EOF'
+{"chapterId":"第001章","chapterNo":1,"volume":"第1卷","volumeChapterNo":1,"globalDraftOrder":1,"outlinePath":"大纲/第1卷/细纲_第001章.md","contractPath":"追踪/章节契约/第1卷/第001章.md","draftPath":"正文/第1卷/第001章.md"}
+EOF
     node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "开一本新书" --json >/dev/null
     for _ in 1 2 3 4 5 6; do
         advance_long_write_stage "$book"
@@ -546,6 +756,8 @@ prepare_detail_outline_review() {
     mkdir -p "$book/大纲/第1卷"
     printf '%s\n' '当前细纲' > "$book/大纲/第1卷/细纲_第001章.md"
     advance_long_write_stage "$book" "大纲/第1卷/细纲_第001章.md"
+    mkdir -p "$book/追踪/story-system"
+    printf '%s\n' '{"schemaVersion":"1.0.0","mode":"strict"}' > "$book/追踪/story-system/write-policy.json"
     stage_status="$(node -e "const t=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]); process.stdout.write(String((t.stage_execution||{}).status||''))" "$book")"
     if [ "$stage_status" != "running" ]; then
         resolve_action "$book" 1 >/dev/null
@@ -591,13 +803,15 @@ const result={
   outputs:{detail_outline_quality:quality},
   changed_files:[],
   evidence:[{type:'detail_outline',path:identityMode==='evidence_mismatch'?'大纲/第1卷/细纲_第002章.md':outlinePath,outline_sha256:outlineSha256}],
-  verification_result:'pass',
+  verification_result:['revise','outline_underfilled'].includes(actualStatus)?'revise':'pass',
   checkpoint_state:{stage_id:task.current_stage,outline_path:outlinePath},
   output_health_result:'pass',
   asset_revision:{status:'verified',asset_id:lifecycleNode.asset_target.id},
-  review_decision:'accepted',
+  review_decision:['revise','outline_underfilled'].includes(actualStatus)?'revise':'accepted',
   downstream_effects:[],
-  lifecycle_transition_request:{action:'advance',target:lifecycleNode.id},
+  lifecycle_transition_request:['revise','outline_underfilled'].includes(actualStatus)
+    ?{action:'return',target:'stage_detail_outline'}
+    :{action:'advance',target:lifecycleNode.id},
   result_write_set:[]
 };
 const packet=path.resolve(root,task.stage_execution.expected_result_packet);
@@ -762,6 +976,81 @@ write_transactional_commit_result() {
 JSON
 }
 
+bind_active_long_chapter_target() {
+    node - "$(focused_task_file "$TMP_DIR/book")" "$1" "$2" <<'NODE'
+const fs=require('fs'),file=process.argv[2],outline_path=process.argv[3],outline_sha256=process.argv[4],task=JSON.parse(fs.readFileSync(file,'utf8'));
+const target={outline_path,outline_sha256};
+task.accepted_detail_outline_targets=[target];
+task.active_chapter_target=target;
+task.consumed_detail_outline_targets=[];
+task.stage_execution={...(task.stage_execution||{}),chapter_target:target};
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+}
+
+prepare_long_chapter_v2_targets() {
+    node - "$REPO" "$1" "$2" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path');
+const [repo,root,countRaw]=process.argv.slice(2),count=Number(countRaw)||1;
+const fixture=require(process.env.WORKFLOW_TASK_FIXTURE),taskFile=fixture.focusedTaskFile(root),task=fixture.readFocusedTask(root);
+const schemaDir=path.join(root,'追踪/schema');
+fs.mkdirSync(schemaDir,{recursive:true});
+const rows=[];
+for(let chapter=1;chapter<=count;chapter+=1){
+  const padded=String(chapter).padStart(3,'0');
+  const outlinePath=`大纲/第2卷/细纲_第${padded}章.md`,outline=`# 第${chapter}章细纲\n\n当前章只验证章节循环。\n`;
+  fs.mkdirSync(path.dirname(path.join(root,outlinePath)),{recursive:true});
+  fs.writeFileSync(path.join(root,outlinePath),outline);
+  rows.push({
+    chapterId:`第${padded}章`,chapterNo:chapter,volume:'第2卷',volumeChapterNo:chapter,globalDraftOrder:chapter,
+    outlinePath,contractPath:`追踪/章节契约/第2卷/第${padded}章.md`,draftPath:`正文/第2卷/第${padded}章.md`,
+  });
+}
+fs.writeFileSync(path.join(schemaDir,'chapters.jsonl'),`${rows.map((row)=>JSON.stringify(row)).join('\n')}\n`);
+const {buildLongChapterTargetV2}=require(path.join(repo,'scripts/lib/long-chapter-target.js'));
+const targets=rows.map((row)=>{
+  const outline=fs.readFileSync(path.join(root,row.outlinePath));
+  const built=buildLongChapterTargetV2({projectRoot:root,outlinePath:row.outlinePath,outlineSha256:crypto.createHash('sha256').update(outline).digest('hex'),workflowId:task.workflow_id});
+  if(built.status!=='ok') throw new Error(JSON.stringify(built));
+  fs.mkdirSync(path.dirname(path.join(root,built.target.contract_path)),{recursive:true});
+  fs.writeFileSync(path.join(root,built.target.contract_path),'# 当前章 Brief\n\n- 目标字数：100\n- 合法区间：90—120\n');
+  fs.mkdirSync(path.dirname(path.join(root,built.target.candidate_draft_path)),{recursive:true});
+  fs.writeFileSync(path.join(root,built.target.candidate_draft_path),'汉'.repeat(100));
+  return built.target;
+});
+task.accepted_detail_outline_targets=targets;
+task.active_chapter_target=targets[0];
+task.consumed_detail_outline_targets=[];
+task.stage_execution={
+  ...(task.stage_execution||{}),status:'running',stage_id:task.current_stage,step_id:task.current_step,
+  stage_attempt_id:String(((task.stage_execution||{}).stage_attempt_id)||`sa-${task.current_stage}-fixture`),
+  work_unit_id:String(((task.stage_execution||{}).work_unit_id)||`wu-${task.current_stage}-fixture`),
+  chapter_target:targets[0],
+};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+}
+
+write_v2_transactional_commit_result() {
+    node - "$1" "$2" "${3:-chapter_brief}" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path');
+const [root,resultFile,nextStage]=process.argv.slice(2),task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root),target=task.active_chapter_target;
+if(!target||!target.target_id) throw new Error(`missing V2 active target: ${JSON.stringify(target)}`);
+const candidate=fs.readFileSync(path.join(root,target.candidate_draft_path)),hash=`sha256:${crypto.createHash('sha256').update(candidate).digest('hex')}`;
+fs.mkdirSync(path.dirname(path.join(root,target.draft_path)),{recursive:true});fs.writeFileSync(path.join(root,target.draft_path),candidate);
+const suffix=String(target.volume_chapter_no).padStart(3,'0'),transactionId=`tx-${task.workflow_id}-${suffix}`,commitId=`chapter-${task.workflow_id}-${suffix}`;
+const transactionDir=path.join(root,'追踪/story-system/transactions',transactionId),stagedRel=`追踪/story-system/transactions/${transactionId}/staged/chapter-${suffix}.md`;
+fs.mkdirSync(path.dirname(path.join(root,stagedRel)),{recursive:true});fs.writeFileSync(path.join(root,stagedRel),candidate);
+const provenance={workflow_id:task.workflow_id,task_family_id:task.task_family_id,branch_id:task.branch_id||task.workflow_id,stage_attempt_id:task.stage_execution.stage_attempt_id};
+const transaction={schemaVersion:'1.0.0',transaction_id:transactionId,commit_id:commitId,status:'accepted',workflow_id:task.workflow_id,volume:target.volume,chapter:target.volume_chapter_no,provenance,artifacts:[{source_staged:target.candidate_draft_path,target:target.draft_path,staged:stagedRel,content_hash:hash}]};
+fs.mkdirSync(transactionDir,{recursive:true});fs.writeFileSync(path.join(transactionDir,'transaction.json'),JSON.stringify(transaction,null,2)+'\n');
+const commitRel=`追踪/story-system/commits/${commitId}.json`,commit={schemaVersion:'1.0.0',commit_id:commitId,transaction_id:transactionId,status:'accepted',workflow_id:task.workflow_id,volume:target.volume,chapter:target.volume_chapter_no,provenance,artifacts:[{role:'chapter_prose',target:target.draft_path,after_hash:hash}]};
+fs.mkdirSync(path.dirname(path.join(root,commitRel)),{recursive:true});fs.writeFileSync(path.join(root,commitRel),JSON.stringify(commit,null,2)+'\n');
+const result={workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:'chapter_commit',step_id:'chapter_commit',step_status:'completed',verification_result:'pass',changed_files:[],result_write_set:[],next_stage_id:nextStage,chapter_target:target,chapter_commit:{mode:'transactional',accepted_commit_id:commitId,commit_file:commitRel,projection_status:'projection_current',projection_debt:false,staged_artifacts:[target.candidate_draft_path]}};
+fs.writeFileSync(resultFile,JSON.stringify(result,null,2)+'\n');
+NODE
+}
+
 @test "workflow state machine lists public templates without private overlay" {
     node "$SCRIPT" templates --no-private-registry --json > "$TMP_DIR/out.json"
 
@@ -803,7 +1092,7 @@ NODE
     node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "开一本新书" --json >/dev/null
     advance_long_write_stage "$book"
     mkdir -p "$book/设定"
-    printf '%s\n' '# 人物' '- 主角：沈七，杂役。' '- 对手：莫青山，内门弟子。' > "$book/设定/人物.md"
+    printf '%s\n' '# 人物' '- 主角：陆川，杂役。' '- 对手：韩岳，内门弟子。' > "$book/设定/人物.md"
 
     run apply_long_write_v2_result "$book" "" completed pass "" "" "" "设定/人物.md"
     [ "$status" -eq 2 ]
@@ -811,11 +1100,11 @@ NODE
 
     cat > "$book/设定/人物.md" <<'EOF'
 # 人物设计
-## 主角：沈七
+## 主角：陆川
 十九岁杂役。目标是脱离杂役身份，最怕失去亲近的人，误区是凡事独自承担；能力边界是不懂阵法和宗门政治。第一卷从被动自保到主动结盟，终局必须选择新秩序。
-## 主要对手：莫青山
+## 主要对手：韩岳
 他要保住资源权，认为牺牲少数人能维持秩序；拥有执法名义和修为资源，但不能公开违背门规，失败会失去师门信用，压力从断供升级到围杀。
-## 关键配角：绿珠
+## 关键配角：苏禾
 她想查清兄长死因，掌握药堂账册但不能无代价盗取档案。
 ## 人物关系与责任债
 - 三人因救命债和资源权形成持续利益冲突。
@@ -841,6 +1130,9 @@ for (const id of ['master_outline_review', 'volume_outline_review', 'detail_outl
   if (stage.owner_module !== 'story-review') throw new Error(`${id} owner: ${stage.owner_module}`);
   if (!stage.review_requirement || stage.review_requirement.required !== true) throw new Error(`${id} missing review requirement`);
   if (!stage.review_requirement.failure_return) throw new Error(`${id} missing failure return`);
+}
+if (stages.volume_acceptance.requires_user_confirm !== true) {
+  throw new Error('volume_acceptance must stop for explicit volume-boundary confirmation');
 }
 for (const id of ['positioning', 'story_bible', 'master_outline', 'volume_outline', 'stage_detail_outline', 'chapter_brief', 'prose']) {
   if (stages[id].owner_module !== 'story-long-write') throw new Error(`${id} owner: ${stages[id].owner_module}`);
@@ -1001,6 +1293,350 @@ NODE
     done
 }
 
+@test "managed runner with read-only stage_contract blocks canonical writes in result packet" {
+    book="$TMP_DIR/managed-runner-read-only"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "开一本新书" --json >/dev/null
+    resolve_action "$book" 1 >/dev/null
+    canonical_file="追踪/伏笔.md"
+    node - "$book" "$canonical_file" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [root,canonicalFile]=process.argv.slice(2);
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+const lifecycleNode=(task.lifecycle_graph.nodes||[]).find(node=>node.id===task.current_stage);
+if(!lifecycleNode) throw new Error(`missing lifecycle node ${task.current_stage}`);
+
+// Persist a managed runner packet whose stage_contract.write_set is empty
+// (read-only canonical_assets). This mirrors the legacy task authority
+// recovery revalidation runner pattern. Note: task.stage_execution.write_set
+// stays at its template-derived value (e.g. ["设定/**", "追踪/**"]) so the
+// existing write-set matcher would otherwise accept the canonical claim.
+const runnerRel=`${task.task_dir}/runner-packets/${task.current_stage}.attempt-1.run.json`;
+const runnerAbs=path.resolve(root,runnerRel);
+fs.mkdirSync(path.dirname(runnerAbs),{recursive:true});
+const runnerPacket={
+  schemaVersion:'1.0.0',
+  run_id:`${task.workflow_id}-${task.current_stage}-read-only`,
+  workflow_id:task.workflow_id,
+  workflow_type:task.workflow_type,
+  stage_id:task.current_stage,
+  stage_attempt_id:task.stage_execution.stage_attempt_id,
+  work_unit_id:task.stage_execution.work_unit_id,
+  owner_module:lifecycleNode.owner_module,
+  project_root:root,
+  task_state:`${task.task_dir}/task.json`,
+  host_execution_mode:'managed_runner',
+  expected_result_packet:task.stage_execution.expected_result_packet,
+  stage_contract:{
+    owner_module:lifecycleNode.owner_module,
+    lifecycle_node:lifecycleNode.id,
+    asset_target:{...(lifecycleNode.asset_target||{})},
+    review_requirement:{...(lifecycleNode.review_requirement||{})},
+    write_set:[],
+    existing_asset_policy:{
+      mode:'existing_asset_revalidation',
+      canonical_assets:'read_only',
+      result_artifacts:'result_packet_only',
+      pass_condition:'既有资产足以支撑当前 scope。',
+      block_condition:'仅影响当前 scope 的矛盾或关键缺失可以阻断。',
+    },
+    memory_contract:null,
+  },
+  result_packet_template:{
+    schemaVersion:'1.0.0',
+    workflow_id:task.workflow_id,
+    workflow_type:task.workflow_type,
+    stage_id:task.current_stage,
+    changed_files:[],
+    result_write_set:[],
+  },
+};
+fs.writeFileSync(runnerAbs,JSON.stringify(runnerPacket,null,2));
+
+// Pre-create the canonical file so the file actually exists on disk; the
+// apply-result path matches actual changes against the declared write set.
+fs.mkdirSync(path.dirname(path.join(root,canonicalFile)),{recursive:true});
+fs.writeFileSync(path.join(root,canonicalFile),'# 既有资产\n');
+
+// Build a result packet that pretends to write a canonical file even though
+// the runner was declared read-only.
+const result={
+  workflow_id:task.workflow_id,
+  workflow_type:'long_write',
+  stage_id:task.current_stage,
+  step_id:task.current_step,
+  owner_module:lifecycleNode.owner_module,
+  lifecycle_node:lifecycleNode.id,
+  asset_target:lifecycleNode.asset_target,
+  review_requirement:lifecycleNode.review_requirement,
+  step_status:'completed',
+  outputs:[],
+  changed_files:[canonicalFile],
+  evidence:[],
+  verification_result:'pass',
+  checkpoint_state:{stage_id:task.current_stage},
+  output_health_result:'pass',
+  asset_revision:{status:'verified',asset_id:lifecycleNode.asset_target.id},
+  review_decision:'not_applicable',
+  downstream_effects:[],
+  lifecycle_transition_request:{action:'advance',target:lifecycleNode.id},
+  result_write_set:[canonicalFile],
+  host_execution_mode:'managed_runner',
+  runner_packet_path:runnerRel,
+  result_packet_path:task.stage_execution.expected_result_packet,
+  memory_read_receipt:((task.stage_execution||{}).memory_context||{}).memory_read_receipt||null,
+};
+const packet=path.resolve(root,task.stage_execution.expected_result_packet);
+fs.mkdirSync(path.dirname(packet),{recursive:true});
+fs.writeFileSync(packet,JSON.stringify(result,null,2));
+NODE
+    packet="$(node -e "const path=require('path'),task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]); console.log(path.resolve(process.argv[1],task.stage_execution.expected_result_packet))" "$book")"
+    run node "$SCRIPT" apply-result --project-root "$book" --result "$packet" --json
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_managed_runner_read_only_canonical_write'* ]]
+
+    node - "$book" "$REPO" <<'NODE'
+const fs=require('fs'),path=require('path');
+const root=process.argv[2];
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+const runnerRel=`${task.task_dir}/runner-packets/${task.current_stage}.attempt-1.run.json`;
+task.runtime_guard=task.runtime_guard||{};
+task.runtime_guard.last_runner_attempt={
+  workflow_id:task.workflow_id,stage_id:task.current_stage,
+  stage_attempt_id:task.stage_execution.stage_attempt_id,
+  work_unit_id:task.stage_execution.work_unit_id,
+  run_id:`${task.workflow_id}-${task.current_stage}-read-only`,runner_packet_path:runnerRel,
+  expected_result_packet:task.stage_execution.expected_result_packet,
+};
+fs.writeFileSync(path.join(root,task.task_dir,'task.json'),JSON.stringify(task,null,2));
+const packet=path.join(root,task.stage_execution.expected_result_packet);
+const result=JSON.parse(fs.readFileSync(packet,'utf8'));
+result.host_execution_mode='cooperative_interactive';
+delete result.runner_packet_path;
+fs.writeFileSync(packet,JSON.stringify(result,null,2));
+NODE
+    run node "$SCRIPT" apply-result --project-root "$book" --result "$packet" --json
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_managed_runner_execution_mode_mismatch'* ]]
+}
+
+@test "managed runner ignores its rejected-result audit archive on a retry" {
+    book="$TMP_DIR/managed-runner-audit-retry"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "开一本新书" --json >/dev/null
+    resolve_action "$book" 1 >/dev/null
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path');
+const root=process.argv[2],task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+const lifecycleNode=(task.lifecycle_graph.nodes||[]).find(node=>node.id===task.current_stage);
+const runnerRel=`${task.task_dir}/runner-packets/${task.current_stage}.attempt-1.run.json`;
+const runnerAbs=path.resolve(root,runnerRel);fs.mkdirSync(path.dirname(runnerAbs),{recursive:true});
+fs.writeFileSync(runnerAbs,JSON.stringify({workflow_id:task.workflow_id,stage_id:task.current_stage,stage_attempt_id:task.stage_execution.stage_attempt_id,work_unit_id:task.stage_execution.work_unit_id,expected_result_packet:task.stage_execution.expected_result_packet,stage_contract:{write_set:task.stage_execution.write_set,canonical_write_set:task.stage_execution.canonical_write_set||[]}},null,2));
+const auditFile=path.join(root,task.task_dir,'audit/rejected-managed-results',`${task.current_stage}.old.json`);
+fs.mkdirSync(path.dirname(auditFile),{recursive:true});fs.writeFileSync(auditFile,'{}');
+const machineGateFile=path.join(root,task.task_dir,'artifacts/chapter-001-machine-gate.json');
+fs.mkdirSync(path.dirname(machineGateFile),{recursive:true});fs.writeFileSync(machineGateFile,'{}');
+for(const [file,content] of [
+  ['scripts/workflow-runner.js','runtime'],
+  ['.claude/agent-references/novel-assistant/rule.md','runtime'],
+  ['.story-runtime-managed.json','{}'],
+  ['追踪/runtime-snapshots/20260804T000000000Z/manifest.json','{}'],
+]) { const absolute=path.join(root,file);fs.mkdirSync(path.dirname(absolute),{recursive:true});fs.writeFileSync(absolute,content); }
+const result={workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:task.current_stage,step_id:task.current_step,owner_module:lifecycleNode.owner_module,lifecycle_node:lifecycleNode.id,asset_target:lifecycleNode.asset_target,review_requirement:lifecycleNode.review_requirement,step_status:'completed',outputs:[],changed_files:[],evidence:[],verification_result:'pass',checkpoint_state:{stage_id:task.current_stage},output_health_result:'pass',asset_revision:{status:'verified',asset_id:lifecycleNode.asset_target.id},review_decision:'not_applicable',downstream_effects:[],lifecycle_transition_request:{action:'advance',target:lifecycleNode.id},result_write_set:[],host_execution_mode:'managed_runner',runner_packet_path:runnerRel,result_packet_path:task.stage_execution.expected_result_packet,memory_read_receipt:((task.stage_execution||{}).memory_context||{}).memory_read_receipt||null};
+const packet=path.resolve(root,task.stage_execution.expected_result_packet);fs.mkdirSync(path.dirname(packet),{recursive:true});fs.writeFileSync(packet,JSON.stringify(result,null,2));
+NODE
+    packet="$(node -e "const path=require('path'),task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]); console.log(path.resolve(process.argv[1],task.stage_execution.expected_result_packet))" "$book")"
+    run node "$SCRIPT" apply-result --project-root "$book" --result "$packet" --json
+    [ "$status" -eq 0 ]
+    [[ "$output" != *'blocked_managed_runner_read_only_canonical_write'* ]]
+}
+
+@test "rejected managed stage restart requires confirmation and captures a fresh auditable attempt" {
+    book="$TMP_DIR/rejected-stage-restart"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续旧长篇" --json >/dev/null
+    resolve_action "$book" 1 >/dev/null
+
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path');
+const root=process.argv[2],task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+const execution=task.stage_execution||{};
+task.current_stage='detail_outline_review';
+task.current_step='detail_outline_review';
+execution.stage_id='detail_outline_review';
+execution.step_id='detail_outline_review';
+execution.expected_result_packet=`${task.task_dir}/result-packets/detail_outline_review.result.json`;
+execution.result_contract='detail_outline_quality_v2';
+execution.requires_user_confirm=true;
+task.pending_action=null;
+task.last_selection={};
+fs.writeFileSync(require(process.env.WORKFLOW_TASK_FIXTURE).focusedTaskFile(root),JSON.stringify(task,null,2)+'\n');
+const auditDir=path.join(root,task.task_dir,'audit','rejected-managed-results');
+fs.mkdirSync(auditDir,{recursive:true});
+fs.writeFileSync(path.join(auditDir,`${execution.stage_id}.rejected.json`),JSON.stringify({
+  workflow_id:task.workflow_id,
+  stage_id:execution.stage_id,
+  stage_attempt_id:execution.stage_attempt_id,
+  host_execution_mode:'managed_runner',
+},null,2));
+const canonical=path.join(root,'设定','世界观.md');
+fs.mkdirSync(path.dirname(canonical),{recursive:true});
+fs.writeFileSync(canonical,'# 当前可信世界观\n');
+fs.writeFileSync(path.join(root,'before.json'),JSON.stringify({
+  workflow_id:task.workflow_id,
+  stage_attempt_id:execution.stage_attempt_id,
+  captured_at:execution.write_snapshot.captured_at,
+  canonical_sha:`sha256:${require('crypto').createHash('sha256').update(fs.readFileSync(canonical)).digest('hex')}`,
+}));
+NODE
+
+    workflow_id="$(node -e "console.log(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")"
+    run node "$SCRIPT" restart-rejected-stage --project-root "$book" --workflow-id "$workflow_id" --json
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_rejected_stage_restart_confirmation_required'* ]]
+
+    run node "$SCRIPT" restart-rejected-stage --project-root "$book" --workflow-id "$workflow_id" --confirm --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'rejected_stage_restarted'* ]]
+    node - "$book" "$REPO" <<'NODE'
+const fs=require('fs'),path=require('path'),root=process.argv[2];
+const before=JSON.parse(fs.readFileSync(path.join(root,'before.json'),'utf8'));
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+const execution=task.stage_execution||{};
+if(execution.stage_attempt_id===before.stage_attempt_id) throw new Error('stage attempt was reused');
+if(Number(execution.attempt_no)<1) throw new Error(JSON.stringify(execution));
+if(execution.write_snapshot.captured_at===before.captured_at) throw new Error('write snapshot was reused');
+if(execution.write_snapshot.files['设定/世界观.md']!==before.canonical_sha) throw new Error(JSON.stringify(execution.write_snapshot.files));
+const previous=(task.stage_attempt_history||[]).find(item=>item.stage_attempt_id===before.stage_attempt_id);
+if(!previous||previous.status!=='rejected'||!previous.failed_result_packet) throw new Error(JSON.stringify(task.stage_attempt_history));
+if(execution.requires_user_confirm===true) {
+  const {validateWorkflowConfirmation}=require(path.join(process.argv[3],'scripts','lib','workflow-confirmation-context.js'));
+  if(!validateWorkflowConfirmation(task,execution).valid) throw new Error(JSON.stringify({execution,last_selection:task.last_selection,pending_action:task.pending_action}));
+}
+NODE
+}
+
+@test "managed runner with non-empty stage_contract write_set accepts a matching task artifact" {
+    book="$TMP_DIR/managed-runner-writable"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "开一本新书" --json >/dev/null
+    resolve_action "$book" 1 >/dev/null
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path');
+const root=process.argv[2];
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+const lifecycleNode=(task.lifecycle_graph.nodes||[]).find(node=>node.id===task.current_stage);
+if(!lifecycleNode) throw new Error(`missing lifecycle node ${task.current_stage}`);
+const authorizedFile=`${task.task_dir}/artifacts/runner-note.md`;
+
+// Persist a managed runner packet whose stage_contract.write_set matches the
+// template authorization for this stage (non-read-only).
+const runnerRel=`${task.task_dir}/runner-packets/${task.current_stage}.attempt-1.run.json`;
+const runnerAbs=path.resolve(root,runnerRel);
+fs.mkdirSync(path.dirname(runnerAbs),{recursive:true});
+const runnerPacket={
+  schemaVersion:'1.0.0',
+  run_id:`${task.workflow_id}-${task.current_stage}-writable`,
+  workflow_id:task.workflow_id,
+  workflow_type:task.workflow_type,
+  stage_id:task.current_stage,
+  stage_attempt_id:'sa-stale-managed-runner',
+  work_unit_id:'wu-stale-managed-runner',
+  owner_module:lifecycleNode.owner_module,
+  project_root:root,
+  task_state:`${task.task_dir}/task.json`,
+  host_execution_mode:'managed_runner',
+  expected_result_packet:task.stage_execution.expected_result_packet,
+  stage_contract:{
+    owner_module:lifecycleNode.owner_module,
+    lifecycle_node:lifecycleNode.id,
+    asset_target:{...(lifecycleNode.asset_target||{})},
+    review_requirement:{...(lifecycleNode.review_requirement||{})},
+    write_set:Array.isArray(task.stage_execution.write_set)?task.stage_execution.write_set.slice():[],
+    existing_asset_policy:null,
+    memory_contract:null,
+  },
+  result_packet_template:{
+    schemaVersion:'1.0.0',
+    workflow_id:task.workflow_id,
+    workflow_type:task.workflow_type,
+    stage_id:task.current_stage,
+    changed_files:[],
+    result_write_set:[],
+  },
+};
+fs.writeFileSync(runnerAbs,JSON.stringify(runnerPacket,null,2));
+
+// Build a result packet that legitimately writes a task artifact matching
+// the runner's authorized write_set.
+fs.mkdirSync(path.dirname(path.join(root,authorizedFile)),{recursive:true});
+fs.writeFileSync(path.join(root,authorizedFile),'定位资产\n');
+const result={
+  workflow_id:task.workflow_id,
+  workflow_type:'long_write',
+  stage_id:task.current_stage,
+  step_id:task.current_step,
+  owner_module:lifecycleNode.owner_module,
+  lifecycle_node:lifecycleNode.id,
+  asset_target:lifecycleNode.asset_target,
+  review_requirement:lifecycleNode.review_requirement,
+  step_status:'completed',
+  outputs:[],
+  changed_files:[authorizedFile],
+  evidence:[],
+  verification_result:'pass',
+  checkpoint_state:{stage_id:task.current_stage},
+  output_health_result:'pass',
+  asset_revision:{status:'verified',asset_id:lifecycleNode.asset_target.id},
+  review_decision:'not_applicable',
+  downstream_effects:[],
+  lifecycle_transition_request:{action:'advance',target:lifecycleNode.id},
+  result_write_set:[authorizedFile],
+  host_execution_mode:'managed_runner',
+  runner_packet_path:runnerRel,
+  result_packet_path:task.stage_execution.expected_result_packet,
+  memory_read_receipt:((task.stage_execution||{}).memory_context||{}).memory_read_receipt||null,
+};
+const packet=path.resolve(root,task.stage_execution.expected_result_packet);
+fs.mkdirSync(path.dirname(packet),{recursive:true});
+fs.writeFileSync(packet,JSON.stringify(result,null,2));
+NODE
+    packet="$(node -e "const path=require('path'),task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]); console.log(path.resolve(process.argv[1],task.stage_execution.expected_result_packet))" "$book")"
+    run node "$SCRIPT" apply-result --project-root "$book" --result "$packet" --json
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_managed_runner_receipt_scope_mismatch'* ]]
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path'),root=process.argv[2],task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+const result=JSON.parse(fs.readFileSync(path.resolve(root,task.stage_execution.expected_result_packet),'utf8'));
+const runner=JSON.parse(fs.readFileSync(path.resolve(root,result.runner_packet_path),'utf8'));
+runner.stage_attempt_id=task.stage_execution.stage_attempt_id;
+runner.work_unit_id=task.stage_execution.work_unit_id;
+fs.writeFileSync(path.resolve(root,result.runner_packet_path),JSON.stringify(runner,null,2));
+NODE
+    run node "$SCRIPT" apply-result --project-root "$book" --result "$packet" --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status": "stage_started"'* ]]
+}
+
+@test "long write ignores host startup and runner observability files" {
+    book="$TMP_DIR/runtime-restart-marker"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "开一本新书" --json >/dev/null
+    mkdir -p "$book/.claude"
+    : > "$book/.claude/.agents-pending-restart"
+    resolve_action "$book" 1 >/dev/null
+
+    rm "$book/.claude/.agents-pending-restart"
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path');
+const root=process.argv[2];
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+const outputDir=path.join(root,task.task_dir,'runner-output');
+fs.mkdirSync(outputDir,{recursive:true});
+fs.writeFileSync(path.join(outputDir,'host.stdout.log'),'runner-owned output\n');
+fs.writeFileSync(path.join(root,task.task_dir,'tool-events.jsonl'),'{"event":"runner"}\n');
+NODE
+    apply_long_write_v2_result "$book" >/dev/null
+
+    current_stage="$(node -e "const t=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]); process.stdout.write(t.current_stage)" "$book")"
+    [ "$current_stage" = "story_bible" ]
+}
+
 @test "long write ignores its expected result receipt in host write declarations" {
     book="$TMP_DIR/receipt-write-set"
     node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "开一本新书" --json >/dev/null
@@ -1024,6 +1660,145 @@ NODE
     run node "$SCRIPT" apply-result --project-root "$book" --result "$packet" --json
     [ "$status" -eq 0 ]
     [[ "$output" == *'"status": "stage_started"'* ]]
+}
+
+@test "long write accepts a canonical outline transaction alongside its internal evidence" {
+    book="$TMP_DIR/canonical-outline-transaction"
+    mkdir -p "$book/大纲/卷一" "$book/追踪/staging" "$book/追踪/story-system"
+    printf '%s\n' '{"schemaVersion":"1.0.0","mode":"strict"}' > "$book/追踪/story-system/write-policy.json"
+    printf '%s\n' '旧版大纲资产' > "$book/大纲/卷一/总纲.md"
+    printf '%s\n' '新版大纲资产' > "$book/追踪/staging/总纲.md"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "验证规范事务写入" --json >/dev/null
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path');
+const root=process.argv[2];
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+fs.writeFileSync(path.join(root,'追踪/staging/outline-manifest.json'),JSON.stringify({
+  workflow_id:task.workflow_id,
+  volume:'卷一',chapter:1,
+  gates:{output_health:'pass',prose_quality:'pass',story_drift:'pass'},
+  artifacts:[{role:'outline',staged:'追踪/staging/总纲.md',target:'大纲/卷一/总纲.md'}]
+}));
+NODE
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+
+    node - "$book" "$SCRIPT" <<'NODE'
+const fs=require('fs'),path=require('path'),cp=require('child_process');
+const [root,script]=process.argv.slice(2);
+const fixture=require(process.env.WORKFLOW_TASK_FIXTURE);
+const task=fixture.readFocusedTask(root);
+if(task.current_stage!=='master_outline') throw new Error(`expected master_outline, got ${task.current_stage}`);
+const manifest=path.join(root,'追踪/staging/outline-manifest.json');
+const manifestData=JSON.parse(fs.readFileSync(manifest,'utf8'));
+manifestData.provenance={task_family_id:task.task_family_id,workflow_id:task.workflow_id,branch_id:task.branch_id||task.workflow_id,stage_attempt_id:task.stage_execution.stage_attempt_id,acceptance_status:'accepted'};
+fs.writeFileSync(manifest,JSON.stringify(manifestData));
+task.stage_execution.write_snapshot.files['追踪/staging/outline-manifest.json']=`sha256:${require('crypto').createHash('sha256').update(fs.readFileSync(manifest)).digest('hex')}`;
+fs.writeFileSync(fixture.focusedTaskFile(root),JSON.stringify(task,null,2)+'\n');
+const commitScript=path.join(path.dirname(script),'chapter-commit.js');
+const prepared=cp.spawnSync(process.execPath,[commitScript,'prepare','--project-root',root,'--manifest',manifest,'--json'],{encoding:'utf8'});
+if(prepared.status!==0) throw new Error(prepared.stdout||prepared.stderr);
+const tx=JSON.parse(prepared.stdout).transaction_id;
+const accepted=cp.spawnSync(process.execPath,[commitScript,'accept','--project-root',root,'--transaction',tx,'--json'],{encoding:'utf8'});
+if(accepted.status!==0) throw new Error(accepted.stdout||accepted.stderr);
+const acceptedOutput=JSON.parse(accepted.stdout);
+for(const relative of [
+  `追踪/story-system/transactions/${tx}/transaction.json`,
+  `追踪/story-system/transactions/${tx}/staged/001-总纲.md`,
+  `追踪/story-system/transactions/${tx}/backup/001-总纲.md`,
+  `追踪/story-system/commits/${JSON.parse(accepted.stdout).commit_id}.json`,
+  '追踪/story-system/projection-log.jsonl'
+]) if(!fs.existsSync(path.join(root,relative))) throw new Error(`missing internal evidence: ${relative}`);
+const resultPacket=path.resolve(root,task.stage_execution.expected_result_packet);
+const node=task.lifecycle_graph.nodes.find(item=>item.id===task.current_stage);
+const result={workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:task.current_stage,step_id:task.current_step,
+ owner_module:node.owner_module,lifecycle_node:node.id,asset_target:node.asset_target,review_requirement:node.review_requirement,
+ step_status:'completed',outputs:[],changed_files:['大纲/卷一/总纲.md'],evidence:[],verification_result:'pass',checkpoint_state:{stage:task.current_stage},output_health_result:'pass',
+ asset_revision:{status:'verified',asset_id:node.asset_target.id},review_decision:'not_applicable',downstream_effects:[],lifecycle_transition_request:{action:'advance',target:node.id},result_write_set:['大纲/卷一/总纲.md'],chapter_commit:{mode:'transactional',accepted_commit_id:acceptedOutput.commit_id,commit_file:path.relative(root,acceptedOutput.commit_file).replace(/\\/g,'/'),projection_status:acceptedOutput.projection_status,projection_debt:false,staged_artifacts:[`追踪/story-system/transactions/${tx}/staged/001-总纲.md`]}};
+fs.mkdirSync(path.dirname(resultPacket),{recursive:true});
+fs.writeFileSync(resultPacket,JSON.stringify(result));
+const commitFile=acceptedOutput.commit_file,commitData=JSON.parse(fs.readFileSync(commitFile,'utf8')),originalAttempt=commitData.provenance.stage_attempt_id;
+commitData.provenance.stage_attempt_id='sa-old-accepted-attempt';fs.writeFileSync(commitFile,JSON.stringify(commitData));
+const rejected=cp.spawnSync(process.execPath,[script,'apply-result','--project-root',root,'--result',resultPacket,'--json'],{encoding:'utf8'});
+if(rejected.status!==2||!String(rejected.stdout||rejected.stderr).includes('blocked_canonical_transaction_attempt_mismatch')) throw new Error(rejected.stdout||rejected.stderr);
+commitData.provenance.stage_attempt_id=originalAttempt;fs.writeFileSync(commitFile,JSON.stringify(commitData));
+const applied=cp.spawnSync(process.execPath,[script,'apply-result','--project-root',root,'--result',resultPacket,'--json'],{encoding:'utf8'});
+if(applied.status!==0) throw new Error(applied.stdout||applied.stderr);
+const output=JSON.parse(applied.stdout);
+if(!['advanced','stage_started'].includes(output.status)) throw new Error(applied.stdout);
+NODE
+}
+
+@test "long write accepts canonical transaction when persisted snapshot predates internal evidence exclusion" {
+    book="$TMP_DIR/canonical-outline-transaction-legacy-snapshot"
+    mkdir -p "$book/大纲/卷一" "$book/追踪/staging" "$book/追踪/story-system"
+    printf '%s\n' '{"schemaVersion":"1.0.0","mode":"strict"}' > "$book/追踪/story-system/write-policy.json"
+    printf '%s\n' '旧版大纲资产' > "$book/大纲/卷一/总纲.md"
+    printf '%s\n' '新版大纲资产' > "$book/追踪/staging/总纲.md"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "验证旧快照下规范事务写入" --json >/dev/null
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path');
+const root=process.argv[2];
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+fs.writeFileSync(path.join(root,'追踪/staging/outline-manifest.json'),JSON.stringify({
+  workflow_id:task.workflow_id,
+  volume:'卷一',chapter:1,
+  gates:{output_health:'pass',prose_quality:'pass',story_drift:'pass'},
+  artifacts:[{role:'outline',staged:'追踪/staging/总纲.md',target:'大纲/卷一/总纲.md'}]
+}));
+NODE
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+    # Simulate a snapshot persisted before the canonical transaction exclusions
+    # existed: drop the three internal-evidence paths from excluded_paths and
+    # keep the snapshot.files payload untouched.
+    node - "$book" <<'NODE'
+const fs=require('fs');
+const fixture=require(process.env.WORKFLOW_TASK_FIXTURE);
+const taskFile=fixture.focusedTaskFile(process.argv[2]);
+const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const snapshot=((task.stage_execution||{}).write_snapshot)||{};
+const internals=['追踪/story-system/transactions','追踪/story-system/commits','追踪/story-system/projection-log.jsonl'];
+const legacyExcluded=(Array.isArray(snapshot.excluded_paths)?snapshot.excluded_paths:[])
+  .filter(item=>!internals.some(internal=>item===internal||item.startsWith(`${internal}/`)));
+snapshot.excluded_paths=legacyExcluded;
+if(task.stage_execution) task.stage_execution.write_snapshot=snapshot;
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    run node - "$book" "$SCRIPT" <<'NODE'
+const fs=require('fs'),path=require('path'),cp=require('child_process');
+const [root,script]=process.argv.slice(2);
+const fixture=require(process.env.WORKFLOW_TASK_FIXTURE);
+const task=fixture.readFocusedTask(root);
+if(task.current_stage!=='master_outline') throw new Error(`expected master_outline, got ${task.current_stage}`);
+const manifest=path.join(root,'追踪/staging/outline-manifest.json');
+const manifestData=JSON.parse(fs.readFileSync(manifest,'utf8'));
+manifestData.provenance={task_family_id:task.task_family_id,workflow_id:task.workflow_id,branch_id:task.branch_id||task.workflow_id,stage_attempt_id:task.stage_execution.stage_attempt_id,acceptance_status:'accepted'};
+fs.writeFileSync(manifest,JSON.stringify(manifestData));
+task.stage_execution.write_snapshot.files['追踪/staging/outline-manifest.json']=`sha256:${require('crypto').createHash('sha256').update(fs.readFileSync(manifest)).digest('hex')}`;
+fs.writeFileSync(fixture.focusedTaskFile(root),JSON.stringify(task,null,2)+'\n');
+const commitScript=path.join(path.dirname(script),'chapter-commit.js');
+const prepared=cp.spawnSync(process.execPath,[commitScript,'prepare','--project-root',root,'--manifest',manifest,'--json'],{encoding:'utf8'});
+if(prepared.status!==0) throw new Error(prepared.stdout||prepared.stderr);
+const tx=JSON.parse(prepared.stdout).transaction_id;
+const accepted=cp.spawnSync(process.execPath,[commitScript,'accept','--project-root',root,'--transaction',tx,'--json'],{encoding:'utf8'});
+if(accepted.status!==0) throw new Error(accepted.stdout||accepted.stderr);
+const acceptedOutput=JSON.parse(accepted.stdout);
+const resultPacket=path.resolve(root,task.stage_execution.expected_result_packet);
+const node=task.lifecycle_graph.nodes.find(item=>item.id===task.current_stage);
+const result={workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:task.current_stage,step_id:task.current_step,
+ owner_module:node.owner_module,lifecycle_node:node.id,asset_target:node.asset_target,review_requirement:node.review_requirement,
+ step_status:'completed',outputs:[],changed_files:['大纲/卷一/总纲.md'],evidence:[],verification_result:'pass',checkpoint_state:{stage:task.current_stage},output_health_result:'pass',
+ asset_revision:{status:'verified',asset_id:node.asset_target.id},review_decision:'not_applicable',downstream_effects:[],lifecycle_transition_request:{action:'advance',target:node.id},result_write_set:['大纲/卷一/总纲.md'],chapter_commit:{mode:'transactional',accepted_commit_id:acceptedOutput.commit_id,commit_file:path.relative(root,acceptedOutput.commit_file).replace(/\\/g,'/'),projection_status:acceptedOutput.projection_status,projection_debt:false,staged_artifacts:[`追踪/story-system/transactions/${tx}/staged/001-总纲.md`]}};
+fs.mkdirSync(path.dirname(resultPacket),{recursive:true});
+fs.writeFileSync(resultPacket,JSON.stringify(result));
+const applied=cp.spawnSync(process.execPath,[script,'apply-result','--project-root',root,'--result',resultPacket,'--json'],{encoding:'utf8'});
+if(applied.status!==0) throw new Error(applied.stdout||applied.stderr);
+const output=JSON.parse(applied.stdout);
+if(!['advanced','stage_started'].includes(output.status)) throw new Error(applied.stdout);
+NODE
+    [ "$status" -eq 0 ]
 }
 
 @test "long write blocks project tree symlinks at snapshot and acceptance" {
@@ -1145,6 +1920,12 @@ NODE
         [[ "$output" == *'blocked_longform_lifecycle_migration_required'* ]]
         [[ "$output" == *'explicit supported-project lifecycle migration'* ]]
 
+        run node "$SCRIPT" task-overview --project-root "$book" --compact --json
+        [ "$status" -eq 0 ]
+        [[ "$output" == *'blocked_longform_lifecycle_migration_required'* ]]
+        [[ "$output" != *'workflow_task_overview'* ]]
+        [[ "$output" != *'继续当前阶段'* ]]
+
         run node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续旧项目" --json
         [ "$status" -eq 0 ]
         [[ "$output" == *'blocked_longform_lifecycle_migration_required'* ]]
@@ -1175,11 +1956,11 @@ for(const file of fs.readdirSync(path.join(root,'追踪/workflow/tasks')).map(id
 }
 NODE
 
-        node "$SCRIPT" "$command" --workflow-type short_write --project-root "$book" --scope "短篇新任务" --user-goal "改写一篇短篇" --reason "切换到无关短篇" --json > "$TMP_DIR/$command.json"
+        node "$SCRIPT" "$command" --workflow-type review_repair --project-root "$book" --scope "1-10" --user-goal "审阅另一个范围" --reason "切换到无关审阅" --json > "$TMP_DIR/$command.json"
         node - "$TMP_DIR/$command.json" <<'NODE'
 const fs=require('fs'),out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 if(!['created','switched'].includes(out.status)) throw new Error(JSON.stringify(out));
-if(out.task.workflow_type!=='short_write') throw new Error(JSON.stringify(out.task));
+if(out.task.workflow_type!=='review_repair') throw new Error(JSON.stringify(out.task));
 NODE
     done
 }
@@ -1230,8 +2011,10 @@ NODE
     advance_long_write_stage "$TMP_DIR/book"
     advance_long_write_stage "$TMP_DIR/book"
     advance_long_write_stage "$TMP_DIR/book"
+    mkdir -p "$TMP_DIR/book/大纲"
+    printf '%s\n' '# 总纲' > "$TMP_DIR/book/大纲/总纲.md"
     resolve_action "$TMP_DIR/book" 1 >/dev/null
-    apply_long_write_v2_result "$TMP_DIR/book" "" failed failed volume_outline > "$TMP_DIR/review-out.json"
+    apply_long_write_v2_result "$TMP_DIR/book" "" failed failed > "$TMP_DIR/review-out.json"
 
     node - "$TMP_DIR/review-out.json" <<'NODE'
 const fs = require('fs');
@@ -1247,12 +2030,430 @@ const validation=task.lifecycle_graph.last_transition_validation;
 if(!validation || validation.allowed!==true) throw new Error(`rollback validation was not accepted: ${JSON.stringify(validation)}`);
 if(validation.rule!=='required_review_failure_return') throw new Error(`wrong rollback validation rule: ${JSON.stringify(validation)}`);
 if(validation.from!=='master_outline_review'||validation.to!=='master_outline') throw new Error(`wrong rollback validation endpoints: ${JSON.stringify(validation)}`);
+if(task.stage_execution) throw new Error(`review failure must stop before canonical revision: ${JSON.stringify(task.stage_execution)}`);
+if(!task.pending_action||!Array.isArray(task.pending_action.options)||task.pending_action.options.length<2) throw new Error(`review failure must expose an author decision menu: ${JSON.stringify(task.pending_action)}`);
+if(task.pending_action.options.length!==4||task.pending_action.free_text_enabled!==true) throw new Error(`review failure must expose the normal 1-4 author menu: ${JSON.stringify(task.pending_action)}`);
+if(!task.planning_revision||task.planning_revision.status!=='awaiting_author_confirmation'||!/^sha256:[0-9a-f]{64}$/.test(task.planning_revision.plan_digest)) throw new Error(`validated plan was not frozen: ${JSON.stringify(task.planning_revision)}`);
+if(out.status!=='advanced'||!out.visible_response||out.visible_response.user_visible===false) throw new Error(`review failure must return visible feedback: ${JSON.stringify(out)}`);
 NODE
+
+    resolve_action "$TMP_DIR/book" 1 > "$TMP_DIR/revision-started.json"
+    node - "$TMP_DIR/book" <<'NODE'
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[2]),execution=task.stage_execution||{};
+if(task.current_stage!=='master_outline'||execution.stage_id!=='master_outline'||execution.status!=='running') throw new Error(JSON.stringify(task));
+if(JSON.stringify(execution.canonical_write_set)!==JSON.stringify(['大纲/总纲.md'])) throw new Error(JSON.stringify(execution));
+if(!Array.isArray(execution.planning_targets)||execution.planning_targets.length!==1||execution.planning_targets[0].canonical!=='大纲/总纲.md'||!execution.planning_targets[0].staged.startsWith('追踪/workflow/staging/')) throw new Error(JSON.stringify(execution));
+if(JSON.stringify(execution.write_set)!==JSON.stringify([execution.planning_targets[0].staged])) throw new Error(JSON.stringify(execution));
+if(execution.planning_revision_digest!==task.planning_revision.plan_digest||execution.success_transition?.target!=='master_outline_review') throw new Error(JSON.stringify(execution));
+NODE
+}
+
+@test "active master outline review exposes its exact result template and completion command" {
+    local book="$TMP_DIR/master-outline-review-contract"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续当前长篇" --json >/dev/null
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+    mkdir -p "$book/大纲"
+    printf '%s\n' '# 总纲' > "$book/大纲/总纲.md"
+    resolve_action "$book" 1 >/dev/null
+    node - "$book" <<'NODE'
+const fs=require('fs'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],file=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(file,'utf8'));
+const stale='node scripts/workflow-stage-controller.js advance --project-root . --workflow-id "stale" --result "stale.json" --json';
+delete task.stage_execution.result_packet_template;
+task.stage_execution.execution_command=stale;
+task.stage_execution.stage_completion_command=stale;
+task.stage_execution.after_write_action={command:stale};
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    node "$SCRIPT" next-candidates --project-root "$book" --compact --json > "$TMP_DIR/master-outline-review-contract.json"
+    node - "$TMP_DIR/master-outline-review-contract.json" <<'NODE'
+const assert=require('assert'),out=require(process.argv[2]),execution=out.stage_execution||{};
+assert.equal(out.status,'stage_execution_resume_ready');
+assert.equal(execution.stage_id,'master_outline_review');
+assert.deepEqual((execution.result_packet_template||{}).planning_revision_plan,{
+  version:'planning_revision_plan_v1',
+  summary:'REPLACE_WITH_READABLE_REVISION_SUMMARY',
+  requirements:['REPLACE_WITH_EXACT_REVISION_REQUIREMENT'],
+  targets:['大纲/总纲.md'],
+});
+assert.equal(execution.result_packet_template.host_execution_mode,'cooperative_interactive');
+assert.equal(execution.result_packet_template.runner_packet_path,'');
+assert.deepEqual(execution.result_packet_template.memory_read_receipt,execution.memory_context.memory_read_receipt);
+const command=`node scripts/workflow-state-machine.js apply-result --project-root . --workflow-id ${JSON.stringify(out.workflow_id)} --result ${JSON.stringify(execution.expected_result_packet)} --compact --json`;
+assert.equal(execution.execution_command,command);
+assert.equal(execution.stage_completion_command,command);
+assert.equal((execution.after_write_action||{}).command,command);
+NODE
+}
+
+@test "failed planning review rejects a missing or unsafe revision plan without starting a writer" {
+    node - "$REPO/scripts/lib/long-planning-revision.js" "$TMP_DIR" <<'NODE'
+const assert=require('assert'),fs=require('fs'),path=require('path');
+const api=require(process.argv[2]),root=process.argv[3];
+fs.mkdirSync(path.join(root,'大纲'),{recursive:true});fs.writeFileSync(path.join(root,'大纲/总纲.md'),'# 总纲\n');
+const task={workflow_id:'wf-plan',current_stage:'master_outline_review',stage_execution:{stage_id:'master_outline_review'}};
+const base={workflow_id:'wf-plan',stage_id:'master_outline_review',step_status:'failed',verification_result:'failed',lifecycle_transition_request:{action:'return',target:'master_outline'}};
+assert.equal(api.validatePlanningRevisionPlan(root,task,base).status,'blocked_long_planning_revision_plan_missing');
+assert.equal(api.validatePlanningRevisionPlan(root,task,{...base,planning_revision_plan:{version:'planning_revision_plan_v1',summary:'修订摘要',requirements:['修订要求'],targets:['../总纲.md']}}).status,'blocked_long_planning_revision_plan_invalid');
+assert.equal(api.validatePlanningRevisionPlan(root,task,{...base,planning_revision_plan:{version:'planning_revision_plan_v1',summary:'修订摘要',requirements:['修订要求'],targets:['大纲/*.md']}}).status,'blocked_long_planning_revision_plan_invalid');
+assert.equal(api.validatePlanningRevisionPlan(root,task,{...base,planning_revision_plan:{version:'planning_revision_plan_v1',summary:'修订摘要',requirements:['修订要求'],targets:['大纲/其他.md']}}).status,'blocked_long_planning_revision_target_mismatch');
+assert.equal(api.validatePlanningRevisionPlan(root,task,{...base,planning_revision_plan:{version:'planning_revision_plan_v1',summary:{text:'修订摘要'},requirements:['修订要求'],targets:['大纲/总纲.md']}}).status,'blocked_long_planning_revision_plan_invalid');
+assert.equal(api.validatePlanningRevisionPlan(root,task,{...base,planning_revision_plan:{version:'planning_revision_plan_v1',summary:'修订摘要',requirements:[{text:'修订要求'}],targets:['大纲/总纲.md']}}).status,'blocked_long_planning_revision_plan_invalid');
+NODE
+}
+
+@test "runtime reconciliation persists the cooperative long review contract and retires a stale packet" {
+    local book="$TMP_DIR/reconcile-master-review-contract"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续旧长篇" --json >/dev/null
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+    mkdir -p "$book/大纲"
+    printf '%s\n' '# 总纲' > "$book/大纲/总纲.md"
+    resolve_action "$book" 1 >/dev/null
+    local workflow_id
+    workflow_id="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")"
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],file=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(file,'utf8')),execution=task.stage_execution;
+const stale='node scripts/workflow-stage-controller.js advance --project-root . --workflow-id "stale" --result "stale.json" --json';
+delete execution.result_packet_template;
+execution.execution_command=stale;
+execution.stage_completion_command=stale;
+execution.after_write_action={command:stale};
+const staleAttempt='sa-stale-master-outline-review',packet=execution.expected_result_packet;
+task.stage_attempt_history=[...(task.stage_attempt_history||[]),{stage_id:'master_outline_review',stage_attempt_id:staleAttempt,work_unit_id:'wu-stale-master-outline-review',status:'failed',expected_result_packet:packet,failed_result_packet:packet}];
+fs.mkdirSync(path.dirname(path.join(root,packet)),{recursive:true});
+fs.writeFileSync(path.join(root,packet),JSON.stringify({workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:'master_outline_review',stage_attempt_id:staleAttempt,work_unit_id:'wu-stale-master-outline-review',memory_read_receipt:{contract_digest:'sha256:stale',memory_revision:'sha256:stale',packet_digest:'sha256:stale'}},null,2)+'\n');
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:cooperative-contract --json > "$TMP_DIR/reconcile-master-review-contract.json"
+    node - "$TMP_DIR/reconcile-master-review-contract.json" "$book" <<'NODE'
+const assert=require('assert'),fs=require('fs'),path=require('path'),out=require(process.argv[2]),root=process.argv[3],task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root),execution=task.stage_execution||{},template=execution.result_packet_template||{};
+assert.equal(out.status,'runtime_reconciled');
+assert.equal((out.stale_stage_result_retired||{}).status,'accepted_stage_result_retired');
+assert.equal(fs.existsSync(path.join(root,execution.expected_result_packet)),false);
+assert.equal(fs.existsSync(path.join(root,out.stale_stage_result_retired.accepted_result_packet)),true);
+assert.deepEqual(template.memory_read_receipt,execution.memory_context.memory_read_receipt);
+assert.equal(template.host_execution_mode,'cooperative_interactive');
+assert.equal(template.runner_packet_path,'');
+const command=`node scripts/workflow-state-machine.js apply-result --project-root . --workflow-id ${JSON.stringify(task.workflow_id)} --result ${JSON.stringify(execution.expected_result_packet)} --compact --json`;
+assert.equal(execution.execution_command,command);
+assert.equal(execution.stage_completion_command,command);
+assert.equal((execution.after_write_action||{}).command,command);
+NODE
+}
+
+@test "runtime reconciliation rolls back stale packet retirement when task persistence fails" {
+    local book="$TMP_DIR/reconcile-retirement-rollback"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续旧长篇" --json >/dev/null
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+    mkdir -p "$book/大纲"
+    printf '%s\n' '# 总纲' > "$book/大纲/总纲.md"
+    resolve_action "$book" 1 >/dev/null
+    local workflow_id
+    workflow_id="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")"
+    node - "$book" "$TMP_DIR/reconcile-retirement-rollback-baseline.json" <<'NODE'
+const fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],baselineFile=process.argv[3],file=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(file,'utf8')),execution=task.stage_execution;
+const staleAttempt='sa-stale-persist-failure',packet=execution.expected_result_packet;
+task.stage_attempt_history=[...(task.stage_attempt_history||[]),{stage_id:task.current_stage,stage_attempt_id:staleAttempt,work_unit_id:'wu-stale-persist-failure',status:'failed',expected_result_packet:packet,failed_result_packet:packet}];
+fs.mkdirSync(path.dirname(path.join(root,packet)),{recursive:true});
+fs.writeFileSync(path.join(root,packet),JSON.stringify({workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:task.current_stage,stage_attempt_id:staleAttempt,work_unit_id:'wu-stale-persist-failure'},null,2)+'\n');
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+fs.writeFileSync(baselineFile,JSON.stringify({task_text:fs.readFileSync(file,'utf8'),packet_text:fs.readFileSync(path.join(root,packet),'utf8'),packet}));
+NODE
+
+    run env NOVEL_ASSISTANT_TEST_FAIL_RECONCILE_PERSIST=1 node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:reconcile-rollback --json
+    [ "$status" -eq 2 ] || { echo "$output"; false; }
+    [[ "$output" == *'blocked_runtime_reconcile_persist_failed'* ]]
+    node - "$book" "$TMP_DIR/reconcile-retirement-rollback-baseline.json" <<'NODE'
+const assert=require('assert'),fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],baseline=require(process.argv[3]),file=fixture.focusedTaskFile(root),task=fixture.readFocusedTask(root);
+assert.equal(fs.readFileSync(file,'utf8'),baseline.task_text);
+assert.equal(fs.readFileSync(path.join(root,baseline.packet),'utf8'),baseline.packet_text);
+const attempt=(task.stage_attempt_history||[]).find(item=>item.stage_attempt_id==='sa-stale-persist-failure');
+assert.equal(attempt.failed_result_packet,baseline.packet);
+NODE
+}
+
+@test "unsafe failed planning review does not advertise the missing-plan restart command" {
+    book="$TMP_DIR/unsafe-planning-review"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续当前长篇" --json >/dev/null
+    advance_long_write_stage "$book"; advance_long_write_stage "$book"; advance_long_write_stage "$book"
+    mkdir -p "$book/大纲"; printf '%s\n' '# 总纲旧稿' > "$book/大纲/总纲.md"
+    resolve_action "$book" 1 >/dev/null
+    run apply_long_write_v2_result "$book" "" failed failed "" unsafe_planning_revision_plan
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_long_planning_revision_plan_invalid'* ]]
+    [[ "$output" != *'recovery_command'* ]]
+    [[ "$output" != *'reconcile-runtime'* ]]
+}
+
+@test "failed volume outline review freezes the accepted predecessor target before confirmation" {
+    book="$TMP_DIR/volume-plan-return"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续当前长篇" --json >/dev/null
+    for _ in 1 2 3 4; do advance_long_write_stage "$book"; done
+    mkdir -p "$book/大纲/第1卷"
+    printf '%s\n' '# 第一卷卷纲' > "$book/大纲/第1卷/卷纲.md"
+    resolve_action "$book" 1 >/dev/null
+    apply_long_write_v2_result "$book" "" completed pass "" "" "" "大纲/第1卷/卷纲.md" >/dev/null
+    resolve_action "$book" 1 >/dev/null
+    apply_long_write_v2_result "$book" "" failed failed > "$TMP_DIR/volume-plan-return.json"
+    node - "$TMP_DIR/volume-plan-return.json" <<'NODE'
+const out=require(process.argv[2]),task=out.task;
+if(task.current_stage!=='volume_outline'||task.stage_execution||task.planning_revision?.target_authority!=='accepted_predecessor_result') throw new Error(JSON.stringify(out));
+if(JSON.stringify(task.planning_revision?.plan?.targets)!==JSON.stringify(['大纲/第1卷/卷纲.md'])) throw new Error(JSON.stringify(task.planning_revision));
+NODE
+    resolve_action "$book" 1 >/dev/null
+    node - "$book" <<'NODE'
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[2]),execution=task.stage_execution||{};
+if(execution.stage_id!=='volume_outline'||execution.success_transition?.target!=='volume_outline_review') throw new Error(JSON.stringify(execution));
+if(JSON.stringify(execution.canonical_write_set)!==JSON.stringify(['大纲/第1卷/卷纲.md'])||execution.planning_targets?.[0]?.canonical!=='大纲/第1卷/卷纲.md') throw new Error(JSON.stringify(execution));
+NODE
+}
+
+@test "master and volume planning finalizer atomically advance to their exact review and replay idempotently" {
+    finalizer="$REPO/scripts/long-planning-stage-finalize.js"
+    for kind in master volume; do
+        book="$TMP_DIR/finalize-$kind"
+        node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续当前长篇" --json >/dev/null
+        if [ "$kind" = master ]; then
+            advance_long_write_stage "$book"
+            advance_long_write_stage "$book"
+            advance_long_write_stage "$book"
+            mkdir -p "$book/大纲"
+            printf '%s\n' '# 总纲旧稿' > "$book/大纲/总纲.md"
+            resolve_action "$book" 1 >/dev/null
+            apply_long_write_v2_result "$book" "" failed failed >/dev/null
+            mkdir -p "$book/追踪/story-system"
+            printf '%s\n' '{"schemaVersion":"1.0.0","mode":"strict"}' > "$book/追踪/story-system/write-policy.json"
+        else
+            for _ in 1 2 3 4; do advance_long_write_stage "$book"; done
+            mkdir -p "$book/大纲/第1卷"
+            printf '%s\n' '# 卷纲旧稿' > "$book/大纲/第1卷/卷纲.md"
+            resolve_action "$book" 1 >/dev/null
+            apply_long_write_v2_result "$book" "" completed pass "" "" "" "大纲/第1卷/卷纲.md" >/dev/null
+            mkdir -p "$book/追踪/story-system"
+            printf '%s\n' '{"schemaVersion":"1.0.0","mode":"strict"}' > "$book/追踪/story-system/write-policy.json"
+            resolve_action "$book" 1 >/dev/null
+            apply_long_write_v2_result "$book" "" failed failed >/dev/null
+        fi
+        resolve_action "$book" 1 >/dev/null
+        node - "$book" "$kind" <<'NODE'
+const fs=require('fs'),path=require('path'),root=process.argv[2],kind=process.argv[3];
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root),pair=task.stage_execution.planning_targets[0];
+const execution=task.stage_execution||{},template=execution.result_packet_template||{};
+if(!String(execution.execution_command||'').includes('long-planning-stage-finalize.js')||String(execution.execution_command||'').includes('workflow-state-machine.js apply-result')) throw new Error(JSON.stringify(execution));
+if(template.host_execution_mode!=='cooperative_interactive'||template.runner_packet_path!=='') throw new Error(JSON.stringify(template));
+fs.writeFileSync(path.join(root,pair.staged),kind==='master'?'# 总纲修订稿\n':'# 卷纲修订稿\n');
+if(kind==='master') {
+  const runnerRel=`${task.task_dir}/runner-packets/${execution.stage_id}.managed.run.json`,runnerFile=path.join(root,runnerRel);
+  fs.mkdirSync(path.dirname(runnerFile),{recursive:true});
+  fs.writeFileSync(runnerFile,JSON.stringify({workflow_id:task.workflow_id,stage_id:execution.stage_id,stage_attempt_id:execution.stage_attempt_id,work_unit_id:execution.work_unit_id,run_id:'run-master-planning-managed',expected_result_packet:execution.expected_result_packet,stage_contract:{write_set:execution.write_set,canonical_write_set:execution.canonical_write_set},memory_context:execution.memory_context||null},null,2));
+  task.runtime_guard=task.runtime_guard||{};task.runtime_guard.last_runner_attempt={workflow_id:task.workflow_id,stage_id:execution.stage_id,stage_attempt_id:execution.stage_attempt_id,work_unit_id:execution.work_unit_id,run_id:'run-master-planning-managed',runner_packet_path:runnerRel,expected_result_packet:execution.expected_result_packet};
+  fs.writeFileSync(path.join(root,task.task_dir,'task.json'),JSON.stringify(task,null,2)+'\n');
+}
+NODE
+        node "$finalizer" --project-root "$book" --workflow-id "$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")" --apply --json > "$TMP_DIR/finalize-$kind.json" || { cat "$TMP_DIR/finalize-$kind.json"; false; }
+        if [ "$kind" = master ]; then
+            result_packet="$(node -e "process.stdout.write(require(process.argv[1]).result_packet)" "$TMP_DIR/finalize-$kind.json")"
+            node "$SCRIPT" apply-result --project-root "$book" --workflow-id "$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")" --result "$book/$result_packet" --json > "$TMP_DIR/managed-master-apply.json" || { cat "$TMP_DIR/managed-master-apply.json"; false; }
+        fi
+        node - "$TMP_DIR/finalize-$kind.json" "$book" "$kind" <<'NODE'
+const fs=require('fs'),path=require('path'),out=require(process.argv[2]),root=process.argv[3],kind=process.argv[4];
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root),review=kind==='master'?'master_outline_review':'volume_outline_review',canonical=kind==='master'?'大纲/总纲.md':'大纲/第1卷/卷纲.md';
+const expectedStatus=kind==='master'?'long_planning_result_ready':'long_planning_applied';
+if(out.status!==expectedStatus||task.current_stage!==review) throw new Error(JSON.stringify({out,current:task.current_stage}));
+if(kind==='master'&&out.host_execution_mode!=='managed_runner') throw new Error(JSON.stringify(out));
+const packet=require(path.join(root,out.result_packet));
+if(packet.stage_id!==(kind==='master'?'master_outline':'volume_outline')||packet.next_stage_id!==review||packet.lifecycle_transition_request?.target!==(kind==='master'?'master_outline':'volume_outline')) throw new Error(JSON.stringify(packet));
+if(!fs.readFileSync(path.join(root,canonical),'utf8').includes('修订稿')) throw new Error('canonical target was not committed');
+NODE
+        node "$finalizer" --project-root "$book" --workflow-id "$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")" --apply --json > "$TMP_DIR/replay-$kind.json"
+        node - "$TMP_DIR/replay-$kind.json" <<'NODE'
+const out=require(process.argv[2]);if(out.status!=='long_planning_already_applied'||out.reused_accepted_result!==true) throw new Error(JSON.stringify(out));
+NODE
+    done
+}
+
+@test "confirmed planning revision fails closed when the frozen plan digest drifts" {
+    book="$TMP_DIR/planning-digest-drift"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续当前长篇" --json >/dev/null
+    advance_long_write_stage "$book"; advance_long_write_stage "$book"; advance_long_write_stage "$book"
+    mkdir -p "$book/大纲"; printf '%s\n' '# 总纲旧稿' > "$book/大纲/总纲.md"
+    resolve_action "$book" 1 >/dev/null
+    apply_long_write_v2_result "$book" "" failed failed >/dev/null
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path'),root=process.argv[2],fixture=require(process.env.WORKFLOW_TASK_FIXTURE),file=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(file,'utf8'));
+task.planning_revision.plan.summary='未经过菜单确认的替换摘要';
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+    run resolve_action "$book" 1
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    node - "$book" "$output" <<'NODE'
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[2]),out=JSON.parse(process.argv[3]),execution=task.stage_execution||{};
+if(out.status!=='stage_execution_contract_required'||execution.status!=='contract_blocked') throw new Error(JSON.stringify({out,execution}));
+if((execution.write_set||[]).length||(execution.canonical_write_set||[]).length||(execution.planning_targets||[]).length) throw new Error(`drift retained a writable planning contract: ${JSON.stringify(execution)}`);
+NODE
+}
+
+@test "current review missing-plan result uses urgent invalid-result recovery without mutating the outline" {
+    book="$TMP_DIR/legacy-review-plan-restart"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续旧长篇" --json >/dev/null
+    advance_long_write_stage "$book"; advance_long_write_stage "$book"; advance_long_write_stage "$book"
+    mkdir -p "$book/大纲"; printf '%s\n' '# 不得改动的总纲' > "$book/大纲/总纲.md"
+    before="$(shasum -a 256 "$book/大纲/总纲.md" | awk '{print $1}')"
+    resolve_action "$book" 1 >/dev/null
+    run apply_long_write_v2_result "$book" "" failed failed "" planning_revision_plan
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_long_planning_revision_plan_missing'* ]]
+    [[ "$output" == *'reconcile-runtime'* ]]
+    [[ "$output" == *'--session-id'* ]]
+    workflow_id="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")"
+    node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:legacy-plan --json > "$TMP_DIR/legacy-plan-restart.json"
+    node - "$TMP_DIR/legacy-plan-restart.json" "$book" <<'NODE'
+const fs=require('fs'),path=require('path'),out=require(process.argv[2]),root=process.argv[3],task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root),execution=task.stage_execution||{};
+const retired=out.stale_stage_result_retired||{};
+if(out.status!=='runtime_reconciled'||retired.status!=='invalid_stage_result_contract_retired'||task.current_stage!=='master_outline_review'||execution.stage_id!=='master_outline_review'||execution.status!=='running') throw new Error(JSON.stringify({out,task}));
+if((execution.write_set||[]).length||(execution.canonical_write_set||[]).length||(execution.planning_targets||[]).length) throw new Error(JSON.stringify(execution));
+if(execution.legacy_review_restart) throw new Error(`urgent recovery must not masquerade as legacy restart: ${JSON.stringify(execution.legacy_review_restart)}`);
+if(!retired.accepted_result_packet||!fs.existsSync(path.join(root,retired.accepted_result_packet))) throw new Error(JSON.stringify(out));
+NODE
+    after="$(shasum -a 256 "$book/大纲/总纲.md" | awk '{print $1}')"
+    [ "$before" = "$after" ]
+}
+
+@test "legacy review already returned to producer restarts the same review read only" {
+    book="$TMP_DIR/legacy-returned-producer-plan-restart"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续旧长篇" --json >/dev/null
+    advance_long_write_stage "$book"; advance_long_write_stage "$book"; advance_long_write_stage "$book"
+    mkdir -p "$book/大纲"; printf '%s\n' '# 不得改动的总纲' > "$book/大纲/总纲.md"
+    before="$(shasum -a 256 "$book/大纲/总纲.md" | awk '{print $1}')"
+    resolve_action "$book" 1 >/dev/null
+    apply_long_write_v2_result "$book" "" failed failed >/dev/null
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path'),root=process.argv[2],fixture=require(process.env.WORKFLOW_TASK_FIXTURE),taskFile=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const reviewFile=path.join(root,task.task_dir,'result-packets','master_outline_review.result.json'),review=JSON.parse(fs.readFileSync(reviewFile,'utf8'));
+delete review.planning_revision_plan;
+fs.writeFileSync(reviewFile,JSON.stringify(review,null,2)+'\n');
+delete task.planning_revision;
+task.pending_action=null;
+task.current_stage='master_outline'; task.current_step='master_outline'; task.status='running';
+task.machine.last_transition='runtime_reconciled';
+task.stage_execution={
+  status:'running',stage_attempt_id:'sa-legacy-master-revision',work_unit_id:'wu-legacy-master-revision',
+  stage_id:'master_outline',step_id:'master_outline',expected_result_packet:`${task.task_dir}/result-packets/master_outline.result.json`,
+  write_set:['大纲/**','追踪/**'],canonical_write_set:[],planning_targets:[],revision_targets:[]
+};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+    workflow_id="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")"
+    node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:legacy-returned-plan --json > "$TMP_DIR/legacy-returned-plan-restart.json"
+    node - "$TMP_DIR/legacy-returned-plan-restart.json" "$book" <<'NODE'
+const fs=require('fs'),path=require('path'),out=require(process.argv[2]),root=process.argv[3],task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root),execution=task.stage_execution||{};
+if(out.status!=='long_planning_review_restarted_read_only'||task.current_stage!=='master_outline_review'||execution.stage_id!=='master_outline_review'||execution.status!=='running') throw new Error(JSON.stringify({out,task}));
+if((execution.write_set||[]).length||(execution.canonical_write_set||[]).length||(execution.planning_targets||[]).length) throw new Error(JSON.stringify(execution));
+const graph=task.lifecycle_graph||{},nodes=graph.nodes||[],producer=nodes.find((node)=>node.id==='master_outline')||{},review=nodes.find((node)=>node.id==='master_outline_review')||{},reviewIndex=nodes.findIndex((node)=>node.id==='master_outline_review');
+if(graph.current_node!=='master_outline_review'||JSON.stringify(graph.asset_target)!==JSON.stringify(review.asset_target)) throw new Error(`lifecycle graph did not follow restarted review: ${JSON.stringify(graph)}`);
+if(producer.status!=='accepted'||review.status!=='draft') throw new Error(`producer/review status mismatch: ${JSON.stringify({producer,review})}`);
+if(!(graph.completed_nodes||[]).includes('master_outline')||(graph.completed_nodes||[]).includes('master_outline_review')) throw new Error(`completed nodes mismatch: ${JSON.stringify(graph.completed_nodes)}`);
+if(JSON.stringify(graph.invalidated_nodes)!==JSON.stringify(nodes.slice(reviewIndex).map((node)=>node.id))) throw new Error(`invalidated nodes mismatch: ${JSON.stringify(graph.invalidated_nodes)}`);
+if((graph.review_results||{}).master_outline_review) throw new Error(`restart forged an accepted review receipt: ${JSON.stringify(graph.review_results)}`);
+if(!(task.machine.completed_stages||[]).includes('master_outline')||task.machine.remaining_stages[0]!=='master_outline_review') throw new Error(`machine mismatch: ${JSON.stringify(task.machine)}`);
+if(task.lifecycle.status!=='active'||task.unit_lifecycle.current_stage!=='master_outline_review'||task.unit_lifecycle.current_role!=='quality_gate'||!(task.unit_lifecycle.completed_roles||[]).includes('macro_contract')) throw new Error(`lifecycle mismatch: ${JSON.stringify({lifecycle:task.lifecycle,unit:task.unit_lifecycle})}`);
+const producerAttempt=(task.stage_attempt_history||[]).find((item)=>item.stage_attempt_id==='sa-legacy-master-revision');
+if(!producerAttempt||producerAttempt.status!=='rejected') throw new Error(JSON.stringify(task.stage_attempt_history));
+if(!out.archived_result_packet||!fs.existsSync(path.join(root,out.archived_result_packet))) throw new Error(JSON.stringify(out));
+NODE
+    node - "$book" <<'NODE'
+const fs=require('fs'),root=process.argv[2],fixture=require(process.env.WORKFLOW_TASK_FIXTURE),file=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(file,'utf8'));
+const graph=task.lifecycle_graph,nodes=graph.nodes||[],producer=nodes.find((node)=>node.id==='master_outline'),review=nodes.find((node)=>node.id==='master_outline_review');
+graph.current_node='master_outline';graph.asset_target={...producer.asset_target};graph.completed_nodes=(graph.completed_nodes||[]).filter((id)=>id!=='master_outline');
+producer.status='invalidated';review.status='invalidated';task.machine.completed_stages=(task.machine.completed_stages||[]).filter((id)=>id!=='master_outline');
+task.unit_lifecycle.completed_roles=(task.unit_lifecycle.completed_roles||[]).filter((role)=>role!=='macro_contract');
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+    node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:legacy-returned-plan --json > "$TMP_DIR/legacy-partial-plan-repaired.json"
+    node - "$TMP_DIR/legacy-partial-plan-repaired.json" "$book" <<'NODE'
+const out=require(process.argv[2]),task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[3]),graph=task.lifecycle_graph||{},nodes=graph.nodes||[],producer=nodes.find((node)=>node.id==='master_outline')||{},review=nodes.find((node)=>node.id==='master_outline_review')||{};
+if(out.status!=='long_planning_review_restart_state_reconciled'||graph.current_node!=='master_outline_review'||producer.status!=='accepted'||review.status!=='draft') throw new Error(JSON.stringify({out,task}));
+if(!(task.machine.completed_stages||[]).includes('master_outline')||!(task.unit_lifecycle.completed_roles||[]).includes('macro_contract')) throw new Error(JSON.stringify({machine:task.machine,unit:task.unit_lifecycle}));
+NODE
+    task_file="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).focusedTaskFile(process.argv[1]))" "$book")"
+    node - "$task_file" <<'NODE'
+const fs=require('fs'),file=process.argv[2],task=JSON.parse(fs.readFileSync(file,'utf8')),execution=task.stage_execution||{};
+for(const holder of [execution.memory_context&&execution.memory_context.memory_contract,execution.stage_context_packet&&execution.stage_context_packet.memory_contract]) {
+  if(holder&&holder.query) { delete holder.query.stage_attempt_id; delete holder.query.work_unit_id; }
+}
+for(const receipt of [execution.memory_context&&execution.memory_context.memory_read_receipt,execution.stage_context_packet&&execution.stage_context_packet.memory_read_receipt,(execution.result_packet_template||{}).memory_read_receipt]) {
+  if(receipt) { delete receipt.stage_attempt_id; delete receipt.work_unit_id; }
+}
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+    node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:legacy-returned-plan --json > "$TMP_DIR/legacy-partial-plan-replay.json"
+    node - "$TMP_DIR/legacy-partial-plan-replay.json" "$book" <<'NODE'
+const out=require(process.argv[2]),task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[3]),execution=task.stage_execution||{},contract=((execution.memory_context||{}).memory_contract||{}).query||{},receipt=(execution.memory_context||{}).memory_read_receipt||{};
+if(out.status!=='long_planning_review_restart_state_reconciled'||out.memory_context_refreshed!==true) throw new Error(JSON.stringify(out));
+if(contract.stage_attempt_id!==execution.stage_attempt_id||contract.work_unit_id!==execution.work_unit_id) throw new Error(JSON.stringify({contract,execution}));
+if(receipt.stage_attempt_id!==execution.stage_attempt_id||receipt.work_unit_id!==execution.work_unit_id) throw new Error(JSON.stringify({receipt,execution}));
+NODE
+    stable_hash="$(shasum -a 256 "$task_file" | awk '{print $1}')"
+    node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:legacy-returned-plan --json > "$TMP_DIR/legacy-partial-plan-stable.json"
+    node - "$TMP_DIR/legacy-partial-plan-stable.json" <<'NODE'
+const out=require(process.argv[2]);if(out.status!=='long_planning_review_already_restarted_read_only') throw new Error(JSON.stringify(out));
+NODE
+    [ "$stable_hash" = "$(shasum -a 256 "$task_file" | awk '{print $1}')" ]
+    after="$(shasum -a 256 "$book/大纲/总纲.md" | awk '{print $1}')"
+    [ "$before" = "$after" ]
+}
+
+@test "legacy planning review restart keeps the source result when the replacement attempt cannot start" {
+    book="$TMP_DIR/legacy-review-restart-atomic"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续旧长篇" --json >/dev/null
+    advance_long_write_stage "$book"; advance_long_write_stage "$book"; advance_long_write_stage "$book"
+    mkdir -p "$book/大纲"; printf '%s\n' '# 不得改动的总纲' > "$book/大纲/总纲.md"
+    resolve_action "$book" 1 >/dev/null
+    apply_long_write_v2_result "$book" "" failed failed >/dev/null
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path'),root=process.argv[2],fixture=require(process.env.WORKFLOW_TASK_FIXTURE),taskFile=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const reviewFile=path.join(root,task.task_dir,'result-packets','master_outline_review.result.json'),review=JSON.parse(fs.readFileSync(reviewFile,'utf8'));
+delete review.planning_revision_plan;fs.writeFileSync(reviewFile,JSON.stringify(review,null,2)+'\n');
+delete task.planning_revision;task.pending_action=null;task.current_stage='master_outline';task.current_step='master_outline';task.status='running';task.machine.last_transition='runtime_reconciled';
+task.stage_execution={status:'running',stage_attempt_id:'sa-legacy-atomic-revision',work_unit_id:'wu-legacy-atomic-revision',stage_id:'master_outline',step_id:'master_outline',expected_result_packet:`${task.task_dir}/result-packets/master_outline.result.json`,write_set:['大纲/**','追踪/**'],canonical_write_set:[],planning_targets:[],revision_targets:[]};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+    archive_dir="$(node -e "const t=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]);process.stdout.write(t.task_dir+'/audit/archive/legacy-planning-review')" "$book")"
+    mkdir -p "$book/$archive_dir"
+    chmod 500 "$book/$archive_dir"
+    workflow_id="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")"
+    source_result="$(node -e "const t=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]);process.stdout.write(t.task_dir+'/result-packets/master_outline_review.result.json')" "$book")"
+    source_hash="$(shasum -a 256 "$book/$source_result" | awk '{print $1}')"
+
+    run node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:atomic-restart --json
+    chmod 700 "$book/$archive_dir"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'EACCES'* || "$output" == *'permission denied'* ]]
+    [ -f "$book/$source_result" ]
+    [ "$source_hash" = "$(shasum -a 256 "$book/$source_result" | awk '{print $1}')" ]
 }
 
 @test "detail outline quality pass with matching identity advances to chapter brief" {
     book="$TMP_DIR/detail-quality-pass"
+    mkdir -p "$book/大纲/第1卷"
+    printf '%s\n' '# 第1卷卷纲' '第001章完成线索确认。' > "$book/大纲/第1卷/卷纲.md"
     prepare_detail_outline_review "$book"
+    node "$SCRIPT" next-candidates --project-root "$book" --compact --json >/dev/null
+    node - "$book" <<'NODE'
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[2]);
+const targets=(task.stage_execution||{}).review_targets||[];
+if((task.stage_execution||{}).result_contract!=='detail_outline_quality_v2') throw new Error(JSON.stringify(task.stage_execution));
+if(targets.length!==1||targets[0].outline_path!=='大纲/第1卷/细纲_第001章.md'||!/^[0-9a-f]{64}$/.test(targets[0].outline_sha256)) throw new Error(JSON.stringify(targets));
+const hint=String((task.stage_execution||{}).resume_hint||'');
+if(!hint||/undefined/.test(hint)||/第\s*章/.test(hint)) throw new Error(JSON.stringify({resume_hint:hint}));
+NODE
     apply_detail_outline_quality_result "$book" pass > "$TMP_DIR/detail-quality-pass.json"
 
     node - "$TMP_DIR/detail-quality-pass.json" <<'NODE'
@@ -1260,6 +2461,10 @@ const fs=require('fs');
 const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 if(!['advanced','stage_started'].includes(out.status) || out.task.current_stage!=='chapter_brief') throw new Error(JSON.stringify(out));
 if(out.task.machine.last_transition!=='lifecycle_node_completed') throw new Error(JSON.stringify(out.task.machine));
+const accepted=out.task.accepted_detail_outline_targets||[];
+const chapterTargets=(out.task.stage_execution||{}).chapter_targets||[];
+if(accepted.length!==1||accepted[0].outline_path!=='大纲/第1卷/细纲_第001章.md') throw new Error(JSON.stringify(accepted));
+if(JSON.stringify(chapterTargets)!==JSON.stringify(accepted)) throw new Error(JSON.stringify(out.task.stage_execution));
 NODE
 }
 
@@ -1275,11 +2480,403 @@ if(!['advanced','stage_started'].includes(out.status) || out.task.current_stage!
 NODE
 }
 
+@test "active chapter brief exposes a frozen receipt template and exact completion command" {
+    local book="$TMP_DIR/chapter-brief-contract"
+    prepare_detail_outline_review "$book"
+    apply_detail_outline_quality_result "$book" pass >/dev/null
+    node - "$book" <<'NODE'
+const fs=require('fs'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],file=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(file,'utf8'));
+const stale='node scripts/workflow-stage-controller.js advance --project-root . --workflow-id "stale" --result "stale.json" --json';
+delete task.stage_execution.result_packet_template;
+task.stage_execution.execution_command=stale;
+task.stage_execution.stage_completion_command=stale;
+task.stage_execution.after_write_action={command:stale};
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    node "$SCRIPT" next-candidates --project-root "$book" --compact --json > "$TMP_DIR/chapter-brief-contract.json"
+    node - "$TMP_DIR/chapter-brief-contract.json" <<'NODE'
+const assert=require('assert'),out=require(process.argv[2]),execution=out.stage_execution||{},template=execution.result_packet_template||{};
+assert.equal(out.status,'stage_execution_resume_ready');
+assert.equal(execution.stage_id,'chapter_brief');
+assert.equal(template.workflow_id,out.workflow_id);
+assert.equal(template.workflow_type,'long_write');
+assert.equal(template.stage_id,'chapter_brief');
+assert.equal(template.result_packet_path,execution.expected_result_packet);
+assert.equal(template.host_execution_mode,'cooperative_interactive');
+assert.equal(template.runner_packet_path,'');
+assert.deepEqual(template.memory_read_receipt,execution.memory_context.memory_read_receipt);
+for(const field of ['outputs','changed_files','evidence','checkpoint_state','lifecycle_transition_request']) assert.ok(Object.hasOwn(template,field),field);
+const command=`node scripts/workflow-state-machine.js apply-result --project-root . --workflow-id ${JSON.stringify(out.workflow_id)} --result ${JSON.stringify(execution.expected_result_packet)} --compact --json`;
+assert.equal(execution.execution_command,command);
+assert.equal(execution.stage_completion_command,command);
+assert.equal((execution.after_write_action||{}).command,command);
+NODE
+}
+
+@test "brief review compactness return keeps one durable producer continuation" {
+    local book="$TMP_DIR/brief-review-return-continuation"
+    prepare_detail_outline_review "$book"
+    apply_detail_outline_quality_result "$book" pass >/dev/null
+
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2];
+const task=fixture.readFocusedTask(root),target=task.active_chapter_target;
+if(!target||!target.contract_path||task.current_stage!=='chapter_brief') throw new Error(JSON.stringify(task));
+fs.mkdirSync(path.dirname(path.join(root,target.contract_path)),{recursive:true});
+fs.writeFileSync(path.join(root,target.contract_path),`# 当前章 Brief\n\n- 目标字数：3200（合法区间 2880—3840）\n\n${'中性情节说明。'.repeat(520)}\n`);
+NODE
+    brief_path="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).active_chapter_target.contract_path)" "$book")"
+    apply_long_write_v2_result "$book" "" completed pass "" "" "" "$brief_path" >/dev/null
+    resolve_action "$book" 1 >/dev/null
+
+    apply_long_write_v2_result "$book" > "$TMP_DIR/brief-review-return-apply.json"
+    node - "$TMP_DIR/brief-review-return-apply.json" "$book" <<'NODE'
+const assert=require('assert'),out=require(process.argv[2]),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),task=fixture.readFocusedTask(process.argv[3]);
+assert.equal(out.current_stage,'chapter_brief');
+assert.equal(task.current_stage,'chapter_brief');
+assert.equal(task.stage_execution,null);
+assert.ok(task.pending_action,'review return must persist one producer continuation menu');
+assert.equal((task.pending_action.options||[]).length,4);
+assert.equal(task.machine.last_execution_event,'awaiting_review_repair');
+assert.equal((out.next_candidates||[]).length,4);
+assert.match(String((out.visible_response||{}).text||''),/Brief 约为目标正文的 \d+%/u);
+NODE
+
+    node "$SCRIPT" next-candidates --project-root "$book" --compact --json > "$TMP_DIR/brief-review-return-next.json"
+    node - "$TMP_DIR/brief-review-return-next.json" "$book" <<'NODE'
+const assert=require('assert'),out=require(process.argv[2]),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),task=fixture.readFocusedTask(process.argv[3]);
+const running=task.stage_execution&&task.stage_execution.status==='running';
+const pending=task.pending_action&&task.pending_action.status!=='resolved';
+assert.ok(running||pending,'durable authority must be resumable or expose a pending menu');
+if(!running) {
+  assert.equal((task.pending_action.options||[]).length,4);
+  assert.equal((out.next_candidates||[]).length,4);
+}
+assert.ok(out.status==='stage_execution_resume_ready'||(out.next_candidates||[]).length===4,'next-candidates must not return an empty continuation');
+assert.match(String((out.visible_response||{}).text||''),/Brief 约为目标正文的 \d+%/u);
+NODE
+}
+
+@test "compact running chapter brief projects one safe host target without durable snapshots" {
+    local book="$TMP_DIR/compact-running-chapter-brief"
+    prepare_detail_outline_review "$book"
+    apply_detail_outline_quality_result "$book" pass >/dev/null
+    prepare_long_chapter_v2_targets "$book" 4
+    node - "$book" <<'NODE'
+const fs=require('fs'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],file=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(file,'utf8'));
+const execution=task.stage_execution,targets=task.accepted_detail_outline_targets;
+execution.stage_id='chapter_brief';execution.step_id='chapter_brief';execution.host_execution_mode='cooperative_interactive';
+execution.chapter_target=targets[0];execution.chapter_targets=targets;execution.write_set=[targets[0].contract_path];
+execution.context_read_command=`node scripts/workflow-stage-context.js read-current --project-root . --workflow-id ${JSON.stringify(task.workflow_id)}`;
+execution.resume_hint='只读取当前阶段包，只修改冻结活动章，完成后执行阶段完成命令。';
+execution.canonical_write_set=[];
+execution.canonical_write_baseline={files:Object.fromEntries(Array.from({length:100},(_,i)=>[`canonical-${i}.md`,'sha256:'+'a'.repeat(64)]))};
+execution.write_audit_snapshot={files:Object.fromEntries(Array.from({length:100},(_,i)=>[`audit-${i}.md`,'sha256:'+'b'.repeat(64)]))};
+execution.write_snapshot={version:1,captured_at:'2026-08-05T00:00:00.000Z',authorized_write_set:execution.write_set,excluded_paths:['正文/**'],files:Object.fromEntries(Array.from({length:900},(_,i)=>[`正文/第${String(i+1).padStart(3,'0')}章.md`,'sha256:'+'c'.repeat(64)]))};
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    node "$SCRIPT" next-candidates --project-root "$book" --compact --json > "$TMP_DIR/compact-running-chapter-brief.json"
+    node - "$TMP_DIR/compact-running-chapter-brief.json" "$book" <<'NODE'
+const assert=require('assert'),fs=require('fs'),outFile=process.argv[2],root=process.argv[3],raw=fs.readFileSync(outFile),out=JSON.parse(raw),execution=out.stage_execution||{},template=execution.result_packet_template||{},durable=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root),saved=durable.stage_execution||{};
+assert.equal(out.status,'stage_execution_resume_ready');
+assert.ok(raw.byteLength<25*1024,`compact resume output too large: ${raw.byteLength} bytes`);
+for(const field of ['write_snapshot','canonical_write_baseline','write_audit_snapshot']) assert.equal(Object.hasOwn(execution,field),false,field);
+for(const field of ['stage_attempt_id','work_unit_id','expected_result_packet','write_set','chapter_target','context_read_command','execution_command','stage_completion_command','result_packet_template','resume_hint']) assert.ok(Object.hasOwn(execution,field),field);
+assert.equal(execution.execution_command,execution.stage_completion_command);
+assert.equal((execution.after_write_action||{}).command,execution.stage_completion_command);
+assert.deepEqual(execution.chapter_targets,[execution.chapter_target]);
+assert.deepEqual(template.chapter_targets,[execution.chapter_target]);
+assert.deepEqual(template.chapter_target,execution.chapter_target);
+assert.deepEqual(template.memory_read_receipt,(execution.memory_context||{}).memory_read_receipt);
+for(const field of ['outputs','changed_files','evidence','checkpoint_state','lifecycle_transition_request','result_write_set']) assert.ok(Object.hasOwn(template,field),field);
+assert.ok(saved.write_snapshot&&Object.keys(saved.write_snapshot.files||{}).length===900,'durable write_snapshot was removed');
+assert.ok(saved.canonical_write_baseline&&saved.write_audit_snapshot,'durable baselines were removed');
+assert.equal((saved.chapter_targets||[]).length,4,'durable pending chapter targets were shortened');
+NODE
+}
+
+@test "same-attempt packet with a stale frozen receipt requires one recovery command and is safely retired" {
+    local book="$TMP_DIR/chapter-brief-stale-receipt"
+    prepare_detail_outline_review "$book"
+    apply_detail_outline_quality_result "$book" pass >/dev/null
+    local workflow_id
+    workflow_id="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")"
+    node - "$book" "$TMP_DIR/chapter-brief-creative-baseline.txt" <<'NODE'
+const fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],baseline=process.argv[3],file=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(file,'utf8')),execution=task.stage_execution,packet=execution.expected_result_packet;
+const creative='大纲/第1卷/细纲_第001章.md';
+fs.writeFileSync(baseline,fs.readFileSync(path.join(root,creative)));
+fs.mkdirSync(path.dirname(path.join(root,packet)),{recursive:true});
+fs.writeFileSync(path.join(root,packet),JSON.stringify({
+  workflow_id:task.workflow_id,
+  workflow_type:'long_write',
+  stage_id:task.current_stage,
+  stage_attempt_id:execution.stage_attempt_id,
+  work_unit_id:execution.work_unit_id,
+  step_status:'completed',
+  host_execution_mode:'cooperative_interactive',
+  memory_read_receipt:{contract_digest:'sha256:stale',memory_revision:'sha256:stale',packet_digest:'sha256:stale'},
+},null,2)+'\n');
+NODE
+
+    node "$SCRIPT" next-candidates --project-root "$book" --compact --json > "$TMP_DIR/chapter-brief-stale-receipt-recovery.json"
+    node - "$TMP_DIR/chapter-brief-stale-receipt-recovery.json" <<'NODE'
+const assert=require('assert'),out=require(process.argv[2]);
+assert.equal(out.status,'stage_result_contract_recovery_ready');
+assert.equal(out.interaction_mode,'execute_command');
+assert.equal(out.presentation_allowed,false);
+assert.match(out.execution_command,/workflow-state-machine\.js reconcile-runtime/u);
+assert.equal(out.stage_execution,undefined);
+assert.equal(out.current_required_action,undefined);
+NODE
+
+    node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:stale-receipt --json > "$TMP_DIR/chapter-brief-stale-receipt-reconciled.json"
+    node - "$TMP_DIR/chapter-brief-stale-receipt-reconciled.json" "$book" "$TMP_DIR/chapter-brief-creative-baseline.txt" <<'NODE'
+const assert=require('assert'),fs=require('fs'),path=require('path'),out=require(process.argv[2]),root=process.argv[3],baseline=process.argv[4],task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root),execution=task.stage_execution;
+assert.equal(out.status,'runtime_reconciled');
+assert.equal((out.stale_stage_result_retired||{}).status,'invalid_stage_result_contract_retired');
+assert.equal(fs.existsSync(path.join(root,execution.expected_result_packet)),false);
+assert.equal(fs.existsSync(path.join(root,out.stale_stage_result_retired.accepted_result_packet)),true);
+assert.equal(fs.readFileSync(path.join(root,'大纲/第1卷/细纲_第001章.md'),'utf8'),fs.readFileSync(baseline,'utf8'));
+NODE
+
+    node "$SCRIPT" next-candidates --project-root "$book" --compact --json > "$TMP_DIR/chapter-brief-stale-receipt-resumed.json"
+    node - "$TMP_DIR/chapter-brief-stale-receipt-resumed.json" <<'NODE'
+const assert=require('assert'),out=require(process.argv[2]),execution=out.stage_execution||{};
+assert.equal(out.status,'stage_execution_resume_ready');
+assert.deepEqual(execution.result_packet_template.memory_read_receipt,execution.memory_context.memory_read_receipt);
+NODE
+}
+
+@test "same-attempt planning review packet with an invalid required schema is safely retired" {
+    local book="$TMP_DIR/master-review-invalid-plan-packet"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续当前长篇" --json >/dev/null
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+    mkdir -p "$book/大纲"
+    printf '%s\n' '# 总纲' > "$book/大纲/总纲.md"
+    resolve_action "$book" 1 >/dev/null
+    local workflow_id
+    workflow_id="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")"
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],task=fixture.readFocusedTask(root),execution=task.stage_execution,packet=execution.expected_result_packet;
+fs.mkdirSync(path.dirname(path.join(root,packet)),{recursive:true});
+fs.writeFileSync(path.join(root,packet),JSON.stringify({
+  ...(execution.result_packet_template||{}),
+  workflow_id:task.workflow_id,
+  workflow_type:'long_write',
+  stage_id:task.current_stage,
+  stage_attempt_id:execution.stage_attempt_id,
+  work_unit_id:execution.work_unit_id,
+  step_status:'failed',
+  verification_result:'failed',
+  planning_revision_plan:{version:'planning_revision_plan_v1',summary:{text:'错误类型'},requirements:['修订要求'],targets:['大纲/总纲.md']},
+},null,2)+'\n');
+NODE
+
+    node "$SCRIPT" next-candidates --project-root "$book" --compact --json > "$TMP_DIR/master-review-invalid-plan-recovery.json"
+    node - "$TMP_DIR/master-review-invalid-plan-recovery.json" <<'NODE'
+const assert=require('assert'),out=require(process.argv[2]);
+assert.equal(out.status,'stage_result_contract_recovery_ready');
+assert.match(out.execution_command,/reconcile-runtime/u);
+assert.equal(out.presentation_allowed,false);
+NODE
+    node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:invalid-plan --json > "$TMP_DIR/master-review-invalid-plan-reconciled.json"
+    node - "$TMP_DIR/master-review-invalid-plan-reconciled.json" "$book" <<'NODE'
+const assert=require('assert'),fs=require('fs'),path=require('path'),out=require(process.argv[2]),root=process.argv[3],task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+assert.equal(out.status,'runtime_reconciled');
+assert.equal(out.stale_stage_result_retired.status,'invalid_stage_result_contract_retired');
+assert.equal(out.stale_stage_result_retired.validation_status,'blocked_long_planning_revision_plan_invalid');
+assert.equal(fs.existsSync(path.join(root,task.stage_execution.expected_result_packet)),false);
+assert.equal(fs.existsSync(path.join(root,out.stale_stage_result_retired.accepted_result_packet)),true);
+NODE
+}
+
+@test "recorded accepted same-attempt packet is never offered to automatic retirement" {
+    local book="$TMP_DIR/master-review-accepted-packet-protected"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "继续当前长篇" --json >/dev/null
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+    advance_long_write_stage "$book"
+    mkdir -p "$book/大纲"
+    printf '%s\n' '# 总纲' > "$book/大纲/总纲.md"
+    resolve_action "$book" 1 >/dev/null
+    node - "$book" <<'NODE'
+const fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],file=fixture.focusedTaskFile(root),task=fixture.readFocusedTask(root),execution=task.stage_execution,packet=execution.expected_result_packet;
+fs.mkdirSync(path.dirname(path.join(root,packet)),{recursive:true});
+fs.writeFileSync(path.join(root,packet),JSON.stringify({workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:task.current_stage,stage_attempt_id:execution.stage_attempt_id,work_unit_id:execution.work_unit_id,step_status:'failed',verification_result:'failed',planning_revision_plan:{summary:{invalid:true}}},null,2)+'\n');
+task.stage_attempt_history=[...(task.stage_attempt_history||[]),{stage_id:task.current_stage,stage_attempt_id:execution.stage_attempt_id,work_unit_id:execution.work_unit_id,status:'completed',expected_result_packet:packet,accepted_result_packet:packet}];
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    node "$SCRIPT" next-candidates --project-root "$book" --compact --json > "$TMP_DIR/master-review-accepted-packet-protected.json"
+    node - "$TMP_DIR/master-review-accepted-packet-protected.json" "$book" <<'NODE'
+const assert=require('assert'),fs=require('fs'),path=require('path'),out=require(process.argv[2]),root=process.argv[3],task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+assert.equal(out.status,'stage_execution_resume_ready');
+assert.equal(fs.existsSync(path.join(root,task.stage_execution.expected_result_packet)),true);
+NODE
+}
+
+@test "same attempt can retire multiple different invalid packets into immutable versioned archives" {
+    local book="$TMP_DIR/chapter-brief-repeated-invalid"
+    prepare_detail_outline_review "$book"
+    apply_detail_outline_quality_result "$book" pass >/dev/null
+    local workflow_id
+    workflow_id="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")"
+
+    local first_archive=""
+    for marker in first second; do
+        node - "$book" "$marker" <<'NODE'
+const fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],marker=process.argv[3],task=fixture.readFocusedTask(root),execution=task.stage_execution,packet=execution.expected_result_packet;
+fs.mkdirSync(path.dirname(path.join(root,packet)),{recursive:true});
+fs.writeFileSync(path.join(root,packet),JSON.stringify({
+  workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:execution.stage_id,
+  stage_attempt_id:execution.stage_attempt_id,work_unit_id:execution.work_unit_id,
+  step_status:'completed',marker,
+  memory_read_receipt:{contract_digest:`sha256:${marker}`,memory_revision:`sha256:${marker}`,packet_digest:`sha256:${marker}`},
+},null,2)+'\n');
+NODE
+        node "$SCRIPT" next-candidates --project-root "$book" --compact --json > "$TMP_DIR/repeated-invalid-$marker-next.json"
+        node - "$TMP_DIR/repeated-invalid-$marker-next.json" <<'NODE'
+const assert=require('assert'),out=require(process.argv[2]);
+assert.equal(out.status,'stage_result_contract_recovery_ready');
+NODE
+        node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:repeated-invalid --json > "$TMP_DIR/repeated-invalid-$marker-reconcile.json"
+        if [ "$marker" = first ]; then
+            first_archive="$(node -e "process.stdout.write(require(process.argv[1]).stale_stage_result_retired.accepted_result_packet)" "$TMP_DIR/repeated-invalid-$marker-reconcile.json")"
+        fi
+    done
+
+    node - "$book" "$first_archive" "$TMP_DIR/repeated-invalid-second-reconcile.json" <<'NODE'
+const assert=require('assert'),fs=require('fs'),path=require('path'),root=process.argv[2],first=process.argv[3],secondOut=require(process.argv[4]),second=secondOut.stale_stage_result_retired.accepted_result_packet;
+assert.notEqual(first,second);
+for(const rel of [first,second]) {
+  assert.equal(fs.existsSync(path.join(root,rel)),true,rel);
+  assert.equal(fs.existsSync(path.join(root,`${rel}.manifest.json`)),true,`${rel}.manifest.json`);
+}
+assert.equal(JSON.parse(fs.readFileSync(path.join(root,first),'utf8')).marker,'first');
+assert.equal(JSON.parse(fs.readFileSync(path.join(root,second),'utf8')).marker,'second');
+NODE
+}
+
+@test "malformed or identity-less current packet is conservatively recoverable" {
+    for variant in malformed identityless; do
+        local book="$TMP_DIR/chapter-brief-$variant"
+        prepare_detail_outline_review "$book"
+        apply_detail_outline_quality_result "$book" pass >/dev/null
+        local workflow_id
+        workflow_id="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")"
+        node - "$book" "$variant" <<'NODE'
+const fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],variant=process.argv[3],task=fixture.readFocusedTask(root),packet=task.stage_execution.expected_result_packet;
+fs.mkdirSync(path.dirname(path.join(root,packet)),{recursive:true});
+fs.writeFileSync(path.join(root,packet),variant==='malformed'?'{"workflow_id":':JSON.stringify({step_status:'completed'},null,2)+'\n');
+NODE
+        node "$SCRIPT" next-candidates --project-root "$book" --compact --json > "$TMP_DIR/$variant-next.json"
+        node - "$TMP_DIR/$variant-next.json" <<'NODE'
+const assert=require('assert'),out=require(process.argv[2]);
+assert.equal(out.status,'stage_result_contract_recovery_ready');
+NODE
+        node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id "test:$variant" --json > "$TMP_DIR/$variant-reconcile.json" || { cat "$TMP_DIR/$variant-reconcile.json"; false; }
+        node - "$book" "$TMP_DIR/$variant-reconcile.json" <<'NODE'
+const assert=require('assert'),fs=require('fs'),path=require('path'),root=process.argv[2],out=require(process.argv[3]),task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
+assert.equal(out.status,'runtime_reconciled');
+assert.equal(out.stale_stage_result_retired.status,'invalid_stage_result_contract_retired');
+assert.equal(fs.existsSync(path.join(root,task.stage_execution.expected_result_packet)),false);
+assert.equal(fs.existsSync(path.join(root,out.stale_stage_result_retired.accepted_result_packet)),true);
+NODE
+    done
+}
+
+@test "explicit foreign packet identity fails closed and is never archived" {
+    local book="$TMP_DIR/chapter-brief-foreign-identity"
+    prepare_detail_outline_review "$book"
+    apply_detail_outline_quality_result "$book" pass >/dev/null
+    for field in workflow_id workflow_type stage_id stage_attempt_id work_unit_id; do
+        node - "$book" "$field" <<'NODE'
+const fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],field=process.argv[3],task=fixture.readFocusedTask(root),execution=task.stage_execution,packet=execution.expected_result_packet;
+const body={workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:execution.stage_id,stage_attempt_id:execution.stage_attempt_id,work_unit_id:execution.work_unit_id,step_status:'completed'};
+body[field]=`foreign-${field}`;
+fs.mkdirSync(path.dirname(path.join(root,packet)),{recursive:true});fs.writeFileSync(path.join(root,packet),JSON.stringify(body,null,2)+'\n');
+NODE
+        run node "$SCRIPT" next-candidates --project-root "$book" --compact --json
+        [ "$status" -eq 2 ] || { echo "$field: $output"; false; }
+        [[ "$output" == *'blocked_invalid_stage_result_identity_mismatch'* ]]
+        node - "$book" <<'NODE'
+const assert=require('assert'),fs=require('fs'),path=require('path'),task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[2]);
+assert.equal(fs.existsSync(path.join(process.argv[2],task.stage_execution.expected_result_packet)),true);
+NODE
+    done
+}
+
+@test "invalid packet retirement rolls back archive and task when manifest persistence fails" {
+    local book="$TMP_DIR/chapter-brief-manifest-rollback"
+    prepare_detail_outline_review "$book"
+    apply_detail_outline_quality_result "$book" pass >/dev/null
+    local workflow_id
+    workflow_id="$(node -e "process.stdout.write(require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]).workflow_id)" "$book")"
+    node - "$book" "$TMP_DIR/manifest-rollback-baseline.json" <<'NODE'
+const fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],baseline=process.argv[3],file=fixture.focusedTaskFile(root),task=fixture.readFocusedTask(root),execution=task.stage_execution,packet=execution.expected_result_packet;
+fs.mkdirSync(path.dirname(path.join(root,packet)),{recursive:true});
+fs.writeFileSync(path.join(root,packet),'{"workflow_id":');
+fs.writeFileSync(baseline,JSON.stringify({task_text:fs.readFileSync(file,'utf8'),packet_text:fs.readFileSync(path.join(root,packet),'utf8'),packet}));
+NODE
+
+    run env NOVEL_ASSISTANT_TEST_FAIL_RESULT_ARCHIVE_MANIFEST=1 node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:manifest-rollback --json
+    [ "$status" -eq 2 ] || { echo "$output"; false; }
+    [[ "$output" == *'blocked_runtime_reconcile_archive_failed'* ]]
+    node - "$book" "$TMP_DIR/manifest-rollback-baseline.json" <<'NODE'
+const assert=require('assert'),fs=require('fs'),path=require('path'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],baseline=require(process.argv[3]),file=fixture.focusedTaskFile(root);
+assert.equal(fs.readFileSync(file,'utf8'),baseline.task_text);
+assert.equal(fs.readFileSync(path.join(root,baseline.packet),'utf8'),baseline.packet_text);
+const archiveRoot=path.join(root,fixture.readFocusedTask(root).task_dir,'audit/archive/stage-result-invalid');
+const files=fs.existsSync(archiveRoot)?fs.readdirSync(archiveRoot,{recursive:true}).filter((name)=>fs.statSync(path.join(archiveRoot,name)).isFile()):[];
+assert.deepEqual(files,[]);
+NODE
+}
+
+@test "compact running execution retains bounded blocker summaries" {
+    run node - "$REPO/scripts/lib/state-machine-shared.js" <<'NODE'
+const assert=require('assert'),{compactRunningStageExecutionForHost}=require(process.argv[2]);
+const huge='x'.repeat(10000);
+const out=compactRunningStageExecutionForHost({
+  status:'running',stage_id:'chapter_brief',context_packet_warning:'legacy warning',
+  context_packet_blocking:{status:'blocked_legacy_context',blocking:true,reason:'missing trusted outline',missing_fields:['review_targets'],huge},
+  character_contract_blocking:{status:'blocked_long_character_contract_upgrade_required',blocking:true,reason:'missing character contract',resume_stage:'story_bible',findings:[{field:'goal'}],huge},
+});
+assert.equal(out.context_packet_warning,'legacy warning');
+assert.deepEqual(out.context_packet_blocking,{status:'blocked_legacy_context',blocking:true,reason:'missing trusted outline',missing_fields:['review_targets']});
+assert.deepEqual(out.character_contract_blocking,{status:'blocked_long_character_contract_upgrade_required',blocking:true,reason:'missing character contract',resume_stage:'story_bible',findings:[{field:'goal'}]});
+assert.ok(Buffer.byteLength(JSON.stringify(out))<2048);
+NODE
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "legacy running execution with a context blocker fails closed instead of resuming" {
+    local book="$TMP_DIR/legacy-running-context-blocked"
+    prepare_detail_outline_review "$book"
+    apply_detail_outline_quality_result "$book" pass >/dev/null
+    node - "$book" <<'NODE'
+const fs=require('fs'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],file=fixture.focusedTaskFile(root),task=fixture.readFocusedTask(root);
+task.stage_execution.context_packet_warning='旧项目上下文缺少可信细纲。';
+task.stage_execution.context_packet_blocking={status:'blocked_legacy_context',blocking:true,reason:'旧项目上下文缺少可信细纲。',missing_fields:['review_targets']};
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+    run node "$SCRIPT" next-candidates --project-root "$book" --compact --json
+    [ "$status" -eq 2 ] || { echo "$output"; false; }
+    [[ "$output" == *'blocked_stage_execution_context'* ]]
+    [[ "$output" == *'旧项目上下文缺少可信细纲'* ]]
+}
+
 @test "detail outline quality CLI writes an applyable long write result packet" {
     book="$TMP_DIR/detail-quality-cli"
     node - "$SCRIPT" "$REPO/scripts/detail-outline-quality-check.js" "$book" <<'NODE'
 const crypto=require('crypto'), fs=require('fs'), path=require('path'), cp=require('child_process');
 const [script,check,root]=process.argv.slice(2);
+const schemaDir=path.join(root,'追踪/schema');
+fs.mkdirSync(schemaDir,{recursive:true});
+fs.writeFileSync(path.join(schemaDir,'chapters.jsonl'),JSON.stringify({chapterId:'第001章',chapterNo:1,volume:'第1卷',volumeChapterNo:1,globalDraftOrder:1,outlinePath:'大纲/第1卷/细纲_第001章.md',contractPath:'追踪/章节契约/第1卷/第001章.md',draftPath:'正文/第1卷/第001章.md'})+'\n');
 cp.execFileSync(process.execPath,[script,'create','--workflow-type','long_write','--project-root',root,'--user-goal','开一本新书','--json']);
 const advance=(declaredFiles=[])=>{
   const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root);
@@ -1330,12 +2927,205 @@ if(out.task.current_stage!=='chapter_brief') throw new Error(JSON.stringify(out)
 NODE
 }
 
+@test "batch detail outline CLI revise packet applies as a scoped negative review" {
+    book="$TMP_DIR/detail-quality-batch-revise"
+    prepare_detail_outline_review "$book"
+
+    node - "$book" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path');
+const root=process.argv[2],fixture=require(process.env.WORKFLOW_TASK_FIXTURE),taskFile=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+for(const chapter of [1,2,3]) {
+  const rel=`大纲/第1卷/细纲_第${String(chapter).padStart(3,'0')}章.md`,file=path.join(root,rel);
+  fs.writeFileSync(file,'# 过渡章\n- 核心事件：值班员保存记录并继续核查。\n- 目标情绪：疑虑转为主动。\n#### 情节安排\n1. 值班员保存截图，因此确认编号异常。\n2. 他拨打电话，却拿到需要继续检查的新地址。\n#### 呈现与连续性\n- 可见证据：巡检记录。\n- 前置承接：承接上一章异常。\n- 本章变化：从怀疑转为主动核查。\n- 后续债务：地址主人尚未现身。\n');
+}
+fs.writeFileSync(path.join(root,'大纲/第1卷/卷纲.md'),'# 第1卷卷纲\n第002章必须让反击产生可见后果。\n');
+task.stage_execution.write_snapshot.files['大纲/第1卷/卷纲.md']=`sha256:${crypto.createHash('sha256').update(fs.readFileSync(path.join(root,'大纲/第1卷/卷纲.md'))).digest('hex')}`;
+for(const chapter of [2,3]) fs.appendFileSync(path.join(root,`大纲/第1卷/细纲_第${String(chapter).padStart(3,'0')}章.md`),'\n#### 质量触发\n- 激活标签：爽点兑现\n');
+const targets=[1,2,3].map((chapter)=>{const outline_path=`大纲/第1卷/细纲_第${String(chapter).padStart(3,'0')}章.md`,file=path.join(root,outline_path);return {outline_path,outline_sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')};});
+task.detail_outline_review_targets=targets;task.stage_execution.review_targets=targets;
+for(const target of targets) task.stage_execution.write_snapshot.files[target.outline_path]=`sha256:${target.outline_sha256}`;
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2));
+NODE
+
+    node - "$SCRIPT" "$REPO/scripts/detail-outline-quality-check.js" "$book" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path'),cp=require('child_process');
+const [script,check,root]=process.argv.slice(2),task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(root),args=['--project-root',root];
+for(const chapter of [1,2,3]) {
+  const outline=`大纲/第1卷/细纲_第${String(chapter).padStart(3,'0')}章.md`,file=path.join(root,outline),hash=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const semantic=`追踪/workflow/tasks/${task.workflow_id}/work/detail-outline-semantic-review-${chapter}.json`,semanticFile=path.join(root,semantic);
+  fs.mkdirSync(path.dirname(semanticFile),{recursive:true});
+  const findings=[2,3].includes(chapter)?[{dimension:'C7_payoff_debt',severity:'blocking',message:'兑现没有产生可见后果'}]:[];
+  fs.writeFileSync(semanticFile,JSON.stringify({outline_path:outline,outline_sha256:hash,reviewer:'main-session',findings}));
+  args.push('--outline',outline,'--semantic-review',semantic);
+}
+args.push('--workflow-id',task.workflow_id,'--write-result',task.stage_execution.expected_result_packet,'--json');
+const quality=cp.spawnSync(process.execPath,[check,...args],{encoding:'utf8'});
+if(quality.status!==2) throw new Error(quality.stderr||quality.stdout);
+const packet=JSON.parse(quality.stdout);
+if(packet.step_status!=='completed'||packet.verification_result!=='revise'||packet.review_decision!=='revise'||packet.outputs.detail_outline_quality.status!=='revise') throw new Error(JSON.stringify(packet));
+if(packet.lifecycle_transition_request.action!=='return'||packet.lifecycle_transition_request.target!=='stage_detail_outline') throw new Error(JSON.stringify(packet.lifecycle_transition_request));
+const applied=cp.spawnSync(process.execPath,[script,'apply-result','--project-root',root,'--result',path.join(root,task.stage_execution.expected_result_packet),'--json'],{encoding:'utf8'});
+if(applied.status!==0) throw new Error(applied.stderr||applied.stdout);
+const out=JSON.parse(applied.stdout),failure=out.task.detail_outline_review_failure||{};
+if(out.task.current_stage!=='stage_detail_outline'||out.task.machine.completed_stages.includes('detail_outline_review')) throw new Error(JSON.stringify(out));
+if(JSON.stringify(failure.failed_targets)!==JSON.stringify(['大纲/第1卷/细纲_第002章.md','大纲/第1卷/细纲_第003章.md'])) throw new Error(JSON.stringify(failure));
+if(out.task.stage_execution) throw new Error(`review failure must stop before canonical revision: ${JSON.stringify(out.task.stage_execution)}`);
+const pending=out.task.pending_action||{};
+if(!Array.isArray(pending.options)||pending.options.length<2||pending.free_text_enabled!==true) throw new Error(`review failure must expose an author decision menu: ${JSON.stringify(pending)}`);
+if(JSON.stringify((out.visible_response||{}).failed_targets)!==JSON.stringify(failure.failed_targets)) throw new Error(JSON.stringify(out.visible_response));
+const started=cp.spawnSync(process.execPath,[script,'resolve-action','--project-root',root,'--input','1','--pending-action-id',String(pending.id||''),'--visible-choice-hash',String(pending.visible_choice_hash||''),'--state-version',String(out.task.state_version),'--book-root',root,'--json'],{encoding:'utf8'});
+if(started.status!==0) throw new Error(started.stderr||started.stdout);
+const confirmed=JSON.parse(started.stdout),execution=confirmed.stage_execution||{};
+if(!Array.isArray(execution.planning_targets)||execution.planning_targets.length===0) throw new Error(JSON.stringify({confirmed,execution,failure}));
+const stagedTargets=execution.planning_targets.map((item)=>item.staged);
+if(JSON.stringify(execution.write_set)!==JSON.stringify(stagedTargets)||JSON.stringify((execution.write_snapshot||{}).authorized_write_set)!==JSON.stringify(stagedTargets)) throw new Error(JSON.stringify({execution,failure}));
+if(((execution.stage_context_packet||{}).status)!=='assembled'||execution.stage_context_packet.revision_target_count!==2||!String(execution.resume_hint||'').includes('2 个暂存细纲')||!String(execution.resume_hint||'').includes('完成后逐字运行 execution_command')) throw new Error(JSON.stringify(execution));
+// Task 1: longform planning revisions expose exact staged candidates plus an
+// exact frozen canonical target set, and point at the planning finalizer. The
+// host never writes formal outlines directly.
+if(JSON.stringify(execution.canonical_write_set||[])!==JSON.stringify(failure.failed_targets)) throw new Error(JSON.stringify({canonical_write_set:execution.canonical_write_set,failure}));
+if(String(execution.planning_stage_attempt_id||'')!==String(execution.stage_attempt_id||'')) throw new Error(JSON.stringify({planning_stage_attempt_id:execution.planning_stage_attempt_id,stage_attempt_id:execution.stage_attempt_id}));
+if(!Array.isArray(execution.planning_targets)||execution.planning_targets.length!==failure.failed_targets.length) throw new Error(JSON.stringify({planning_targets:execution.planning_targets,failure}));
+const expectedStaged=execution.planning_targets.map((item)=>item.staged);
+if(JSON.stringify(execution.write_set||[])!==JSON.stringify(expectedStaged)) throw new Error(JSON.stringify({write_set:execution.write_set,expectedStaged}));
+if(JSON.stringify((execution.write_snapshot||{}).authorized_write_set||[])!==JSON.stringify(expectedStaged)) throw new Error(JSON.stringify({authorized_write_set:(execution.write_snapshot||{}).authorized_write_set,expectedStaged}));
+for(const item of execution.planning_targets) {
+  if(String(item.canonical||'')!==String(failure.failed_targets[execution.planning_targets.indexOf(item)]||'')) throw new Error(JSON.stringify({planning_target_canonical:item,failure}));
+  if(!String(item.staged||'').startsWith('追踪/workflow/staging/')) throw new Error(JSON.stringify({staged:item.staged}));
+  if(!String(item.staged||'').endsWith(String(path.posix.basename(item.canonical)||''))) throw new Error(JSON.stringify({staged:item.staged,canonical:item.canonical}));
+  const stagedFile=path.join(root,item.staged);
+  if(!fs.existsSync(stagedFile)||!fs.statSync(stagedFile).isFile()) throw new Error(`staged candidate not seeded: ${item.staged}`);
+  const canonicalFile=path.join(root,item.canonical);
+  if(!fs.existsSync(canonicalFile)) throw new Error(`canonical missing: ${item.canonical}`);
+  if(fs.readFileSync(stagedFile,'utf8')!==fs.readFileSync(canonicalFile,'utf8')) throw new Error(`staged candidate not seeded from canonical: ${item.staged}`);
+}
+if(!/long-planning-stage-finalize\.js/.test(String(execution.execution_command||''))) throw new Error(JSON.stringify({execution_command:execution.execution_command}));
+
+const fixture=require(process.env.WORKFLOW_TASK_FIXTURE),taskFile=fixture.focusedTaskFile(root),legacy=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+// Task 3: legacy pre-fix running attempt had broad direct canonical write_set
+// and no staged/canonical pair contract.
+const preservedCandidates=new Map(execution.planning_targets.map((item,index)=>[item.canonical,`保持第${index+1}份已经写好的暂存修订，不得在 reconcile 时被正式稿覆盖。\n`]));
+for(const item of execution.planning_targets) fs.writeFileSync(path.join(root,item.staged),preservedCandidates.get(item.canonical));
+legacy.stage_execution.write_set=['大纲/**','追踪/**'];
+legacy.stage_execution.revision_targets=[];
+delete legacy.stage_execution.planning_targets;
+delete legacy.stage_execution.canonical_write_set;
+delete legacy.stage_execution.execution_command;
+legacy.stage_execution.write_snapshot.authorized_write_set=['大纲/**','追踪/**'];
+fs.writeFileSync(taskFile,JSON.stringify(legacy,null,2));
+const holder=String(((((legacy.runtime_guard||{}).session_lease)||{}).holder_id)||'test:detail-reconcile');
+const reconciled=cp.spawnSync(process.execPath,[script,'reconcile-runtime','--project-root',root,'--workflow-id',legacy.workflow_id,'--session-id',holder,'--json'],{encoding:'utf8'});
+if(reconciled.status!==0) throw new Error(reconciled.stderr||reconciled.stdout);
+const repair=JSON.parse(reconciled.stdout),repaired=fixture.readFocusedTask(root),repairedExecution=repaired.stage_execution||{};
+if(repair.detail_outline_revision_scope_repaired!==true) throw new Error(JSON.stringify({repair,repairedExecution}));
+if(JSON.stringify(repairedExecution.canonical_write_set||[])!==JSON.stringify(failure.failed_targets)) throw new Error(JSON.stringify({canonical_write_set:repairedExecution.canonical_write_set,failure}));
+const repairedStaged=(repairedExecution.planning_targets||[]).map((item)=>String(item.staged||''));
+if(JSON.stringify(repairedExecution.write_set||[])!==JSON.stringify(repairedStaged)) throw new Error(JSON.stringify({write_set:repairedExecution.write_set,repairedStaged}));
+if(JSON.stringify(repairedExecution.revision_targets||[])!==JSON.stringify(failure.failed_targets)) throw new Error(JSON.stringify({revision_targets:repairedExecution.revision_targets,failure}));
+for(const item of (repairedExecution.planning_targets||[])) {
+  const stagedFile=path.join(root,String(item.staged||'')),canonicalFile=path.join(root,String(item.canonical||''));
+  if(!fs.existsSync(stagedFile)||!fs.existsSync(canonicalFile)) throw new Error(`repaired staged/canonical missing: ${item.staged}`);
+  if(fs.readFileSync(stagedFile,'utf8')!==preservedCandidates.get(item.canonical)) throw new Error(`reconcile overwrote an existing staged candidate: ${item.staged}`);
+}
+if(!/long-planning-stage-finalize\.js/.test(String(repairedExecution.execution_command||''))) throw new Error(JSON.stringify({execution_command:repairedExecution.execution_command}));
+// No canonical outline hash changes during reconciliation (recovery only).
+if(((repairedExecution.stage_context_packet||{}).status)!=='assembled'||repairedExecution.stage_context_packet.revision_target_count!==2) throw new Error(JSON.stringify(repairedExecution));
+
+const pairs=repairedExecution.planning_targets,revisedByCanonical=new Map(pairs.map((item,index)=>[item.canonical,`# 修订后细纲 ${index+1}\n反击已经产生可见后果，并留下下一章责任债。\n`]));
+for(const item of pairs) fs.writeFileSync(path.join(root,item.staged),revisedByCanonical.get(item.canonical));
+const finalizer=path.join(path.dirname(script),'long-planning-stage-finalize.js');
+const canonicalBefore=new Map(pairs.map((item)=>[item.canonical,fs.readFileSync(path.join(root,item.canonical),'utf8')]));
+const runFailureCase=(name,mutate,expectedStatus,extraEnv={})=>{
+  const clone=`${root}-${name}`;
+  fs.cpSync(root,clone,{recursive:true});
+  const cloneTaskFile=fixture.focusedTaskFile(clone),cloneTask=JSON.parse(fs.readFileSync(cloneTaskFile,'utf8'));
+  mutate(clone,cloneTask);
+  fs.writeFileSync(cloneTaskFile,JSON.stringify(cloneTask,null,2));
+  const result=cp.spawnSync(process.execPath,[finalizer,'--project-root',clone,'--workflow-id',cloneTask.workflow_id,'--apply','--json'],{encoding:'utf8',env:{...process.env,...extraEnv}});
+  const payload=JSON.parse(result.stdout||'{}');
+  if(result.status!==2||payload.status!==expectedStatus) throw new Error(JSON.stringify({name,status:result.status,payload,stderr:result.stderr}));
+  for(const item of pairs) if(fs.readFileSync(path.join(clone,item.canonical),'utf8')!==canonicalBefore.get(item.canonical)) throw new Error(`${name} changed canonical output: ${item.canonical}`);
+};
+runFailureCase('missing-staged',(clone,task)=>{fs.rmSync(path.join(clone,task.stage_execution.planning_targets[0].staged));},'long_planning_staged_artifact_missing');
+runFailureCase('symlink-staged',(clone,task)=>{const item=task.stage_execution.planning_targets[0],stagedFile=path.join(clone,item.staged);fs.rmSync(stagedFile);fs.symlinkSync(path.join(clone,item.canonical),stagedFile);},'long_planning_staged_artifact_missing');
+runFailureCase('outside-target',(_clone,task)=>{task.stage_execution.planning_targets[0].canonical='../outside.md';task.stage_execution.canonical_write_set=['../outside.md'];task.stage_execution.revision_targets=['../outside.md'];task.detail_outline_review_failure.failed_targets=['../outside.md'];},'long_planning_target_mapping_invalid');
+runFailureCase('duplicate-target',(_clone,task)=>{const item={...task.stage_execution.planning_targets[0]};task.stage_execution.planning_targets=[item,{...item}];task.stage_execution.write_set=[item.staged,item.staged];task.stage_execution.canonical_write_set=[item.canonical,item.canonical];task.stage_execution.revision_targets=[item.canonical,item.canonical];task.detail_outline_review_failure.failed_targets=[item.canonical,item.canonical];},'long_planning_target_mapping_invalid');
+runFailureCase('stale-attempt',(_clone,task)=>{task.stage_execution.planning_stage_attempt_id='sa-stale-attempt';},'long_planning_stage_attempt_mismatch');
+runFailureCase('commit-rollback',()=>{},'long_planning_commit_failed',{NOVEL_ASSISTANT_TEST_FAIL_AFTER_WRITES:'1'});
+
+// If the canonical transaction succeeds but workflow apply is blocked by an
+// unrelated file-diff violation, rerunning after that violation is removed
+// must reuse the accepted commit and finish the same stage. This is the
+// durable recovery path for old projects; it must not reject the now-equal
+// staged/canonical pair as an unchanged candidate or create a second commit.
+const recoveryRoot=`${root}-accepted-commit-recovery`;
+fs.cpSync(root,recoveryRoot,{recursive:true});
+const recoveryTask=fixture.readFocusedTask(recoveryRoot);
+const unauthorizedFile=path.join(recoveryRoot,'正文/越权.md');
+fs.mkdirSync(path.dirname(unauthorizedFile),{recursive:true});
+fs.writeFileSync(unauthorizedFile,'runtime apply 前的无关越权变更\n');
+const firstRecoveryRun=cp.spawnSync(process.execPath,[finalizer,'--project-root',recoveryRoot,'--workflow-id',recoveryTask.workflow_id,'--apply','--json'],{encoding:'utf8'});
+const firstRecoveryPayload=JSON.parse(firstRecoveryRun.stdout||'{}');
+if(firstRecoveryRun.status!==2||firstRecoveryPayload.status!=='long_planning_apply_blocked') throw new Error(JSON.stringify({firstRecoveryStatus:firstRecoveryRun.status,firstRecoveryPayload,stderr:firstRecoveryRun.stderr}));
+const recoveryCommitsDir=path.join(recoveryRoot,'追踪/story-system/commits');
+const planningCommitCount=()=>fs.readdirSync(recoveryCommitsDir).filter((name)=>name.endsWith('.json')).map((name)=>JSON.parse(fs.readFileSync(path.join(recoveryCommitsDir,name),'utf8'))).filter((commit)=>commit.volume==='长篇规划').length;
+const recoveryCommitCountBefore=planningCommitCount();
+for(const item of pairs) if(fs.readFileSync(path.join(recoveryRoot,item.canonical),'utf8')!==revisedByCanonical.get(item.canonical)) throw new Error(`accepted transaction did not update canonical target before recovery: ${item.canonical}`);
+fs.rmSync(unauthorizedFile);
+const secondRecoveryRun=cp.spawnSync(process.execPath,[finalizer,'--project-root',recoveryRoot,'--workflow-id',recoveryTask.workflow_id,'--apply','--json'],{encoding:'utf8'});
+const secondRecoveryPayload=JSON.parse(secondRecoveryRun.stdout||'{}');
+const recoveredTask=fixture.readFocusedTask(recoveryRoot);
+const recoveryCommitCountAfter=planningCommitCount();
+if(secondRecoveryRun.status!==0||secondRecoveryPayload.status!=='long_planning_applied'||secondRecoveryPayload.reused_accepted_commit!==true||recoveredTask.current_stage!=='detail_outline_review'||recoveryCommitCountAfter!==recoveryCommitCountBefore) throw new Error(JSON.stringify({secondRecoveryStatus:secondRecoveryRun.status,secondRecoveryPayload,currentStage:recoveredTask.current_stage,recoveryCommitCountBefore,recoveryCommitCountAfter,stderr:secondRecoveryRun.stderr}));
+
+const runnerRel=`${repaired.task_dir}/runner-packets/stage_detail_outline.attempt-managed.run.json`;
+const runnerFile=path.join(root,runnerRel);
+fs.mkdirSync(path.dirname(runnerFile),{recursive:true});
+fs.writeFileSync(runnerFile,JSON.stringify({workflow_id:repaired.workflow_id,stage_id:'stage_detail_outline',stage_attempt_id:repairedExecution.stage_attempt_id,work_unit_id:repairedExecution.work_unit_id,run_id:'run-detail-planning-managed',expected_result_packet:repairedExecution.expected_result_packet,stage_contract:{write_set:repairedExecution.write_set,canonical_write_set:repairedExecution.canonical_write_set}}));
+repaired.runtime_guard.last_runner_attempt={stage_id:'stage_detail_outline',stage_attempt_id:repairedExecution.stage_attempt_id,work_unit_id:repairedExecution.work_unit_id,run_id:'run-detail-planning-managed',expected_result_packet:repairedExecution.expected_result_packet,runner_packet_path:runnerRel};
+fs.writeFileSync(taskFile,JSON.stringify(repaired,null,2));
+const finalized=cp.spawnSync(process.execPath,[finalizer,'--project-root',root,'--workflow-id',repaired.workflow_id,'--apply','--json'],{encoding:'utf8'});
+if(finalized.status!==0) throw new Error(finalized.stderr||finalized.stdout);
+const finalOutput=JSON.parse(finalized.stdout);
+if(finalOutput.status!=='long_planning_result_ready') throw new Error(JSON.stringify(finalOutput));
+const managedApplied=cp.spawnSync(process.execPath,[script,'apply-result','--project-root',root,'--workflow-id',repaired.workflow_id,'--result',path.join(root,repairedExecution.expected_result_packet),'--json'],{encoding:'utf8'});
+if(managedApplied.status!==0) throw new Error(managedApplied.stderr||managedApplied.stdout);
+const advanced=fixture.readFocusedTask(root);
+if(advanced.current_stage!=='detail_outline_review') throw new Error(JSON.stringify({managedApplied:managedApplied.stdout,stage:advanced.current_stage}));
+for(const item of pairs) if(fs.readFileSync(path.join(root,item.canonical),'utf8')!==revisedByCanonical.get(item.canonical)) throw new Error(`canonical detail outline was not atomically updated: ${item.canonical}`);
+const acceptedPacketPath=String(((advanced.result_history||{}).path)||((advanced.stage_execution||{}).accepted_result_packet)||((advanced.stage_execution||{}).result_packet)||'');
+if(!acceptedPacketPath||!fs.existsSync(path.join(root,acceptedPacketPath))) throw new Error(JSON.stringify({result_history:advanced.result_history,stage_execution:advanced.stage_execution}));
+const acceptedPacket=JSON.parse(fs.readFileSync(path.join(root,acceptedPacketPath),'utf8'));
+const canonicalTargets=pairs.map((item)=>item.canonical);
+if(JSON.stringify(acceptedPacket.changed_files)!==JSON.stringify(canonicalTargets)||JSON.stringify(acceptedPacket.result_write_set)!==JSON.stringify(canonicalTargets)) throw new Error(JSON.stringify(acceptedPacket));
+if(!acceptedPacket.chapter_commit||!acceptedPacket.chapter_commit.accepted_commit_id) throw new Error(JSON.stringify(acceptedPacket.chapter_commit));
+const commitsDir=path.join(root,'追踪/story-system/commits'),commitCountBefore=fs.readdirSync(commitsDir).filter((name)=>name.endsWith('.json')).length;
+const replay=cp.spawnSync(process.execPath,[finalizer,'--project-root',root,'--workflow-id',repaired.workflow_id,'--apply','--json'],{encoding:'utf8'}),replayPayload=JSON.parse(replay.stdout||'{}');
+const commitCountAfter=fs.readdirSync(commitsDir).filter((name)=>name.endsWith('.json')).length;
+if(replay.status!==0||replayPayload.status!=='long_planning_already_applied'||commitCountAfter!==commitCountBefore) throw new Error(JSON.stringify({replayStatus:replay.status,replayPayload,commitCountBefore,commitCountAfter}));
+
+// Starting a new attempt of the same review stage must retire the fixed-path
+// packet from the accepted previous attempt. Otherwise the canonical write
+// guard correctly refuses to overwrite it and the workflow deadlocks.
+const beforeRetry=fixture.readFocusedTask(root),retryPending=beforeRetry.pending_action||{};
+const staleReviewPacket=path.join(root,beforeRetry.task_dir,'result-packets/detail_outline_review.result.json');
+if(!fs.existsSync(staleReviewPacket)) throw new Error('expected prior accepted review packet before retry');
+const retryStart=cp.spawnSync(process.execPath,[script,'resolve-action','--project-root',root,'--input','1','--pending-action-id',String(retryPending.id||''),'--visible-choice-hash',String(retryPending.visible_choice_hash||''),'--state-version',String(beforeRetry.state_version),'--book-root',root,'--json'],{encoding:'utf8'});
+if(retryStart.status!==0) throw new Error(retryStart.stderr||retryStart.stdout);
+const retryTask=fixture.readFocusedTask(root),archivedReviewAttempt=(retryTask.stage_attempt_history||[]).slice().reverse().find((item)=>item.stage_id==='detail_outline_review'&&(item.accepted_result_packet||item.failed_result_packet));
+const archivedReviewPacket=String((archivedReviewAttempt||{}).accepted_result_packet||(archivedReviewAttempt||{}).failed_result_packet||'');
+if(retryTask.current_stage!=='detail_outline_review'||(retryTask.stage_execution||{}).status!=='running'||fs.existsSync(staleReviewPacket)||!archivedReviewAttempt||!archivedReviewPacket||archivedReviewPacket===path.relative(root,staleReviewPacket)||!fs.existsSync(path.join(root,archivedReviewPacket))) throw new Error(JSON.stringify({retryTaskStage:retryTask.current_stage,retryExecution:retryTask.stage_execution,staleExists:fs.existsSync(staleReviewPacket),archivedReviewAttempt,archivedReviewPacket}));
+NODE
+}
+
 @test "detail outline quality revise returns to outline and invalidates downstream nodes" {
     book="$TMP_DIR/detail-quality-revise"
     prepare_detail_outline_review "$book"
-    apply_detail_outline_quality_result "$book" revise > "$TMP_DIR/detail-quality-revise.json"
+    run apply_detail_outline_quality_result "$book" revise
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    printf '%s\n' "$output" > "$TMP_DIR/detail-quality-revise.json"
 
-    node - "$TMP_DIR/detail-quality-revise.json" <<'NODE'
+    node - "$TMP_DIR/detail-quality-revise.json" "$book" <<'NODE'
 const fs=require('fs');
 const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 const task=out.task;
@@ -1343,50 +3133,57 @@ if(task.current_stage!=='stage_detail_outline') throw new Error(JSON.stringify(o
 if(task.machine.last_transition!=='review_failed_return_to_asset') throw new Error(JSON.stringify(task.machine));
 if(!task.lifecycle_graph.invalidated_nodes.includes('stage_detail_outline')) throw new Error(JSON.stringify(task.lifecycle_graph));
 if(task.machine.completed_stages.includes('stage_detail_outline')) throw new Error(JSON.stringify(task.machine));
+if(task.machine.completed_stages.includes('detail_outline_review')) throw new Error(JSON.stringify(task.machine));
+if(task.stage_execution) throw new Error(`review failure must stop before canonical revision: ${JSON.stringify(task.stage_execution)}`);
+if(!task.pending_action||!Array.isArray(task.pending_action.options)||task.pending_action.options.length<2||task.pending_action.free_text_enabled!==true) throw new Error(`review failure must expose an author decision menu: ${JSON.stringify(task.pending_action)}`);
+const failedAttempt=(task.stage_attempt_history||[]).find((item)=>item.stage_id==='detail_outline_review');
+if(!failedAttempt||failedAttempt.accepted_result_packet||!failedAttempt.failed_result_packet) throw new Error(JSON.stringify(task.stage_attempt_history));
+if(String((((task.runtime_guard||{}).heartbeat||{}).latest_trusted_artifact)||'')===failedAttempt.failed_result_packet) throw new Error(JSON.stringify(task.runtime_guard));
+if(!fs.existsSync(require('path').join(process.argv[3],failedAttempt.failed_result_packet))) throw new Error(JSON.stringify(failedAttempt));
 NODE
 }
 
-@test "detail outline quality identity missing remains at review" {
+@test "detail outline quality identity missing fails before result acceptance" {
     book="$TMP_DIR/detail-quality-identity-missing"
     prepare_detail_outline_review "$book"
-    apply_detail_outline_quality_result "$book" identity_missing > "$TMP_DIR/detail-quality-identity-missing.json"
+    run apply_detail_outline_quality_result "$book" identity_missing
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_detail_outline_quality_identity_missing'* ]]
 
-    node - "$TMP_DIR/detail-quality-identity-missing.json" <<'NODE'
-const fs=require('fs');
-const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-const task=out.task;
-if(task.current_stage!=='detail_outline_review') throw new Error(JSON.stringify(out));
-if(task.machine.last_transition!=='detail_outline_quality_identity_missing') throw new Error(JSON.stringify(task.machine));
+    node - "$book" <<'NODE'
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[2]);
+if(task.current_stage!=='detail_outline_review') throw new Error(JSON.stringify(task));
+if((task.stage_execution||{}).status!=='running') throw new Error(JSON.stringify(task.stage_execution));
 if(task.machine.completed_stages.includes('detail_outline_review')) throw new Error(JSON.stringify(task.machine));
 NODE
 }
 
-@test "detail outline quality evidence identity mismatch remains at review" {
+@test "detail outline quality evidence identity mismatch fails before result acceptance" {
     book="$TMP_DIR/detail-quality-identity-mismatch"
     prepare_detail_outline_review "$book"
-    apply_detail_outline_quality_result "$book" pass "" evidence_mismatch > "$TMP_DIR/detail-quality-identity-mismatch.json"
+    run apply_detail_outline_quality_result "$book" pass "" evidence_mismatch
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_detail_outline_quality_identity_missing'* ]]
 
-    node - "$TMP_DIR/detail-quality-identity-mismatch.json" <<'NODE'
-const fs=require('fs');
-const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-const task=out.task;
-if(task.current_stage!=='detail_outline_review') throw new Error(JSON.stringify(out));
-if(task.machine.last_transition!=='detail_outline_quality_identity_missing') throw new Error(JSON.stringify(task.machine));
+    node - "$book" <<'NODE'
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[2]);
+if(task.current_stage!=='detail_outline_review') throw new Error(JSON.stringify(task));
+if((task.stage_execution||{}).status!=='running') throw new Error(JSON.stringify(task.stage_execution));
 if(task.machine.completed_stages.includes('detail_outline_review')) throw new Error(JSON.stringify(task.machine));
 NODE
 }
 
-@test "outline underfilled packet rejects nonempty contract projection" {
+@test "outline underfilled packet with nonempty contract projection fails before result acceptance" {
     book="$TMP_DIR/detail-quality-underfilled-projection"
     prepare_detail_outline_review "$book"
-    apply_detail_outline_quality_result "$book" outline_underfilled nonempty > "$TMP_DIR/detail-quality-underfilled-projection.json"
+    run apply_detail_outline_quality_result "$book" outline_underfilled nonempty
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_detail_outline_underfilled_projection_forbidden'* ]]
 
-    node - "$TMP_DIR/detail-quality-underfilled-projection.json" <<'NODE'
-const fs=require('fs');
-const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-const task=out.task;
-if(task.current_stage!=='detail_outline_review') throw new Error(JSON.stringify(out));
-if(task.machine.last_transition!=='detail_outline_underfilled_projection_forbidden') throw new Error(JSON.stringify(task.machine));
+    node - "$book" <<'NODE'
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[2]);
+if(task.current_stage!=='detail_outline_review') throw new Error(JSON.stringify(task));
+if((task.stage_execution||{}).status!=='running') throw new Error(JSON.stringify(task.stage_execution));
 if(task.machine.completed_stages.includes('detail_outline_review')) throw new Error(JSON.stringify(task.machine));
 NODE
 }
@@ -1418,7 +3215,8 @@ const file = path.join(root, rel);
 fs.mkdirSync(path.dirname(file), { recursive: true });
 fs.writeFileSync(file, '当前细纲');
 const actual = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-const task = { workflow_type: 'long_write', workflow_id: 'wf-current-outline', current_stage: 'detail_outline_review', book_root: root };
+const task = { workflow_type: 'long_write', workflow_id: 'wf-current-outline', current_stage: 'detail_outline_review', book_root: root,
+  stage_execution: { review_targets: [{ outline_path: rel, outline_sha256: actual }] } };
 const packet = (outline_path, outline_sha256) => ({
   outputs: { detail_outline_quality: { status: 'pass', workflow_id: task.workflow_id, stage_id: task.current_stage, outline_path, outline_sha256, activated_dimensions: [], findings: [], execution: { semantic_review: { status: 'accepted', reviewer: 'main-session', findings: [], findings_sha256: crypto.createHash('sha256').update('[]').digest('hex'), finding_count: 0 } } } },
   evidence: [{ type: 'detail_outline', path: outline_path, outline_sha256 }],
@@ -1427,6 +3225,61 @@ assert.equal(validateDetailOutlineQualityResult(packet(rel, actual), task).statu
 assert.equal(validateDetailOutlineQualityResult(packet(rel, 'a'.repeat(64)), task).code, 'detail_outline_quality_outline_sha256_mismatch');
 assert.equal(validateDetailOutlineQualityResult(packet('大纲/第1卷/不存在.md', actual), task).code, 'detail_outline_quality_outline_missing');
 assert.equal(validateDetailOutlineQualityResult(packet('../细纲.md', actual), task).code, 'detail_outline_quality_outline_path_unsafe');
+NODE
+}
+
+@test "detail outline quality v2 accepts three matching identities as one stage review" {
+    node - "$REPO/scripts/lib/workflow-transition-service.js" "$TMP_DIR" <<'NODE'
+const assert=require('assert'),crypto=require('crypto'),fs=require('fs'),path=require('path');
+const {validateDetailOutlineQualityResult,validateLifecycleTransitionRequest,validateReviewRevisionReturn}=require(process.argv[2]);
+const root=process.argv[3];
+const targets=[1,2,3].map((chapter)=>{
+  const outline_path=`大纲/第1卷/细纲_第${String(chapter).padStart(3,'0')}章.md`;
+  const file=path.join(root,outline_path); fs.mkdirSync(path.dirname(file),{recursive:true}); fs.writeFileSync(file,`中性细纲 ${chapter}`);
+  return {outline_path,outline_sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')};
+});
+const task={workflow_type:'long_write',workflow_id:'wf-batch-pass',current_stage:'detail_outline_review',book_root:root,stage_execution:{review_targets:targets}};
+const identities=targets.map((target)=>({
+  status:'pass',workflow_id:task.workflow_id,stage_id:task.current_stage,...target,activated_dimensions:[],findings:[],contract_projection:[],memory_projection:[],
+  execution:{semantic_review:{status:'accepted',reviewer:'main-session',findings:[],findings_sha256:crypto.createHash('sha256').update('[]').digest('hex'),finding_count:0}},
+}));
+const packet={outputs:{detail_outline_quality:{version:'detail_outline_quality_v2',workflow_id:task.workflow_id,stage_id:task.current_stage,identities}},evidence:targets.map((target)=>({type:'detail_outline',path:target.outline_path,outline_sha256:target.outline_sha256}))};
+assert.deepEqual(validateDetailOutlineQualityResult(packet,task),{status:'accepted',code:''});
+NODE
+}
+
+@test "detail outline quality v2 rejects an incomplete target manifest" {
+    node - "$REPO/scripts/lib/workflow-transition-service.js" "$TMP_DIR" <<'NODE'
+const assert=require('assert'),crypto=require('crypto'),fs=require('fs'),path=require('path');
+const {validateDetailOutlineQualityResult}=require(process.argv[2]);
+const root=process.argv[3];
+const targets=[1,2,3].map((chapter)=>{const outline_path=`大纲/阶段/细纲_${chapter}.md`;const file=path.join(root,outline_path);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,`细纲 ${chapter}`);return {outline_path,outline_sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}});
+const task={workflow_type:'long_write',workflow_id:'wf-batch-missing',current_stage:'detail_outline_review',book_root:root,stage_execution:{review_targets:targets}};
+const identities=targets.slice(0,2).map((target)=>({status:'pass',workflow_id:task.workflow_id,stage_id:task.current_stage,...target,activated_dimensions:[],findings:[],contract_projection:[],memory_projection:[],execution:{semantic_review:{status:'accepted',reviewer:'main-session',findings:[],findings_sha256:crypto.createHash('sha256').update('[]').digest('hex'),finding_count:0}}}));
+const packet={outputs:{detail_outline_quality:{version:'detail_outline_quality_v2',workflow_id:task.workflow_id,stage_id:task.current_stage,identities}},evidence:identities.map((item)=>({type:'detail_outline',path:item.outline_path,outline_sha256:item.outline_sha256}))};
+assert.equal(validateDetailOutlineQualityResult(packet,task).code,'detail_outline_quality_coverage_missing');
+NODE
+}
+
+@test "detail outline quality v2 reports one stale or revise identity precisely" {
+    node - "$REPO/scripts/lib/workflow-transition-service.js" "$TMP_DIR" <<'NODE'
+const assert=require('assert'),crypto=require('crypto'),fs=require('fs'),path=require('path');
+const {validateDetailOutlineQualityResult,validateLifecycleTransitionRequest,validateReviewRevisionReturn}=require(process.argv[2]);
+const root=process.argv[3],outline_path='大纲/阶段/细纲_1.md',file=path.join(root,outline_path);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,'中性细纲');
+const hash=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+const target={outline_path,outline_sha256:hash};
+const task={workflow_type:'long_write',workflow_id:'wf-batch-failure',current_stage:'detail_outline_review',book_root:root,stage_execution:{review_targets:[target]}};
+const quality=(status,outline_sha256,findings=[])=>({status,workflow_id:task.workflow_id,stage_id:task.current_stage,outline_path,outline_sha256,activated_dimensions:[],findings,contract_projection:[],memory_projection:[],execution:{semantic_review:{status:'accepted',reviewer:'main-session',findings,findings_sha256:crypto.createHash('sha256').update(JSON.stringify(findings)).digest('hex'),finding_count:findings.length}}});
+const packet=(identity)=>({outputs:{detail_outline_quality:{version:'detail_outline_quality_v2',workflow_id:task.workflow_id,stage_id:task.current_stage,identities:[identity]}},evidence:[{type:'detail_outline',path:outline_path,outline_sha256:identity.outline_sha256}]});
+assert.equal(validateDetailOutlineQualityResult(packet(quality('pass','a'.repeat(64))),task).code,'detail_outline_quality_outline_sha256_mismatch');
+const findings=[{dimension:'B1_causality_action',severity:'blocking',message:'缺少可见因果动作'}];
+assert.equal(validateDetailOutlineQualityResult(packet(quality('revise',hash,findings)),task).status,'review_failed');
+const returnResult={...packet(quality('revise',hash,findings)),step_status:'completed',verification_result:'revise',review_decision:'revise',lifecycle_transition_request:{action:'return',target:'stage_detail_outline'}};
+returnResult.outputs.detail_outline_quality.status='revise';
+const transition=validateLifecycleTransitionRequest({allowed_next:['stage_detail_outline','chapter_brief'],review_requirement:{required:true,failure_return:'stage_detail_outline'}},'detail_outline_review',returnResult);
+assert.equal(transition.status,'valid');
+assert.equal(transition.requested_next,'stage_detail_outline');
+assert.equal(validateReviewRevisionReturn({allowed_next:['stage_detail_outline','chapter_brief'],review_requirement:{required:true,failure_return:'stage_detail_outline'}},'detail_outline_review',returnResult).valid,true);
 NODE
 }
 
@@ -2192,14 +4045,14 @@ NODE
 
 @test "workflow stage execution records the professional owner and risk boundary" {
     mkdir -p "$TMP_DIR/book"
-    node "$SCRIPT" create --workflow-type short_write --project-root "$TMP_DIR/book" --user-goal "写短篇" --json >/dev/null
+    node "$SCRIPT" create --workflow-type long_write --project-root "$TMP_DIR/book" --user-goal "写长篇" --json >/dev/null
 
     resolve_action "$TMP_DIR/book" 1 > "$TMP_DIR/out.json"
 
     node - "$TMP_DIR/out.json" <<'NODE'
 const fs = require('fs');
 const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-if (out.stage_execution.owner_module !== 'private-short-extension') throw new Error(JSON.stringify(out.stage_execution));
+if (out.stage_execution.owner_module !== 'story-long-write') throw new Error(JSON.stringify(out.stage_execution));
 if (out.stage_execution.risk_level !== 'low') throw new Error(JSON.stringify(out.stage_execution));
 if (out.stage_execution.requires_user_confirm !== false) throw new Error(JSON.stringify(out.stage_execution));
 NODE
@@ -2207,7 +4060,7 @@ NODE
 
 @test "workflow state machine classifies obvious new intent and keeps current task resumable" {
     mkdir -p "$TMP_DIR/book"
-    node "$SCRIPT" create --workflow-type short_write --project-root "$TMP_DIR/book" --user-goal "写短篇" --json >/dev/null
+    node "$SCRIPT" create --workflow-type long_write --project-root "$TMP_DIR/book" --user-goal "写长篇" --json >/dev/null
 
     node "$SCRIPT" resolve-action --project-root "$TMP_DIR/book" --input "先别写，审阅 1-200 章" --json > "$TMP_DIR/out.json"
 
@@ -2332,18 +4185,18 @@ if (!task.runtime_guard.heartbeat.latest_trusted_artifact) process.exit(12);
 
 @test "workflow state machine switch intent preserves old task directory without losing RPD" {
     mkdir -p "$TMP_DIR/book"
-    node "$SCRIPT" create --workflow-type short_write --project-root "$TMP_DIR/book" --user-goal "写短篇《480万红本》" --json > "$TMP_DIR/create.json"
+    node "$SCRIPT" create --workflow-type review_repair --project-root "$TMP_DIR/book" --scope "1-10" --user-goal "审阅旧任务 1-10 章" --json > "$TMP_DIR/create.json"
     old_id="$(node -e 'const fs=require("fs"); const data=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); console.log(data.task.workflow_id)' "$TMP_DIR/create.json")"
     old_dir="$TMP_DIR/book/追踪/workflow/tasks/$old_id"
 
-    node "$SCRIPT" switch-intent --workflow-type review_repair --project-root "$TMP_DIR/book" --scope "1-200" --user-goal "先审阅 1-200 章" --reason manual_new_goal --json > "$TMP_DIR/switch.json"
+    node "$SCRIPT" switch-intent --workflow-type long_write --project-root "$TMP_DIR/book" --scope "第1章" --user-goal "切换到长篇写作" --reason manual_new_goal --json > "$TMP_DIR/switch.json"
 
     [ -f "$old_dir/task.json" ]
     [ -f "$old_dir/rpd.md" ]
     grep -q '"status": "paused"' "$old_dir/task.json"
     ! grep -q '"status": "superseded"' "$old_dir/task.json"
     grep -q '"event":"focus_paused"' "$old_dir/journal.jsonl"
-    grep -q "写短篇《480万红本》" "$old_dir/rpd.md"
+    grep -q "审阅旧任务 1-10 章" "$old_dir/rpd.md"
 
     new_id="$(node -e 'const fs=require("fs"); const data=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); console.log(data.task.workflow_id)' "$TMP_DIR/switch.json")"
     [ -f "$TMP_DIR/book/追踪/workflow/tasks/$new_id/task.json" ]
@@ -2676,7 +4529,7 @@ NODE
 
 @test "new private short startup shows freshness menu before bounded discovery" {
     mkdir -p "$TMP_DIR/book"
-    run node "$REPO/scripts/short-startup-entry.js" --project-root "$TMP_DIR/book" --json
+    run node "$REPO/scripts/short-startup-entry.js" --project-root "$TMP_DIR/book" --legacy-v2 --json
     [ "$status" -eq 0 ] || { echo "$output"; false; }
     [[ "$output" == *'"status":"short_startup_ready"'* ]]
     [[ "$output" == *'抓取最新热点资讯做选题（推荐）'* ]]
@@ -2934,11 +4787,11 @@ NODE
 
 @test "private short startup restart preserves old workflow and creates a clean successor" {
     mkdir -p "$TMP_DIR/book"
-    run node "$REPO/scripts/short-startup-entry.js" --project-root "$TMP_DIR/book" --json
+    run node "$REPO/scripts/short-startup-entry.js" --project-root "$TMP_DIR/book" --legacy-v2 --json
     [ "$status" -eq 0 ] || { echo "$output"; false; }
     old_id="$(node -p "JSON.parse(require('fs').readFileSync('$TMP_DIR/book/追踪/workflow/current-task.json','utf8')).workflow_id")"
 
-    run node "$REPO/scripts/short-startup-entry.js" --project-root "$TMP_DIR/book" --restart --reason "重新规划热点资讯发现流程" --json
+    run node "$REPO/scripts/short-startup-entry.js" --project-root "$TMP_DIR/book" --legacy-v2 --restart --reason "重新规划热点资讯发现流程" --json
     [ "$status" -eq 0 ] || { echo "$output"; false; }
     [[ "$output" == *'"status":"short_startup_ready"'* ]]
     new_id="$(node -p "JSON.parse(require('fs').readFileSync('$TMP_DIR/book/追踪/workflow/current-task.json','utf8')).workflow_id")"
@@ -2960,7 +4813,7 @@ NODE
 
 @test "private short free text can restart info discovery without reading skill internals" {
     mkdir -p "$TMP_DIR/book"
-    run node "$REPO/scripts/short-startup-entry.js" --project-root "$TMP_DIR/book" --json
+    run node "$REPO/scripts/short-startup-entry.js" --project-root "$TMP_DIR/book" --legacy-v2 --json
     [ "$status" -eq 0 ] || { echo "$output"; false; }
 
     run node "$SCRIPT" resolve-action --project-root "$TMP_DIR/book" --input "我需要重新抓取资讯，之前的认为作废" --bind-current --json
@@ -3056,7 +4909,7 @@ NODE
 
 JSON
     mkdir -p "$TMP_DIR/book/追踪/private-short-extension"
-    printf '%s\n' '{"project_id":"short-feedback-project","project_title":"果汁事件","plan_revision":2}' > "$TMP_DIR/book/追踪/private-short-extension/project-state.json"
+    printf '%s\n' '{"project_id":"short-feedback-project","project_title":"档案复核","plan_revision":2}' > "$TMP_DIR/book/追踪/private-short-extension/project-state.json"
     printf '%s\n' '旧设定。' > "$TMP_DIR/book/设定.md"
     printf '%s\n' \
       '# 小节大纲' \
@@ -3234,9 +5087,29 @@ if((saved.short_feedback_impact||{}).feedback_id!==task.pending_feedback.feedbac
 if((saved.proposed_plan||{}).status!=='awaiting_user_confirmation') throw new Error(JSON.stringify(saved.proposed_plan));
 const pending=saved.pending_action||{},proposal=saved.proposed_plan||{};
 if(pending.feedback_id!==task.pending_feedback.feedback_id||pending.proposal_id!==proposal.proposal_id) throw new Error(JSON.stringify({pending,proposal}));
-if((pending.options||[])[0].label!=='确认当前反馈回写方案（推荐）'||(pending.options||[])[1].label!=='查看当前方案、影响范围与依据') throw new Error(JSON.stringify(pending.options));
+const actions=(pending.options||[]).map(item=>item.action_id);
+if(actions.join(',')!=='continue_next_stage,request_feedback_proposal_revision_input,inspect_current_state,pause') throw new Error(JSON.stringify(pending.options));
+if((pending.options||[])[0].label!=='确认并执行当前回写方案（推荐）'||(pending.options||[])[1].label!=='进入 Chat 修改或补充方案') throw new Error(JSON.stringify(pending.options));
 if(saved.stage_execution!==null) throw new Error(JSON.stringify(saved.stage_execution));
 if(!String(((response.visible_response||{}).text)||'').includes(proposal.summary)||String(((response.visible_response||{}).text)||'').includes('继续双门验收与采用')) throw new Error(JSON.stringify(response.visible_response));
+const revise=cp.spawnSync(process.execPath,[path.join(process.argv[4],'scripts/workflow-state-machine.js'),'resolve-action','--project-root',root,'--input','2','--pending-action-id',pending.id,'--visible-choice-hash',pending.visible_choice_hash,'--state-version',String(saved.state_version),'--book-root',root,'--json'],{encoding:'utf8'});
+if(revise.status!==0) throw new Error(revise.stdout||revise.stderr);
+const reviseOut=JSON.parse(revise.stdout),awaiting=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+if(reviseOut.status!=='feedback_proposal_revision_input_requested'||String(((reviseOut.visible_response||{}).text)||'').includes('不会执行当前方案')===false) throw new Error(revise.stdout);
+if((awaiting.proposal_revision_input||{}).status!=='awaiting_chat'||awaiting.proposal_revision_input.proposal_id!==proposal.proposal_id) throw new Error(JSON.stringify(awaiting.proposal_revision_input));
+if((awaiting.proposed_plan||{}).status!=='awaiting_user_confirmation'||awaiting.stage_execution!==null) throw new Error(JSON.stringify(awaiting));
+const premature=cp.spawnSync(process.execPath,[path.join(process.argv[4],'scripts/workflow-state-machine.js'),'resolve-action','--project-root',root,'--input','1','--bind-current','--json'],{encoding:'utf8'});
+if(premature.status!==0) throw new Error(premature.stdout||premature.stderr);
+const prematureOut=JSON.parse(premature.stdout),stillAwaiting=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+if(prematureOut.status!=='feedback_proposal_revision_input_required'||stillAwaiting.stage_execution!==null||(stillAwaiting.proposed_plan||{}).status!=='awaiting_user_confirmation') throw new Error(premature.stdout);
+const amendment='删除第二项，把冲突结果改成公开复核。';
+const amended=cp.spawnSync(process.execPath,[path.join(process.argv[4],'scripts/workflow-state-machine.js'),'resolve-action','--project-root',root,'--input',amendment,'--json'],{encoding:'utf8'});
+if(amended.status!==0) throw new Error(amended.stdout||amended.stderr);
+const amendedOut=JSON.parse(amended.stdout),requeued=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const amendmentItem=((requeued.pending_feedback||{}).items||[]).find(item=>item.text===amendment)||{};
+if(amendedOut.status!=='short_feedback_impact_started'||requeued.current_stage!=='feedback_impact_sync') throw new Error(amended.stdout);
+if(amendmentItem.source_kind!=='user_proposal_revision'||(requeued.proposal_revision_input||{}).status!=='feedback_received') throw new Error(JSON.stringify({amendmentItem,proposal_revision_input:requeued.proposal_revision_input}));
+if((requeued.proposed_plan||{}).status!=='superseded_pending_reanalysis'||(requeued.accepted_plan||{}).proposal_id===proposal.proposal_id) throw new Error(JSON.stringify(requeued));
 const validation=cp.spawnSync(process.execPath,[path.join(process.argv[4],'scripts/workflow-state-validate.js'),'--project-root',root,'--json'],{encoding:'utf8'});
 if(validation.status!==0||JSON.parse(validation.stdout).status==='blocked') throw new Error(validation.stdout||validation.stderr);
 NODE
@@ -3375,9 +5248,9 @@ NODE
 const fs=require('fs');const file=process.argv[2];const task=JSON.parse(fs.readFileSync(file,'utf8'));
 const feedbackId='feedback-current-plan';
 task.current_stage='next_section_brief';task.current_step='next_section_brief';task.status='running';
-task.pending_feedback={feedback_id:feedbackId,text:'第7节补足母亲当面承认，再回写设定和小节大纲。',scope_snapshot:'第7节',status:'pending'};
+task.pending_feedback={feedback_id:feedbackId,text:'第7节补足关键决策人的当面对质，再回写设定和小节大纲。',scope_snapshot:'第7节',status:'pending'};
 task.short_feedback_impact={status:'ok',feedback_id:feedbackId,impact_level:'planning',affected_sections:[7],affected_assets:['设定.md','小节大纲.md'],downstream_impact:{invalidate_briefs:['写作Brief_第007节.md'],recheck_prose:['正文/第007节.md']}};
-task.proposed_plan={schema_version:'1.0.0',proposal_id:'proposal.feedback-current-plan',status:'awaiting_user_confirmation',feedback_id:feedbackId,summary:'补足母亲当面承认并重建第7节规划。',requirements:[{requirement_id:'req-current',text:'母亲必须当面承认明知与代投。',impact_level:'planning'}],impact_level:'planning',affected_sections:[7]};
+task.proposed_plan={schema_version:'1.0.0',proposal_id:'proposal.feedback-current-plan',status:'awaiting_user_confirmation',feedback_id:feedbackId,summary:'补足关键决策人的当面对质并重建第7节规划。',requirements:[{requirement_id:'req-current',text:'关键决策人必须当面承认知情与越权操作。',impact_level:'planning'}],impact_level:'planning',affected_sections:[7]};
 task.accepted_plan={plan_id:'accepted-plan.feedback-current-plan',proposal_id:'proposal.feedback-current-plan.v1',feedback_id:feedbackId,status:'accepted_pending_projection',projection_status:'pending'};
 task.feedback_revision_queue={status:'running',current_section_index:4,items:[{section_index:4,status:'current',brief_status:'pending',prose_status:'pending_recheck'}]};
 task.pending_action=null;
@@ -3398,7 +5271,7 @@ const options=(task.pending_action||{}).options||[];
 if(options.length!==4||options[0].target_stage!=='feedback_apply_patch'||options[0].requires_user_confirm!==true) throw new Error(JSON.stringify(options));
 const visibleOptions=(out.visible_response||{}).options||[];
 if((visibleOptions[0]||{}).target_stage!=='feedback_apply_patch'||(visibleOptions[0]||{}).requires_user_confirm!==true) throw new Error(JSON.stringify(visibleOptions));
-if((visibleOptions[0]||{}).label!=='确认当前反馈回写方案（推荐）'||(visibleOptions[1]||{}).label!=='查看当前方案、影响范围与依据') throw new Error(JSON.stringify(visibleOptions));
+if((visibleOptions[0]||{}).label!=='确认并执行当前回写方案（推荐）'||(visibleOptions[1]||{}).label!=='进入 Chat 修改或补充方案'||(visibleOptions[2]||{}).label!=='查看当前方案、影响范围与依据') throw new Error(JSON.stringify(visibleOptions));
 if((out.visible_response||{}).work_queue!==null||String((out.visible_response||{}).text||'').includes('本轮整篇回炉')) throw new Error(JSON.stringify(out.visible_response));
 if(!String((out.visible_response||{}).text||'').includes('1.')||String((out.visible_response||{}).text||'').includes('回复“继续”')) throw new Error(JSON.stringify(out.visible_response));
 NODE
@@ -3408,7 +5281,7 @@ NODE
     printf '%s\n' "$output" > "$TMP_DIR/reentered-proposal.json"
     node - "$TMP_DIR/reentered-proposal.json" <<'NODE'
 const fs=require('fs'),out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),text=String(((out.visible_response||{}).text)||'');
-if(!text.includes('补足母亲当面承认并重建第7节规划。')||!text.includes('确认当前反馈回写方案（推荐）')) throw new Error(text);
+if(!text.includes('补足关键决策人的当面对质并重建第7节规划。')||!text.includes('确认并执行当前回写方案（推荐）')||!text.includes('进入 Chat 修改或补充方案')) throw new Error(text);
 NODE
 
     node - "$SCRIPT" "$TMP_DIR/book" "$task_file" <<'NODE'
@@ -3699,14 +5572,14 @@ JSON
 }
 JSON
     migrate_legacy_fixture "$TMP_DIR/book"
-    node "$SCRIPT" resolve-action --project-root "$TMP_DIR/book" --input "哥哥的动机与小节大纲冲突，先改设定和小节大纲再重写本节" --json > "$TMP_DIR/free-feedback.json"
+    node "$SCRIPT" resolve-action --project-root "$TMP_DIR/book" --input "主管的动机与小节大纲冲突，先改设定和小节大纲再重写本节" --json > "$TMP_DIR/free-feedback.json"
     node - "$TMP_DIR/free-feedback.json" "$(focused_task_file "$TMP_DIR/book")" <<'NODE'
 const fs=require('fs');
 const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 const task=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
 if(out.status!=='short_feedback_impact_started' || out.target_stage!=='feedback_impact_sync') throw new Error(JSON.stringify(out));
 if(task.current_stage!=='feedback_impact_sync' || task.stage_execution.status!=='running') throw new Error(JSON.stringify(task));
-if(!task.pending_feedback || !/哥哥的动机/.test(task.pending_feedback.text)) throw new Error(JSON.stringify(task.pending_feedback));
+if(!task.pending_feedback || !/主管的动机/.test(task.pending_feedback.text)) throw new Error(JSON.stringify(task.pending_feedback));
 NODE
 }
 
@@ -3761,6 +5634,9 @@ NODE
     grep -q "free_text_enabled=true" "$WORKFLOW_INBOX"
     grep -q "提交人工修改" "$WORKFLOW_INBOX"
     grep -q "switch-intent" "$WORKFLOW_PHASE_INDEX"
+    grep -q "presentation_allowed=false" "$WORKFLOW"
+    grep -q "terminal_reply_allowed_on" "$WORKFLOW"
+    grep -q "质量失败先在当前写集内修订一次" "$WORKFLOW"
 }
 
 @test "workflow state machine branches private short section machine gate by pass or blocking result" {
@@ -4051,33 +5927,26 @@ NODE
 }
 
 @test "workflow state machine migrates a legacy single-candidate short task without changing creative assets" {
-    mkdir -p "$TMP_DIR/book/追踪/workflow" "$TMP_DIR/book/追踪/workflow/tasks/wf-short-legacy/result-packets"
+    mkdir -p "$TMP_DIR/book/追踪/workflow/tasks/wf-short-legacy/result-packets"
     printf '%s\n' '唯一候选正文' > "$TMP_DIR/book/正文.md"
     before="$(shasum -a 256 "$TMP_DIR/book/正文.md" | awk '{print $1}')"
-    cat > "$TMP_DIR/book/追踪/workflow/current-task.json" <<'JSON'
-{
-  "workflow_id": "wf-short-legacy",
-  "workflow_type": "private_short_startup",
-  "scope": "第1节",
-  "current_stage": "section_candidate_compare",
-  "current_step": "section_candidate_compare",
-  "status": "running",
-  "machine": {
-    "completed_stages": ["section_machine_gate", "quality_gate"],
-    "remaining_stages": ["section_candidate_compare", "section_accept_anchor", "next_section_brief", "draft_next_section"]
-  }
-}
-JSON
-    migrate_legacy_fixture "$TMP_DIR/book"
-    cat > "$TMP_DIR/book/追踪/workflow/tasks/wf-short-legacy/result-packets/section_machine_gate.result.json" <<'JSON'
-{"step_status":"completed","verification_result":"pass","machine_gate_result":"pass","blocking_findings":[]}
-JSON
-    cat > "$TMP_DIR/book/追踪/workflow/tasks/wf-short-legacy/result-packets/quality_gate.result.json" <<'JSON'
-{"step_status":"completed","verification_result":"pass","quality_gate_result":"pass","candidate_count":1,"blocking_findings":[]}
-JSON
+    node - "$REPO/tests/fixtures/workflow-v3/legacy-v2/planning-confirmed.json" "$TMP_DIR/book" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [fixtureFile,root]=process.argv.slice(2),workflowId='wf-short-legacy';
+const task=JSON.parse(fs.readFileSync(fixtureFile,'utf8'));
+task.workflow_id=workflowId;
+task.task_dir=`追踪/workflow/tasks/${workflowId}`;
+task.stage_execution.stage_attempt_id=`sa-${workflowId}-fixture`;
+task.stage_execution.expected_result_packet=`${task.task_dir}/result-packets/next_section_brief.section-002.result.json`;
+const taskFile=path.join(root,task.task_dir,'task.json');
+fs.mkdirSync(path.dirname(taskFile),{recursive:true});
+fs.writeFileSync(taskFile,`${JSON.stringify(task,null,2)}\n`);
+fs.writeFileSync(path.join(root,'追踪/workflow/current-task.json'),`${JSON.stringify({schemaVersion:'1.0.0',workflow_id:workflowId,task_dir:task.task_dir,state_version:task.state_version},null,2)}\n`);
+NODE
 
     node "$SCRIPT" migrate-short-lean-workflow --project-root "$TMP_DIR/book" --workflow-id wf-short-legacy --json > "$TMP_DIR/dry.json"
-    grep -q '"status": "eligible_single_candidate_skip"' "$TMP_DIR/dry.json"
+    grep -q '"status": "v3_migration_preview"' "$TMP_DIR/dry.json"
+    grep -q '"target_stage": "section_brief"' "$TMP_DIR/dry.json"
     grep -q '"creative_assets_modified": false' "$TMP_DIR/dry.json"
 
     node "$SCRIPT" migrate-short-lean-workflow --project-root "$TMP_DIR/book" --workflow-id wf-short-legacy --confirm --json > "$TMP_DIR/migrated.json"
@@ -4087,9 +5956,8 @@ JSON
 const fs=require('fs');
 const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 const task=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
-if(out.status!=='short_lean_workflow_migrated') throw new Error(JSON.stringify(out));
-if(task.workflow_type!=='short_write' || task.current_stage!=='section_accept_anchor') throw new Error(JSON.stringify(task));
-if((task.pending_action.options||[]).length!==4) throw new Error(JSON.stringify(task.pending_action));
+if(out.status!=='v3_migration_applied'||out.migrated!==true) throw new Error(JSON.stringify(out));
+if(task.workflow_type!=='short_write'||task.engine_version!==3||task.current_stage!=='section_brief') throw new Error(JSON.stringify(task));
 NODE
 }
 
@@ -4265,6 +6133,11 @@ if (!longStages.prose_acceptance.allowed_next.includes('chapter_commit')) {
 }
 if (!longStages.chapter_commit.allowed_next.includes('chapter_brief') || !longStages.chapter_commit.allowed_next.includes('milestone_review')) {
   throw new Error(`chapter_commit must continue the chapter loop or enter milestone review: ${JSON.stringify(longStages.chapter_commit.allowed_next)}`);
+}
+for (const id of ['master_outline_review', 'volume_outline_review', 'detail_outline_review', 'brief_review', 'prose_acceptance', 'milestone_review', 'volume_acceptance', 'book_acceptance']) {
+  if (longStages[id].write_set.length !== 0) {
+    throw new Error(`long review stage ${id} must be result-packet-only: ${JSON.stringify(longStages[id].write_set)}`);
+  }
 }
 
 const short = byType.short_write;
@@ -4642,6 +6515,7 @@ NODE
 JSON
     attach_long_lifecycle_graph "$TMP_DIR/book"
     migrate_legacy_fixture "$TMP_DIR/book"
+    prepare_long_chapter_v2_targets "$TMP_DIR/book" 1
     cat > "$TMP_DIR/pass-result.json" <<'JSON'
 {
   "workflow_id": "wf-long-accept-pass",
@@ -4663,7 +6537,8 @@ const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const task = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 if (out.status !== 'stage_started') throw new Error(`chapter commit should auto-start, got ${out.status}`);
 if (out.current_stage !== 'chapter_commit') throw new Error(`pass must route to chapter_commit, got ${out.current_stage}`);
-if ((out.visible_response||{}).selection_contract !== 'resume_running_stage') throw new Error(JSON.stringify(out.visible_response));
+if (out.interaction_contract !== 'continue_confirmed_internal_stage') throw new Error(JSON.stringify(out));
+if (((out.stage_execution||{}).stage_id) !== 'chapter_commit') throw new Error(JSON.stringify(out.stage_execution));
 if (!task.machine.completed_stages.includes('prose_acceptance')) {
   throw new Error('passing prose acceptance should be marked completed');
 }
@@ -4692,6 +6567,7 @@ NODE
 JSON
     attach_long_lifecycle_graph "$TMP_DIR/book"
     migrate_legacy_fixture "$TMP_DIR/book"
+    prepare_long_chapter_v2_targets "$TMP_DIR/book" 1
     cat > "$TMP_DIR/block-result.json" <<'JSON'
 {
   "workflow_id": "wf-long-accept-block",
@@ -4737,6 +6613,13 @@ NODE
   "current_stage": "chapter_commit",
   "current_step": "chapter_commit",
   "status": "running",
+  "accepted_detail_outline_targets": [
+    {"outline_path":"大纲/第2卷/细纲_第001章.md","outline_sha256":"1111111111111111111111111111111111111111111111111111111111111111"},
+    {"outline_path":"大纲/第2卷/细纲_第002章.md","outline_sha256":"2222222222222222222222222222222222222222222222222222222222222222"},
+    {"outline_path":"大纲/第2卷/细纲_第003章.md","outline_sha256":"3333333333333333333333333333333333333333333333333333333333333333"}
+  ],
+  "active_chapter_target": {"outline_path":"大纲/第2卷/细纲_第001章.md","outline_sha256":"1111111111111111111111111111111111111111111111111111111111111111"},
+  "consumed_detail_outline_targets": [],
   "lifecycle_graph": {
     "version": "1.0.0",
     "current_node": "chapter_commit",
@@ -4752,15 +6635,8 @@ NODE
 JSON
     attach_long_lifecycle_graph "$TMP_DIR/book"
     migrate_legacy_fixture "$TMP_DIR/book"
-    mkdir -p "$TMP_DIR/book/追踪/story-system/commits"
-    write_accepted_commit
-    write_transactional_commit_result "wf-long-next-chapter" "projection_current" false
-    node - "$TMP_DIR/result.json" "$TMP_DIR/next-chapter-result.json" <<'NODE'
-const fs=require('fs');const input=process.argv[2],output=process.argv[3];
-const result=JSON.parse(fs.readFileSync(input,'utf8'));
-result.next_stage_id='chapter_brief';
-fs.writeFileSync(output,JSON.stringify(result,null,2)+'\n');
-NODE
+    prepare_long_chapter_v2_targets "$TMP_DIR/book" 3
+    write_v2_transactional_commit_result "$TMP_DIR/book" "$TMP_DIR/next-chapter-result.json" chapter_brief
 
     run node "$SCRIPT" apply-result --project-root "$TMP_DIR/book" --result "$TMP_DIR/next-chapter-result.json" --json
     [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -4777,6 +6653,145 @@ for (const id of expected) {
   if (task.machine.completed_stages.includes(id)) throw new Error(`${id} remained completed`);
 }
 if (task.lifecycle_graph.current_node !== 'chapter_brief') throw new Error(`wrong graph node: ${task.lifecycle_graph.current_node}`);
+if((task.active_chapter_target||{}).outline_path!=='大纲/第2卷/细纲_第002章.md') throw new Error(`next target did not advance: ${JSON.stringify(task.active_chapter_target)}`);
+if(JSON.stringify((task.consumed_detail_outline_targets||[]).map((item)=>item.outline_path))!==JSON.stringify(['大纲/第2卷/细纲_第001章.md'])) throw new Error(`consumed targets wrong: ${JSON.stringify(task.consumed_detail_outline_targets)}`);
+if(((task.stage_execution||{}).chapter_target||{}).outline_path!=='大纲/第2卷/细纲_第002章.md') throw new Error(`next brief did not bind target: ${JSON.stringify(task.stage_execution)}`);
+NODE
+
+    for stage in chapter_brief brief_review prose prose_acceptance; do
+        node - "$TMP_DIR/book" "$stage" <<'NODE'
+const task=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[2]),stage=process.argv[3],expected='大纲/第2卷/细纲_第002章.md';
+if(task.current_stage!==stage) throw new Error(`expected ${stage}, got ${task.current_stage}`);
+if((task.active_chapter_target||{}).outline_path!==expected||(task.stage_execution.chapter_target||{}).outline_path!==expected) throw new Error(JSON.stringify({active:task.active_chapter_target,execution:task.stage_execution}));
+NODE
+        advance_long_write_stage "$TMP_DIR/book"
+    done
+
+    write_v2_transactional_commit_result "$TMP_DIR/book" "$TMP_DIR/book/second-chapter-commit.result.json" chapter_brief
+    node "$SCRIPT" apply-result --project-root "$TMP_DIR/book" --result "$TMP_DIR/book/second-chapter-commit.result.json" --json > "$TMP_DIR/second-chapter-commit.out.json"
+    node - "$TMP_DIR/second-chapter-commit.out.json" <<'NODE'
+const fs=require('fs'),out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),consumed=(out.task.consumed_detail_outline_targets||[]).map((item)=>item.outline_path);
+if(out.task.current_stage!=='chapter_brief'||(out.task.active_chapter_target||{}).outline_path!=='大纲/第2卷/细纲_第003章.md') throw new Error(JSON.stringify(out.task));
+if(JSON.stringify(consumed)!==JSON.stringify(['大纲/第2卷/细纲_第001章.md','大纲/第2卷/细纲_第002章.md'])) throw new Error(JSON.stringify(consumed));
+if((out.task.stage_execution.chapter_target||{}).outline_path!=='大纲/第2卷/细纲_第003章.md') throw new Error(JSON.stringify(out.task.stage_execution));
+NODE
+}
+
+@test "long V2 apply-result rejects target drift in all five stages and consumes only the accepted commit target" {
+    book="$TMP_DIR/long-v2-target-loop"
+    prepare_detail_outline_review "$book"
+    apply_detail_outline_quality_result "$book" pass >/dev/null
+
+    for stage in chapter_brief brief_review prose prose_acceptance; do
+        current_stage="$(node -e "const t=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]);process.stdout.write(t.current_stage)" "$book")"
+        [ "$current_stage" = "$stage" ] || { echo "expected $stage, got $current_stage"; false; }
+        stage_status="$(node -e "const t=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]);process.stdout.write(String((t.stage_execution||{}).status||''))" "$book")"
+        if [ "$stage_status" != "running" ]; then
+            resolve_action "$book" 1 >/dev/null
+        fi
+
+        if [ "$stage" = "brief_review" ]; then
+            node - "$book" <<'NODE'
+const fs=require('fs'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],file=fixture.focusedTaskFile(root),task=fixture.readFocusedTask(root);
+task.stage_execution.write_set=['追踪/workflow/tasks/wrong-target.md'];
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+            run apply_long_write_v2_result "$book"
+            [ "$status" -eq 2 ]
+            [[ "$output" == *'blocked_long_chapter_write_set_mismatch'* ]]
+            node - "$book" <<'NODE'
+const fs=require('fs'),fixture=require(process.env.WORKFLOW_TASK_FIXTURE),root=process.argv[2],file=fixture.focusedTaskFile(root),task=fixture.readFocusedTask(root);
+task.stage_execution.write_set=[];
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+        fi
+
+        run apply_long_write_v2_result "$book" "" completed pass "" "" "" "" global_chapter_no
+        [ "$status" -eq 2 ]
+        [[ "$output" == *'blocked_chapter_target_echo_mismatch'* ]]
+        [ "$(node -e "const t=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]);process.stdout.write(t.current_stage)" "$book")" = "$stage" ]
+
+        if [ "$stage" = "chapter_brief" ]; then
+            contract="$(node -e "const t=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]);process.stdout.write(t.active_chapter_target.contract_path)" "$book")"
+            mkdir -p "$book/$(dirname "$contract")"
+            printf '%s\n' '# 当前章 Brief' '' '- 目标字数：100' '- 合法区间：90—120' > "$book/$contract"
+            apply_long_write_v2_result "$book" "" completed pass "" "" "" "$contract" >/dev/null
+        elif [ "$stage" = "prose" ]; then
+            candidate="$(node -e "const t=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]);process.stdout.write(t.active_chapter_target.candidate_draft_path)" "$book")"
+            mkdir -p "$book/$(dirname "$candidate")"
+            node - "$book/$candidate" <<'NODE'
+const fs=require('fs');fs.writeFileSync(process.argv[2],'汉'.repeat(100));
+NODE
+            apply_long_write_v2_result "$book" "" completed pass "" "" "" "$candidate" >/dev/null
+        else
+            advance_long_write_stage "$book"
+        fi
+    done
+
+    [ "$(node -e "const t=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]);process.stdout.write(t.current_stage)" "$book")" = "chapter_commit" ]
+    stage_status="$(node -e "const t=require(process.env.WORKFLOW_TASK_FIXTURE).readFocusedTask(process.argv[1]);process.stdout.write(String((t.stage_execution||{}).status||''))" "$book")"
+    if [ "$stage_status" != "running" ]; then
+        resolve_action "$book" 1 >/dev/null
+    fi
+    run apply_long_write_v2_result "$book" "" completed pass "" "" "" "" global_chapter_no
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_chapter_target_echo_mismatch'* ]]
+
+    node - "$book" "$SCRIPT" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path'),cp=require('child_process');
+const root=process.argv[2],script=process.argv[3],fixture=require(process.env.WORKFLOW_TASK_FIXTURE),task=fixture.readFocusedTask(root),target=task.active_chapter_target;
+if(!target||task.current_stage!=='chapter_commit') throw new Error(JSON.stringify(task));
+const candidateFile=path.join(root,target.candidate_draft_path),canonicalFile=path.join(root,target.draft_path);
+fs.mkdirSync(path.dirname(canonicalFile),{recursive:true});fs.copyFileSync(candidateFile,canonicalFile);
+const afterHash=`sha256:${crypto.createHash('sha256').update(fs.readFileSync(canonicalFile)).digest('hex')}`;
+const transactionId='tx-v2-target-001',transactionRel=`追踪/story-system/transactions/${transactionId}/transaction.json`,transactionFile=path.join(root,transactionRel);
+fs.mkdirSync(path.dirname(transactionFile),{recursive:true});
+fs.writeFileSync(transactionFile,JSON.stringify({schemaVersion:'1.0.0',transaction_id:transactionId,status:'accepted',workflow_id:task.workflow_id,volume:target.volume,chapter:target.volume_chapter_no,artifacts:[{role:'chapter_prose',source_staged:target.candidate_draft_path,target:target.draft_path,content_hash:afterHash}]}));
+const commitId='chapter-v2target-001-abcdef1234',commitRel=`追踪/story-system/commits/${commitId}.json`,commitFile=path.join(root,commitRel);
+fs.mkdirSync(path.dirname(commitFile),{recursive:true});
+fs.writeFileSync(commitFile,JSON.stringify({schemaVersion:'1.0.0',commit_id:commitId,transaction_id:transactionId,status:'accepted',workflow_id:task.workflow_id,volume:target.volume,chapter:target.volume_chapter_no,artifacts:[{role:'chapter_prose',target:target.draft_path,after_hash:afterHash}]}));
+const lifecycleNode=(task.lifecycle_graph.nodes||[]).find((node)=>node.id===task.current_stage);
+const result={
+  workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:'chapter_commit',step_id:task.current_step,step_status:'completed',
+  owner_module:lifecycleNode.owner_module,lifecycle_node:lifecycleNode.id,asset_target:lifecycleNode.asset_target,review_requirement:lifecycleNode.review_requirement,
+  outputs:[],changed_files:[target.draft_path],evidence:[],verification_result:'pass',checkpoint_state:{stage:'chapter_commit'},output_health_result:'pass',
+  memory_read_receipt:(((task.stage_execution||{}).memory_context||{}).memory_read_receipt)||null,
+  asset_revision:{status:'verified',asset_id:lifecycleNode.asset_target.id},review_decision:'not_applicable',downstream_effects:[],
+  lifecycle_transition_request:{action:'advance',target:'chapter_commit'},result_write_set:[target.draft_path],chapter_target:target,
+  chapter_commit:{mode:'transactional',accepted_commit_id:commitId,commit_file:commitRel,projection_status:'projection_current',projection_debt:false,staged_artifacts:[target.candidate_draft_path]},
+};
+const packet=path.join(root,task.stage_execution.expected_result_packet);fs.mkdirSync(path.dirname(packet),{recursive:true});fs.writeFileSync(packet,JSON.stringify(result,null,2));
+const applied=cp.spawnSync(process.execPath,[script,'apply-result','--project-root',root,'--result',packet,'--json'],{encoding:'utf8'});
+if(applied.status===0) throw new Error('forged accepted transaction without durable provenance was trusted');
+if(!String(applied.stdout||applied.stderr).includes('blocked_canonical_transaction_attempt_mismatch')) throw new Error(applied.stdout||applied.stderr);
+
+const manifestFile=path.join(root,'追踪/staging/v2-chapter-manifest.json');
+fs.mkdirSync(path.dirname(manifestFile),{recursive:true});
+fs.writeFileSync(manifestFile,JSON.stringify({
+  workflow_id:task.workflow_id,volume:target.volume,chapter:target.volume_chapter_no,
+  gates:{output_health:'pass',prose_quality:'pass',story_drift:'pass'},
+  artifacts:[{role:'chapter_prose',staged:target.candidate_draft_path,target:target.draft_path}]
+}));
+const commitScript=path.join(path.dirname(script),'chapter-commit.js');
+const prepared=cp.spawnSync(process.execPath,[commitScript,'prepare','--project-root',root,'--manifest',manifestFile,'--json'],{encoding:'utf8'});
+if(prepared.status!==0) throw new Error(prepared.stdout||prepared.stderr);
+const preparedOutput=JSON.parse(prepared.stdout);
+const accepted=cp.spawnSync(process.execPath,[commitScript,'accept','--project-root',root,'--transaction',preparedOutput.transaction_id,'--json'],{encoding:'utf8'});
+if(accepted.status!==0) throw new Error(accepted.stdout||accepted.stderr);
+const acceptedOutput=JSON.parse(accepted.stdout);
+fs.unlinkSync(manifestFile);
+result.chapter_commit={
+  mode:'transactional',accepted_commit_id:acceptedOutput.commit_id,
+  commit_file:path.relative(root,acceptedOutput.commit_file).replace(/\\/g,'/'),
+  projection_status:acceptedOutput.projection_status,projection_debt:false,
+  staged_artifacts:[target.candidate_draft_path]
+};
+fs.writeFileSync(packet,JSON.stringify(result,null,2));
+const verified=cp.spawnSync(process.execPath,[script,'apply-result','--project-root',root,'--result',packet,'--json'],{encoding:'utf8'});
+if(verified.status!==0) throw new Error(verified.stdout||verified.stderr);
+const out=JSON.parse(verified.stdout),consumed=out.task.consumed_detail_outline_targets||[];
+if(consumed.length!==1||consumed[0].target_id!==target.target_id) throw new Error(JSON.stringify(consumed));
+if((out.task.active_chapter_target||{}).target_id===target.target_id) throw new Error('accepted target remained active');
 NODE
 }
 
@@ -5014,6 +7029,315 @@ if(task.stage_execution.stage_completion_command!==task.stage_execution.executio
 if(task.stage_execution.current_required_action!=='edit_write_set') throw new Error(JSON.stringify(task.stage_execution));
 if((task.stage_execution.after_write_action||{}).command!==task.stage_execution.execution_command) throw new Error(JSON.stringify(task.stage_execution));
 if(task.stage_execution.completion_required_before_reply!==true) throw new Error(JSON.stringify(task.stage_execution));
+NODE
+}
+
+@test "runtime reconciliation previews and confirms legacy prose detail outline target revalidation" {
+    book="$TMP_DIR/legacy-prose-target-revalidation"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$book" --user-goal "恢复旧版长篇逐章写作" --json >/dev/null
+
+    node - "$REPO" "$book" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path');
+const [repo,root]=process.argv.slice(2),fixture=require(process.env.WORKFLOW_TASK_FIXTURE);
+const taskFile=fixture.focusedTaskFile(root),task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const outlines=[1,2,3].map((chapter)=>`大纲/第2卷/细纲_第${String(chapter).padStart(3,'0')}章.md`);
+fs.mkdirSync(path.join(root,'大纲/第2卷'),{recursive:true});
+fs.mkdirSync(path.join(root,'正文/第2卷'),{recursive:true});
+fs.mkdirSync(path.join(root,'追踪/schema'),{recursive:true});
+for(const [index,outlinePath] of outlines.entries()) {
+  fs.writeFileSync(path.join(root,outlinePath),`# 第${index+1}章细纲\n- 当前可信内容 ${index+1}\n`);
+}
+fs.writeFileSync(path.join(root,'大纲/第2卷/细纲_第999章.md'),'# 未声明细纲\n不得通过目录扫描进入恢复目标。\n');
+fs.writeFileSync(path.join(root,'正文/第2卷/第001章.md'),'# 第一章\n已经合法采用的正文。\n');
+fs.writeFileSync(path.join(root,'追踪/schema/chapters.jsonl'),outlines.map((outlinePath,index)=>JSON.stringify({
+  chapterId:`第${String(index+1).padStart(3,'0')}章`,chapterNo:index+1,volume:'第2卷',volumeChapterNo:index+1,
+  globalDraftOrder:index+34,outlinePath,contractPath:`追踪/章节契约/第2卷/第${String(index+1).padStart(3,'0')}章.md`,
+  draftPath:`正文/第2卷/第${String(index+1).padStart(3,'0')}章.md`
+})).join('\n')+'\n');
+const identities=outlines.map((outline_path)=>({outline_path,outline_sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,outline_path))).digest('hex')}));
+const packetDir=path.join(root,task.task_dir,'result-packets');fs.mkdirSync(packetDir,{recursive:true});
+const predecessorRel=`${task.task_dir}/result-packets/stage_detail_outline.accepted.json`;
+const oldReviewRel=`${task.task_dir}/result-packets/detail_outline_review.result.json`;
+const oldBriefRel=`${task.task_dir}/result-packets/chapter_brief.result.json`;
+fs.writeFileSync(path.join(root,predecessorRel),JSON.stringify({
+  workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:'stage_detail_outline',step_status:'completed',
+  verification_result:'pass',result_write_set:outlines,changed_files:outlines
+},null,2));
+fs.writeFileSync(path.join(root,oldReviewRel),JSON.stringify({
+  workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:'detail_outline_review',step_status:'completed',
+  verification_result:'pass',review_decision:'accepted',outputs:{detail_outline_quality:{
+    status:'pass',workflow_id:task.workflow_id,stage_id:'detail_outline_review',...identities[0]
+  }}
+},null,2));
+fs.writeFileSync(path.join(root,oldBriefRel),JSON.stringify({
+  workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:'chapter_brief',step_status:'completed',
+  verification_result:'pass',outputs:[{kind:'legacy_brief',path:'写作Brief_第034章.md'}]
+},null,2));
+const {buildLongChapterTargetV2}=require(path.join(repo,'scripts/lib/long-chapter-target.js'));
+const consumed=buildLongChapterTargetV2({projectRoot:root,outlinePath:identities[0].outline_path,outlineSha256:identities[0].outline_sha256,workflowId:task.workflow_id});
+if(consumed.status!=='ok') throw new Error(JSON.stringify(consumed));
+const consumedTarget={...consumed.target,consumed_at:'2026-08-03T00:00:00.000Z',accepted_commit_id:'chapter-consumed-001'};
+const consumedCommitRel=`${task.task_dir}/result-packets/chapter_commit.consumed-001.result.json`;
+fs.writeFileSync(path.join(root,consumedCommitRel),JSON.stringify({
+  workflow_id:task.workflow_id,workflow_type:'long_write',stage_id:'chapter_commit',step_status:'completed',verification_result:'pass',
+  chapter_target:consumedTarget,chapter_commit:{mode:'transactional',accepted_commit_id:consumedTarget.accepted_commit_id}
+},null,2));
+const tampered={...consumedTarget,outline_path:identities[1].outline_path,outline_sha256:identities[1].outline_sha256};
+const stageIds=task.lifecycle_graph.nodes.map((node)=>node.id),currentIndex=stageIds.indexOf('prose');
+task.scope='全局第34章';task.current_stage='prose';task.current_step='prose';task.status='running';
+task.machine={...task.machine,completed_stages:stageIds.slice(0,currentIndex),remaining_stages:stageIds.slice(currentIndex),last_transition:'legacy_prose_running'};
+task.lifecycle_graph.current_node='prose';
+task.lifecycle_graph.asset_target={...(task.lifecycle_graph.nodes.find((node)=>node.id==='prose')||{}).asset_target};
+task.lifecycle_graph.completed_nodes=stageIds.slice(0,currentIndex);task.lifecycle_graph.invalidated_nodes=[];
+task.lifecycle_graph.review_results={};
+for(const node of task.lifecycle_graph.nodes) {
+  const index=stageIds.indexOf(node.id);node.status=index<currentIndex?'accepted':index===currentIndex?'draft':'missing';
+  if(index<currentIndex&&((node.review_requirement||{}).required)) {
+    task.lifecycle_graph.review_results[node.id]={status:'accepted',verification_result:'pass',result_packet_path:node.id==='detail_outline_review'?oldReviewRel:`fixture://${node.id}`};
+  }
+}
+task.stage_attempt_history=[
+  {stage_attempt_id:'commit-consumed-old',work_unit_id:'wu-consumed-001',stage_id:'chapter_commit',status:'completed',accepted_result_packet:consumedCommitRel,expected_result_packet:consumedCommitRel,result_packet:consumedCommitRel},
+  {stage_attempt_id:'outline-batch-old',work_unit_id:'wu-outline-batch-old',stage_id:'stage_detail_outline',status:'completed',accepted_result_packet:predecessorRel,expected_result_packet:predecessorRel},
+  {stage_attempt_id:'review-v1-old',stage_id:'detail_outline_review',status:'completed',accepted_result_packet:oldReviewRel,expected_result_packet:oldReviewRel,result_packet:oldReviewRel},
+  {stage_attempt_id:'brief-old',stage_id:'chapter_brief',status:'completed',accepted_result_packet:oldBriefRel,expected_result_packet:oldBriefRel,result_packet:oldBriefRel},
+  {stage_attempt_id:'brief-review-old',stage_id:'brief_review',status:'completed',accepted_result_packet:`${task.task_dir}/result-packets/brief_review.old.json`}
+];
+task.detail_outline_review_targets=[identities[0]];
+task.accepted_detail_outline_targets=[consumedTarget];
+task.consumed_detail_outline_targets=[consumedTarget,tampered];
+task.active_chapter_target=null;
+task.stage_execution={
+  status:'running',stage_attempt_id:'prose-old',work_unit_id:'wu-prose-old',stage_id:'prose',step_id:'prose',
+  expected_result_packet:`${task.task_dir}/result-packets/prose.old.json`,result_contract:'long_write_result_v2'
+};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    task_file="$(focused_task_file "$book")"
+    for invalid_attempt in status stage_attempt_id work_unit_id expected_result_packet; do
+        node - "$task_file" "$invalid_attempt" <<'NODE'
+const fs=require('fs'),file=process.argv[2],field=process.argv[3],task=JSON.parse(fs.readFileSync(file,'utf8')),attempt=task.stage_attempt_history.find((item)=>item.stage_id==='stage_detail_outline');
+if(field==='status') attempt.status='failed';
+else if(field==='stage_attempt_id') attempt.stage_attempt_id='';
+else if(field==='work_unit_id') attempt.work_unit_id='';
+else attempt.expected_result_packet=`${attempt.accepted_result_packet}.stale`;
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+        invalid_attempt_before="$(shasum -a 256 "$task_file" | awk '{print $1}')"
+        run node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$(node -e "process.stdout.write(require(process.argv[1]).workflow_id)" "$task_file")" --session-id test:target-revalidation --json
+        [ "$status" -eq 2 ]
+        [[ "$output" == *'blocked_longform_detail_outline_target_revalidation_source_invalid'* ]]
+        [ "$(shasum -a 256 "$task_file" | awk '{print $1}')" = "$invalid_attempt_before" ]
+        node - "$task_file" <<'NODE'
+const fs=require('fs'),file=process.argv[2],task=JSON.parse(fs.readFileSync(file,'utf8')),attempt=task.stage_attempt_history.find((item)=>item.stage_id==='stage_detail_outline');
+attempt.status='completed';attempt.stage_attempt_id='outline-batch-old';attempt.work_unit_id='wu-outline-batch-old';attempt.expected_result_packet=attempt.accepted_result_packet;
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+    done
+    node - "$book" "$task_file" fail <<'NODE'
+const fs=require('fs'),path=require('path'),root=process.argv[2],task=JSON.parse(fs.readFileSync(process.argv[3],'utf8')),verification=process.argv[4];
+const source=task.stage_attempt_history.find((attempt)=>attempt.stage_id==='stage_detail_outline'),file=path.join(root,source.accepted_result_packet),packet=JSON.parse(fs.readFileSync(file,'utf8'));
+packet.verification_result=verification;fs.writeFileSync(file,JSON.stringify(packet,null,2));
+NODE
+    invalid_source_before="$(shasum -a 256 "$task_file" | awk '{print $1}')"
+    run node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$(node -e "process.stdout.write(require(process.argv[1]).workflow_id)" "$task_file")" --session-id test:target-revalidation --json
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_longform_detail_outline_target_revalidation_source_invalid'* ]]
+    [ "$(shasum -a 256 "$task_file" | awk '{print $1}')" = "$invalid_source_before" ]
+    node - "$book" "$task_file" pass <<'NODE'
+const fs=require('fs'),path=require('path'),root=process.argv[2],task=JSON.parse(fs.readFileSync(process.argv[3],'utf8')),verification=process.argv[4];
+const source=task.stage_attempt_history.find((attempt)=>attempt.stage_id==='stage_detail_outline'),file=path.join(root,source.accepted_result_packet),packet=JSON.parse(fs.readFileSync(file,'utf8'));
+packet.verification_result=verification;fs.writeFileSync(file,JSON.stringify(packet,null,2));
+NODE
+    for missing_authority in machine lifecycle; do
+        node - "$task_file" "$missing_authority" <<'NODE'
+const fs=require('fs'),file=process.argv[2],authority=process.argv[3],task=JSON.parse(fs.readFileSync(file,'utf8'));
+if(authority==='machine') task.machine.completed_stages=task.machine.completed_stages.filter((stageId)=>stageId!=='story_bible');
+else task.lifecycle_graph.completed_nodes=task.lifecycle_graph.completed_nodes.filter((stageId)=>stageId!=='story_bible');
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+        incomplete_before="$(shasum -a 256 "$task_file" | awk '{print $1}')"
+        run node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$(node -e "process.stdout.write(require(process.argv[1]).workflow_id)" "$task_file")" --session-id test:target-revalidation --json
+        [ "$status" -eq 2 ]
+        [[ "$output" == *'blocked_longform_detail_outline_target_revalidation_predecessor_incomplete'* ]]
+        [ "$(shasum -a 256 "$task_file" | awk '{print $1}')" = "$incomplete_before" ]
+        node - "$task_file" "$missing_authority" <<'NODE'
+const fs=require('fs'),file=process.argv[2],authority=process.argv[3],task=JSON.parse(fs.readFileSync(file,'utf8'));
+const stageIds=task.lifecycle_graph.nodes.map((node)=>node.id),completed=stageIds.slice(0,stageIds.indexOf('prose'));
+if(authority==='machine') task.machine.completed_stages=completed;
+else task.lifecycle_graph.completed_nodes=completed;
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+    done
+    node - "$book" > "$TMP_DIR/creative-before.json" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path'),root=process.argv[2];
+const files=['大纲/第2卷/细纲_第001章.md','大纲/第2卷/细纲_第002章.md','大纲/第2卷/细纲_第003章.md','大纲/第2卷/细纲_第999章.md','正文/第2卷/第001章.md'];
+process.stdout.write(JSON.stringify(Object.fromEntries(files.map((file)=>[file,crypto.createHash('sha256').update(fs.readFileSync(path.join(root,file))).digest('hex')]))));
+NODE
+    task_before="$(shasum -a 256 "$task_file" | awk '{print $1}')"
+
+    run node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$(node -e "process.stdout.write(require(process.argv[1]).workflow_id)" "$task_file")" --session-id test:target-revalidation --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    printf '%s\n' "$output" > "$TMP_DIR/target-revalidation-preview.json"
+    node - "$TMP_DIR/target-revalidation-preview.json" <<'NODE'
+const fs=require('fs'),out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+if(out.status!=='longform_detail_outline_target_revalidation_confirmation_required') throw new Error(JSON.stringify(out));
+if(!String(out.recovery_command||'').includes('reconcile-runtime')||!String(out.recovery_command||'').includes('--confirm')) throw new Error(JSON.stringify(out));
+if((out.detail_outline_review_targets||[]).length!==3||out.creative_assets_modified!==false) throw new Error(JSON.stringify(out));
+NODE
+    [ "$(shasum -a 256 "$task_file" | awk '{print $1}')" = "$task_before" ]
+
+    workflow_id="$(node -e "process.stdout.write(require(process.argv[1]).workflow_id)" "$task_file")"
+    node - "$book" "$task_file" > "$TMP_DIR/superseded-packet-hashes.json" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path'),root=process.argv[2],task=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+const sources=['detail_outline_review','chapter_brief'].map((stageId)=>task.stage_attempt_history.find((attempt)=>attempt.stage_id===stageId).accepted_result_packet);
+process.stdout.write(JSON.stringify(Object.fromEntries(sources.map((source)=>[source,`sha256:${crypto.createHash('sha256').update(fs.readFileSync(path.join(root,source))).digest('hex')}`]))));
+NODE
+    node - "$book" "$task_file" > "$TMP_DIR/protected-consumed-packet-hashes.json" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path'),root=process.argv[2],task=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+const source=task.stage_attempt_history.find((attempt)=>attempt.stage_attempt_id==='commit-consumed-old').accepted_result_packet;
+process.stdout.write(JSON.stringify({[source]:`sha256:${crypto.createHash('sha256').update(fs.readFileSync(path.join(root,source))).digest('hex')}`}));
+NODE
+    node - "$REPO" "$book" "$task_file" <<'NODE'
+const fs=require('fs'),path=require('path'),repo=process.argv[2],root=process.argv[3],task=JSON.parse(fs.readFileSync(process.argv[4],'utf8'));
+const {claimFamilyWriter}=require(path.join(repo,'scripts/lib/task-family-store.js'));
+const claim=claimFamilyWriter(root,task.task_family_id,{session_id:'test:live-other',host:'test'},{write:true,hostLiveness:()=> 'running'});
+if(claim.status!=='claimed') throw new Error(JSON.stringify(claim));
+NODE
+    task_before_takeover="$(shasum -a 256 "$task_file" | awk '{print $1}')"
+    run node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:target-revalidation --confirm --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    [[ "$output" == *'workflow_session_takeover_required'* ]]
+    [ "$(shasum -a 256 "$task_file" | awk '{print $1}')" = "$task_before_takeover" ]
+    node - "$book" "$TMP_DIR/superseded-packet-hashes.json" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path'),root=process.argv[2],hashes=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+for(const [source,expected] of Object.entries(hashes)) {
+  if(!fs.existsSync(path.join(root,source))) throw new Error(`packet moved before takeover: ${source}`);
+  const actual=`sha256:${crypto.createHash('sha256').update(fs.readFileSync(path.join(root,source))).digest('hex')}`;
+  if(actual!==expected) throw new Error(JSON.stringify({source,expected,actual}));
+}
+NODE
+
+    run node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:target-revalidation --takeover --confirm --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    printf '%s\n' "$output" > "$TMP_DIR/target-revalidation-applied.json"
+
+    run node "$SCRIPT" next-candidates --project-root "$book" --workflow-id "$workflow_id" --compact --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+
+    node - "$TMP_DIR/target-revalidation-applied.json" "$task_file" "$book" "$TMP_DIR/superseded-packet-hashes.json" "$TMP_DIR/protected-consumed-packet-hashes.json" "$REPO" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),task=JSON.parse(fs.readFileSync(process.argv[3],'utf8')),root=process.argv[4],oldHashes=JSON.parse(fs.readFileSync(process.argv[5],'utf8')),protectedHashes=JSON.parse(fs.readFileSync(process.argv[6],'utf8'));
+if(out.status!=='longform_detail_outline_target_revalidation_applied'||out.creative_assets_modified!==false) throw new Error(JSON.stringify(out));
+if(task.current_stage!=='detail_outline_review'||task.current_step!=='detail_outline_review') throw new Error(JSON.stringify(task));
+if((((task.runtime_guard||{}).session_lease||{}).holder_id)!=='test:target-revalidation') throw new Error(JSON.stringify(task.runtime_guard));
+const targets=task.detail_outline_review_targets||[],execution=task.stage_execution||{};
+if(targets.length!==3||execution.stage_id!=='detail_outline_review'||execution.status!=='running') throw new Error(JSON.stringify({targets,execution}));
+if(/undefined/.test(String(execution.resume_hint||''))||/第\s*章/.test(String(execution.resume_hint||''))) throw new Error(JSON.stringify({resume_hint:execution.resume_hint}));
+const {validateWorkflowConfirmation}=require(path.join(process.argv[7],'scripts/lib/workflow-confirmation-context.js'));
+if(!validateWorkflowConfirmation(task,execution).valid) throw new Error(JSON.stringify({confirmation:execution.confirmation_context,last_selection:task.last_selection,pending_action:task.pending_action}));
+if(targets.some((target)=>target.outline_path.includes('999'))) throw new Error(JSON.stringify(targets));
+if(execution.result_contract!=='detail_outline_quality_v2'||JSON.stringify(execution.review_targets)!==JSON.stringify(targets)) throw new Error(JSON.stringify(execution));
+for(const target of targets) {
+  const actual=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,target.outline_path))).digest('hex');
+  if(target.outline_sha256!==actual) throw new Error(JSON.stringify(target));
+}
+if((task.accepted_detail_outline_targets||[]).length!==0||task.active_chapter_target!==null) throw new Error(JSON.stringify(task.accepted_detail_outline_targets));
+const consumed=task.consumed_detail_outline_targets||[];
+if(consumed.length!==1||consumed[0].outline_path!=='大纲/第2卷/细纲_第001章.md') throw new Error(JSON.stringify(consumed));
+const stages=task.lifecycle_graph.nodes.map((node)=>node.id),reviewIndex=stages.indexOf('detail_outline_review');
+if(JSON.stringify(task.machine.completed_stages)!==JSON.stringify(stages.slice(0,reviewIndex))) throw new Error(JSON.stringify(task.machine));
+if(task.machine.remaining_stages[0]!=='detail_outline_review'||task.lifecycle_graph.current_node!=='detail_outline_review') throw new Error(JSON.stringify(task.lifecycle_graph));
+if(task.lifecycle_graph.invalidated_nodes.includes('detail_outline_review')) throw new Error(JSON.stringify(task.lifecycle_graph.invalidated_nodes));
+for(const stageId of stages.slice(reviewIndex+1)) {
+  if(!task.lifecycle_graph.invalidated_nodes.includes(stageId)) throw new Error(JSON.stringify(task.lifecycle_graph.invalidated_nodes));
+}
+for(const stageId of stages.slice(reviewIndex)) {
+  if(task.lifecycle_graph.completed_nodes.includes(stageId)||task.lifecycle_graph.review_results[stageId]) throw new Error(JSON.stringify(task.lifecycle_graph));
+}
+const attempts=Object.fromEntries((task.stage_attempt_history||[]).map((item)=>[item.stage_attempt_id,item]));
+if(attempts['outline-batch-old'].superseded_by_target_revalidation) throw new Error(JSON.stringify(attempts['outline-batch-old']));
+if(attempts['commit-consumed-old'].superseded_by_target_revalidation) throw new Error(JSON.stringify(attempts['commit-consumed-old']));
+for(const attemptId of ['review-v1-old','brief-old','brief-review-old','prose-old']) {
+  if(!attempts[attemptId]||attempts[attemptId].superseded_by_target_revalidation!==true) throw new Error(JSON.stringify(attempts));
+}
+const manifestRel=((task.longform_target_revalidation||{}).archive_manifest_path)||'',manifestFile=path.join(root,manifestRel);
+if(!manifestRel||!fs.existsSync(manifestFile)) throw new Error(JSON.stringify(task.longform_target_revalidation));
+const manifest=JSON.parse(fs.readFileSync(manifestFile,'utf8'));
+for(const [source,expectedHash] of Object.entries(oldHashes)) {
+  if(fs.existsSync(path.join(root,source))) throw new Error(`superseded canonical result still exists: ${source}`);
+  const entry=(manifest.entries||[]).find((item)=>item.source_path===source);
+  if(!entry||entry.sha256!==expectedHash||!fs.existsSync(path.join(root,entry.archive_path))) throw new Error(JSON.stringify({source,entry,manifest}));
+  const actual=`sha256:${crypto.createHash('sha256').update(fs.readFileSync(path.join(root,entry.archive_path))).digest('hex')}`;
+  if(actual!==expectedHash) throw new Error(JSON.stringify({source,expectedHash,actual}));
+}
+if(fs.existsSync(path.join(root,execution.expected_result_packet))) throw new Error(`new canonical result path is not empty: ${execution.expected_result_packet}`);
+for(const [source,expectedHash] of Object.entries(protectedHashes)) {
+  if(!fs.existsSync(path.join(root,source))) throw new Error(`protected consumed result was archived: ${source}`);
+  const actual=`sha256:${crypto.createHash('sha256').update(fs.readFileSync(path.join(root,source))).digest('hex')}`;
+  if(actual!==expectedHash||(manifest.entries||[]).some((item)=>item.source_path===source)) throw new Error(JSON.stringify({source,expectedHash,actual,manifest}));
+}
+NODE
+
+    node - "$task_file" "$book" <<'NODE'
+const fs=require('fs'),path=require('path'),taskFile=process.argv[2],root=process.argv[3],task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+const manifestRel=task.longform_target_revalidation.archive_manifest_path,manifestFile=path.join(root,manifestRel),manifest=JSON.parse(fs.readFileSync(manifestFile,'utf8'));
+for(const entry of manifest.entries.filter((item)=>/\/(?:detail_outline_review|chapter_brief)\.result\.json$/.test(item.source_path))) {
+  fs.mkdirSync(path.dirname(path.join(root,entry.source_path)),{recursive:true});
+  fs.renameSync(path.join(root,entry.archive_path),path.join(root,entry.source_path));
+}
+fs.unlinkSync(manifestFile);
+delete task.longform_target_revalidation.archive_manifest_path;
+delete task.longform_target_revalidation.archived_result_packet_count;
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+NODE
+
+    run node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:target-revalidation --confirm --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    printf '%s\n' "$output" > "$TMP_DIR/target-revalidation-archive-resumed.json"
+    node - "$TMP_DIR/target-revalidation-archive-resumed.json" "$task_file" "$book" "$TMP_DIR/superseded-packet-hashes.json" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),task=JSON.parse(fs.readFileSync(process.argv[3],'utf8')),root=process.argv[4],oldHashes=JSON.parse(fs.readFileSync(process.argv[5],'utf8'));
+if(out.status!=='longform_detail_outline_target_revalidation_archive_reconciled'||task.current_stage!=='detail_outline_review') throw new Error(JSON.stringify(out));
+const manifestRel=task.longform_target_revalidation.archive_manifest_path,manifest=JSON.parse(fs.readFileSync(path.join(root,manifestRel),'utf8'));
+for(const [source,expectedHash] of Object.entries(oldHashes)) {
+  if(fs.existsSync(path.join(root,source))) throw new Error(`superseded canonical result still exists after resumed archive: ${source}`);
+  const entry=manifest.entries.find((item)=>item.source_path===source);
+  if(!entry||entry.sha256!==expectedHash) throw new Error(JSON.stringify({source,entry,manifest}));
+  const actual=`sha256:${crypto.createHash('sha256').update(fs.readFileSync(path.join(root,entry.archive_path))).digest('hex')}`;
+  if(actual!==expectedHash) throw new Error(JSON.stringify({source,expectedHash,actual}));
+}
+NODE
+
+    node - "$task_file" <<'NODE'
+const fs=require('fs'),file=process.argv[2],task=JSON.parse(fs.readFileSync(file,'utf8'));
+task.pending_action=null;task.last_selection={};task.stage_execution.confirmation_token='legacy-invalid';
+task.stage_execution.confirmation_context={status:'confirmed',confirmation_token:'legacy-invalid',expires_at:''};
+fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+NODE
+    run node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:target-revalidation --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    [[ "$output" == *'longform_detail_outline_target_revalidation_confirmation_repair_required'* ]]
+    run node "$SCRIPT" reconcile-runtime --project-root "$book" --workflow-id "$workflow_id" --session-id test:target-revalidation --confirm --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    [[ "$output" == *'longform_detail_outline_target_revalidation_confirmation_repaired'* ]]
+    node - "$REPO" "$task_file" <<'NODE'
+const path=require('path'),task=require(process.argv[3]);
+const {validateWorkflowConfirmation}=require(path.join(process.argv[2],'scripts/lib/workflow-confirmation-context.js'));
+if(!validateWorkflowConfirmation(task,task.stage_execution).valid) throw new Error(JSON.stringify(task.stage_execution));
+NODE
+
+    run node "$SCRIPT" inspect --project-root "$book" --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    [[ "$output" == *'"status": "ok"'* ]]
+
+    node - "$book" "$TMP_DIR/creative-before.json" <<'NODE'
+const crypto=require('crypto'),fs=require('fs'),path=require('path'),root=process.argv[2],before=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+for(const [file,expected] of Object.entries(before)) {
+  const actual=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,file))).digest('hex');
+  if(actual!==expected) throw new Error(`${file} changed`);
+}
 NODE
 }
 
@@ -5278,6 +7602,52 @@ JSON
     [[ "$output" == *'blocked_chapter_commit_invalid'* ]]
 }
 
+@test "long-write chapter commit rejects a volume mismatch against the active outline path" {
+    mkdir -p "$TMP_DIR/book/追踪/workflow" "$TMP_DIR/book/追踪/story-system/commits"
+    write_long_commit_task "wf-long-volume-mismatch"
+    bind_active_long_chapter_target "大纲/第2卷/细纲_第001章.md" "$(printf '1%.0s' {1..64})"
+    write_accepted_commit
+    write_transactional_commit_result "wf-long-volume-mismatch" "projection_current" false
+
+    run node "$SCRIPT" apply-result --project-root "$TMP_DIR/book" --result "$TMP_DIR/result.json" --json
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'blocked_chapter_commit_target_mismatch'* ]]
+    [[ "$output" == *'commit.volume'* ]]
+}
+
+@test "long-write chapter commit accepts equivalent legacy volume labels" {
+    for volume_label in '第2卷' '第二卷' '卷二'; do
+        rm -rf "$TMP_DIR/book"
+        mkdir -p "$TMP_DIR/book/追踪/workflow" "$TMP_DIR/book/追踪/story-system/commits"
+        write_long_commit_task "wf-long-volume-normalized"
+        bind_active_long_chapter_target "大纲/第2卷/细纲_第001章.md" "$(printf '1%.0s' {1..64})"
+        write_accepted_commit
+        node - "$TMP_DIR/book/追踪/story-system/commits/chapter-v12345678-001-abcdef1234.json" "$volume_label" <<'NODE'
+const fs=require('fs'),file=process.argv[2],volume=process.argv[3],commit=JSON.parse(fs.readFileSync(file,'utf8'));commit.volume=volume;fs.writeFileSync(file,JSON.stringify(commit));
+NODE
+        write_transactional_commit_result "wf-long-volume-normalized" "projection_current" false
+
+        run node "$SCRIPT" apply-result --project-root "$TMP_DIR/book" --result "$TMP_DIR/result.json" --json
+        [ "$status" -eq 0 ] || { echo "$volume_label: $output"; false; }
+    done
+}
+
+@test "long-write chapter commit rejects a chapter mismatch using the volume-local number" {
+    mkdir -p "$TMP_DIR/book/追踪/workflow" "$TMP_DIR/book/追踪/story-system/commits"
+    write_long_commit_task "wf-long-chapter-mismatch"
+    bind_active_long_chapter_target "大纲/第2卷/细纲_第002章.md" "$(printf '2%.0s' {1..64})"
+    write_accepted_commit
+    node - "$TMP_DIR/book/追踪/story-system/commits/chapter-v12345678-001-abcdef1234.json" <<'NODE'
+const fs=require('fs'),file=process.argv[2],commit=JSON.parse(fs.readFileSync(file,'utf8'));commit.volume='第2卷';fs.writeFileSync(file,JSON.stringify(commit));
+NODE
+    write_transactional_commit_result "wf-long-chapter-mismatch" "projection_current" false
+
+    run node "$SCRIPT" apply-result --project-root "$TMP_DIR/book" --result "$TMP_DIR/result.json" --json
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'blocked_chapter_commit_target_mismatch'* ]]
+    [[ "$output" == *'commit.chapter'* ]]
+}
+
 @test "long-write chapter commit blocks projection debt but preserves explicit legacy compatibility" {
     mkdir -p "$TMP_DIR/book/追踪/workflow" "$TMP_DIR/book/追踪/story-system/commits"
     write_long_commit_task "wf-long-projection"
@@ -5343,7 +7713,7 @@ JSON
 
 @test "compact task activation returns only the current execution contract" {
     mkdir -p "$TMP_DIR/book"
-    node "$SCRIPT" create --workflow-type short_write --project-root "$TMP_DIR/book" --user-goal "新开短篇" --json > "$TMP_DIR/create.json"
+    node "$SCRIPT" create --workflow-type long_write --project-root "$TMP_DIR/book" --user-goal "新开长篇" --json > "$TMP_DIR/create.json"
     workflow_id="$(node -e 'console.log(require(process.argv[1]).task.workflow_id)' "$TMP_DIR/create.json")"
 
     node "$SCRIPT" activate --project-root "$TMP_DIR/book" --workflow-id "$workflow_id" --compact --json > "$TMP_DIR/activate.json"
@@ -5360,6 +7730,155 @@ for(const forbidden of ['runtime_guard','task_family','result_packets','history'
 }
 
 NODE
+}
+
+@test "compact resolve action starts brief review without leaking durable execution payloads" {
+    run node - "$SCRIPT" "$REPO" "$TMP_DIR/compact-resolve-brief-review" <<'NODE'
+const assert=require('assert'),cp=require('child_process'),crypto=require('crypto'),fs=require('fs'),path=require('path');
+const [script,repo,root]=process.argv.slice(2);
+const invoke=(args)=>cp.spawnSync(process.execPath,[script,...args],{encoding:'utf8'});
+const created=invoke(['create','--workflow-type','long_write','--project-root',root,'--user-goal','继续当前长篇','--json']);
+if(created.status!==0) throw new Error(created.stdout||created.stderr);
+const fixture=require(process.env.WORKFLOW_TASK_FIXTURE),taskFile=fixture.focusedTaskFile(root),task=fixture.readFocusedTask(root);
+const stageIds=task.lifecycle_graph.nodes.map((node)=>node.id),reviewIndex=stageIds.indexOf('brief_review');
+const outlinePath='大纲/第1卷/细纲_第001章.md',outlineFile=path.join(root,outlinePath);
+fs.mkdirSync(path.dirname(outlineFile),{recursive:true});
+fs.writeFileSync(outlineFile,'# 第一章细纲\n\n主角必须在公开质疑中作出不可撤回的选择。\n');
+fs.mkdirSync(path.join(root,'追踪/schema'),{recursive:true});
+fs.writeFileSync(path.join(root,'追踪/schema/chapters.jsonl'),`${JSON.stringify({
+  chapterId:'第001章',chapterNo:1,volume:'第1卷',volumeChapterNo:1,globalDraftOrder:1,
+  outlinePath,contractPath:'追踪/章节契约/第1卷/第001章.md',draftPath:'正文/第1卷/第001章.md',
+})}\n`);
+const {buildLongChapterTargetV2}=require(path.join(repo,'scripts/lib/long-chapter-target.js'));
+const built=buildLongChapterTargetV2({
+  projectRoot:root,
+  outlinePath,
+  outlineSha256:crypto.createHash('sha256').update(fs.readFileSync(outlineFile)).digest('hex'),
+  workflowId:task.workflow_id,
+});
+if(built.status!=='ok') throw new Error(JSON.stringify(built));
+const target=built.target;
+fs.mkdirSync(path.dirname(path.join(root,target.contract_path)),{recursive:true});
+fs.writeFileSync(path.join(root,target.contract_path),'# 第一章 Brief\n\n- 目标字数：3000\n- 合法区间：2700—3600\n');
+const noiseDir=path.join(root,'素材','只用于验证快照边界');
+fs.mkdirSync(noiseDir,{recursive:true});
+for(let index=0;index<700;index+=1) fs.writeFileSync(path.join(noiseDir,`上下文-${String(index).padStart(4,'0')}.md`),`证据 ${index}\n`);
+task.current_stage='brief_review';task.current_step='brief_review';task.status='running';
+task.machine={...task.machine,completed_stages:stageIds.slice(0,reviewIndex),remaining_stages:stageIds.slice(reviewIndex),last_transition:'stage_completed',next_stop_reason:'awaiting_user_confirm'};
+task.lifecycle_graph.current_node='brief_review';task.lifecycle_graph.completed_nodes=stageIds.slice(0,reviewIndex);task.lifecycle_graph.invalidated_nodes=[];
+for(const node of task.lifecycle_graph.nodes) node.status=stageIds.indexOf(node.id)<reviewIndex?'accepted':'missing';
+task.lifecycle_graph.review_results=Object.fromEntries(task.lifecycle_graph.nodes
+  .filter((node)=>stageIds.indexOf(node.id)<reviewIndex&&node.review_requirement&&node.review_requirement.required)
+  .map((node)=>[node.id,{status:'accepted',verification_result:'pass',result_packet_path:`${task.task_dir}/result-packets/${node.id}.result.json`}]))
+task.lifecycle_graph.asset_target=task.lifecycle_graph.nodes[reviewIndex].asset_target;
+task.active_chapter_target=target;task.accepted_detail_outline_targets=[target];task.consumed_detail_outline_targets=[];
+task.stage_execution=null;
+task.pending_action={
+  ...(task.pending_action||{}),id:'pa-brief-review',pending_action_id:'pa-brief-review',status:'pending',
+  question:'请选择下一步',
+  options:[
+    {...((task.pending_action||{}).options||[])[0],number:1,action_id:'continue_next_stage',label:'继续 Brief 审阅（推荐）',target_stage:'brief_review',recommended:true},
+    ...((task.pending_action||{}).options||[]).slice(1),
+  ],
+};
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+
+const fullRoot=`${root}-full`;
+fs.cpSync(root,fullRoot,{recursive:true});
+const fullStarted=invoke(['resolve-action','--project-root',fullRoot,'--input','1','--bind-current','--json']);
+if(fullStarted.status!==0) throw new Error(fullStarted.stdout||fullStarted.stderr);
+const fullOut=JSON.parse(fullStarted.stdout),fullExecution=fullOut.stage_execution||{};
+assert.equal(fullOut.status,'stage_started');
+assert.ok(fullExecution.write_snapshot&&Object.keys(fullExecution.write_snapshot.files||{}).length>=700,'non-compact resolve-action lost its durable snapshot');
+assert.ok(fullExecution.result_packet_template&&fullExecution.stage_context_packet,'non-compact resolve-action contract changed');
+
+const candidates=invoke(['next-candidates','--project-root',root,'--compact','--json']);
+if(candidates.status!==0) throw new Error(candidates.stdout||candidates.stderr);
+const candidateOut=JSON.parse(candidates.stdout),continueOption=(candidateOut.next_candidates||[]).find((option)=>Number(option.number)===1)||{};
+assert.ok(String(continueOption.execution_command||'').includes('resolve-action'),'compact menu lost the exact resolve-action command');
+assert.ok(String(continueOption.execution_command||'').includes('--compact'),`compact menu resolve-action command must preserve compact mode: ${JSON.stringify(candidateOut)}`);
+
+const started=invoke(['resolve-action','--project-root',root,'--input','1','--bind-current','--compact','--json']);
+if(started.status!==0) throw new Error(started.stdout||started.stderr);
+const raw=started.stdout,out=JSON.parse(raw),execution=out.stage_execution||{};
+assert.equal(out.status,'stage_started');
+const compactBytes=Buffer.byteLength(raw,'utf8');
+assert.ok(compactBytes<20*1024,`compact resolve-action output too large: ${compactBytes} bytes`);
+for(const field of ['stage_attempt_id','work_unit_id','stage_id','status','owner_module','context_read_command','execution_command','expected_result_packet']) {
+  assert.ok(Object.hasOwn(execution,field)&&String(execution[field]||'')!=='',`missing ${field}: ${raw}`);
+}
+assert.equal(execution.stage_id,'brief_review');
+assert.equal(execution.chapter_target.target_id,target.target_id);
+assert.ok(out.visible_response&&typeof out.visible_response.text==='string','missing visible_response');
+for(const forbidden of ['write_snapshot','stage_context_packet','result_packet_template','canonical_write_baseline','write_audit_snapshot']) {
+  assert.equal(raw.includes(forbidden),false,`compact resolve-action leaked ${forbidden}`);
+}
+const durable=fixture.readFocusedTask(root),saved=durable.stage_execution||{};
+assert.ok(saved.write_snapshot&&Object.keys(saved.write_snapshot.files||{}).length>=700,'durable write snapshot was not preserved');
+assert.ok(saved.result_packet_template&&saved.stage_context_packet,'durable host contract was changed by compact projection');
+NODE
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "compact inspect projects bounded recovery state without changing full inspect" {
+    run node - "$SCRIPT" "$TMP_DIR/compact-inspect-book" <<'NODE'
+const cp=require('child_process'),fs=require('fs'),path=require('path');
+const script=process.argv[2],root=process.argv[3];
+const invoke=(args)=>cp.spawnSync(process.execPath,[script,...args],{encoding:'utf8'});
+const created=invoke(['create','--workflow-type','long_write','--project-root',root,'--user-goal','继续长篇','--json']);
+if(created.status!==0) throw new Error(created.stdout||created.stderr);
+const task=JSON.parse(created.stdout).task;
+const started=invoke(['resolve-action','--project-root',root,'--input','1','--bind-current','--compact','--json']);
+if(started.status!==0) throw new Error(started.stdout||started.stderr);
+const taskFile=path.join(root,task.task_dir,'task.json');
+const durable=JSON.parse(fs.readFileSync(taskFile,'utf8'));
+durable.stage_execution.write_snapshot={
+  version:'stage_write_snapshot_v1',
+  files:Object.fromEntries(Array.from({length:900},(_,index)=>[`追踪/证据/快照-${String(index).padStart(4,'0')}.json`,`sha256:${'a'.repeat(64)}`])),
+};
+durable.stage_execution.stage_context_packet={packet_md:'内部上下文'.repeat(12000),estimated_tokens:48000};
+durable.stage_execution.context_packet_blocking={
+  status:'blocked_context_packet',blocking:true,reason:'缺少当前阶段必要上下文',
+  findings:Array.from({length:80},(_,index)=>({code:`missing_${index}`,message:'缺少字段'.repeat(80)})),
+};
+durable.stage_attempt_history=Array.from({length:300},(_,index)=>({
+  stage_attempt_id:`sa-history-${index}`,stage_id:'positioning',status:'completed',
+  evidence:'历史证据'.repeat(120),
+}));
+durable.longform_target_revalidation={
+  status:'recovery_required',resume_stage:'positioning',reason:'runtime_upgrade',
+  recovery_command:`node scripts/workflow-state-machine.js reconcile-runtime --project-root . --workflow-id ${durable.workflow_id} --confirm --json`,
+  internal_manifest:Array.from({length:600},(_,index)=>({path:`archive/${index}.json`,digest:'b'.repeat(64)})),
+};
+fs.writeFileSync(taskFile,JSON.stringify(durable,null,2)+'\n');
+
+const full=invoke(['inspect','--project-root',root,'--json']);
+if(full.status!==0) throw new Error(full.stdout||full.stderr);
+const fullOut=JSON.parse(full.stdout);
+if(!fullOut.task||fullOut.task.stage_attempt_history.length!==300) throw new Error(full.stdout);
+if(Object.keys(fullOut.task.stage_execution.write_snapshot.files).length!==900) throw new Error(full.stdout);
+if(!String(fullOut.task.stage_execution.stage_context_packet.packet_md||'').includes('内部上下文')) throw new Error(full.stdout);
+
+const compact=invoke(['inspect','--project-root',root,'--compact','--json']);
+if(compact.status!==0) throw new Error(compact.stdout||compact.stderr);
+const raw=compact.stdout;
+const out=JSON.parse(raw),projected=out.task||{},execution=projected.stage_execution||{};
+if(Buffer.byteLength(raw,'utf8')>=25*1024) throw new Error(`compact inspect too large: ${Buffer.byteLength(raw,'utf8')} bytes`);
+for(const field of ['workflow_id','workflow_type','status','current_stage','state_version','task_dir']) {
+  if(projected[field]===undefined||projected[field]===null||projected[field]==='') throw new Error(`missing ${field}: ${raw}`);
+}
+if(!projected.pending_action||projected.pending_action.options.length>4) throw new Error(raw);
+if(!projected.machine||projected.machine.next_stop_reason==='') throw new Error(raw);
+if(!projected.lifecycle||projected.lifecycle.status==='') throw new Error(raw);
+if(execution.status!=='running'||execution.stage_id!=='positioning'||!execution.expected_result_packet) throw new Error(raw);
+if(!execution.context_packet_blocking||execution.context_packet_blocking.status!=='blocked_context_packet') throw new Error(raw);
+if(!projected.runtime_guard||!projected.runtime_guard.checkpoint_policy||!projected.runtime_guard.heartbeat) throw new Error(raw);
+if(!projected.recovery_state||projected.recovery_state.longform_target_revalidation.status!=='recovery_required') throw new Error(raw);
+for(const forbidden of ['stage_attempt_history','write_snapshot','stage_context_packet','internal_manifest']) {
+  if(raw.includes(forbidden)) throw new Error(`compact inspect leaked ${forbidden}: ${raw}`);
+}
+NODE
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
 @test "short review starts with one deterministic context and advance command" {

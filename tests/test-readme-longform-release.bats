@@ -19,7 +19,9 @@ setup() {
 }
 
 @test "compact README keeps short and long production boundaries visible" {
-    grep -q "当前版本优先把单个短篇从构思到完稿做稳" "$README"
+    grep -q "当前专注短篇" "$README"
+    grep -q "长篇持续打磨中" "$README"
+    grep -q "审阅、拆文、扫榜、导入和去 AI 味等专业模块同样提供" "$README"
     grep -q "只写当前节" "$README"
     grep -q "双门验收" "$README"
     grep -q "章节 Brief" "$README"

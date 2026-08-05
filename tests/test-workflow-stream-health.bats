@@ -84,6 +84,18 @@ if (monitor.snapshot(10).stop_reason !== 'budget_exhausted') throw new Error(JSO
 NODE
 }
 
+@test "stream health monitor classifies Claude max turns as a recoverable turn stop" {
+    node - "$MODULE" <<'NODE'
+const { createStreamHealthMonitor } = require(process.argv[2]);
+const monitor = createStreamHealthMonitor();
+monitor.start(0);
+monitor.ingest('stdout', '{"type":"result","subtype":"error_', 9);
+monitor.ingest('stdout', 'max_turns","terminal_reason":"max_turns"}', 10);
+if (!monitor.shouldAbort(10)) throw new Error('max turns must stop the run');
+if (monitor.snapshot(10).stop_reason !== 'max_turns_exhausted') throw new Error(JSON.stringify(monitor.snapshot(10)));
+NODE
+}
+
 @test "stream health monitor reports idle timeout only after output has started" {
     node - "$MODULE" <<'NODE'
 const { createStreamHealthMonitor } = require(process.argv[2]);

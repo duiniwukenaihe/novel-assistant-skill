@@ -16,6 +16,8 @@ const FIXED_SOURCES = [
 
 const ACTIVE_CAST_SOURCE = { relative: '追踪/memory/active-cast.json', type: 'active_cast', priority: 88, format: 'json' };
 const ACCEPTED_SUGGESTIONS_SOURCE = { relative: '追踪/memory/memory-suggestions.jsonl', type: 'accepted_memory_suggestions', priority: 86, format: 'accepted_suggestions' };
+const LEGACY_FACTS_SOURCE = { relative: '追踪/facts.jsonl', type: 'fact_compatibility', priority: 85, format: 'legacy_facts' };
+const DUPLICATE_BURST_WINDOW_LINES = 32;
 const LEGACY_MIGRATION_AUTHORITY = Symbol('legacy-memory-migration-authority');
 
 function projectSources(projectRoot, requestedSources = [], options = {}) {
@@ -270,7 +272,7 @@ function projectSourcesUnlocked(projectRoot, requestedSources = [], options = {}
   const lorebookFile = path.join(memoryDir, 'lorebook.jsonl');
   const migrationFile = path.join(memoryDir, 'migration-state.json');
   const filters = normalizeSources(requestedSources);
-  const discovered = discoverCandidates(root);
+  const discovered = discoverCandidates(root, { includeLegacyFacts: options.sourceKind === 'legacy' });
   const selected = filters.length ? discovered.filter(item => filters.includes(item.relative)) : discovered;
 
   if (filters.length) {
@@ -279,7 +281,7 @@ function projectSourcesUnlocked(projectRoot, requestedSources = [], options = {}
     if (missing.length) throw projectionFailure('blocked_memory_source_unavailable', `memory source is missing or unsupported: ${missing.join(', ')}`);
   }
 
-  const candidates = selected.map(item => buildCandidate(root, item, options)).filter(Boolean);
+  const candidates = selected.flatMap(item => buildCandidates(root, item, options));
   const existingRows = readJsonl(lorebookFile);
   const latest = latestById(existingRows);
   const events = [];
@@ -375,8 +377,9 @@ function projectSourcesUnlocked(projectRoot, requestedSources = [], options = {}
   };
 }
 
-function discoverCandidates(projectRoot) {
+function discoverCandidates(projectRoot, options = {}) {
   const files = [...FIXED_SOURCES];
+  if (options.includeLegacyFacts !== false) files.push(LEGACY_FACTS_SOURCE);
   const handoffDir = path.join(projectRoot, '追踪', '交接包');
   for (const relative of findRelativeFiles(projectRoot, handoffDir, '.md').slice(0, 12)) files.push({ relative, type: 'handoff', priority: 85 });
   const volumeHandoffDir = path.join(projectRoot, '追踪', '卷交接');
@@ -392,6 +395,65 @@ function discoverCandidates(projectRoot) {
     const file = path.join(projectRoot, item.relative);
     return fs.existsSync(file) && fs.statSync(file).isFile() && fs.statSync(file).size > 0;
   });
+}
+
+function buildCandidates(projectRoot, item, options = {}) {
+  if (item.format === 'legacy_facts') return buildLegacyFactCandidates(projectRoot, item, options);
+  const candidate = buildCandidate(projectRoot, item, options);
+  return candidate ? [candidate] : [];
+}
+
+function buildLegacyFactCandidates(projectRoot, item, options = {}) {
+  const raw = fs.readFileSync(path.join(projectRoot, item.relative), 'utf8');
+  const sourceHash = `sha256:${crypto.createHash('sha256').update(raw).digest('hex')}`;
+  const rows = String(raw).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const candidates = new Map();
+  for (const line of rows) {
+    let value;
+    try {
+      value = JSON.parse(line);
+    } catch (_) {
+      throw projectionFailure('blocked_invalid_legacy_facts', `legacy facts contain invalid JSON: ${item.relative}`);
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw projectionFailure('blocked_invalid_legacy_facts', `legacy fact must be an object: ${item.relative}`);
+    }
+    const normalized = {};
+    for (const field of ['type', 'entity', 'state', 'chapter']) {
+      normalized[field] = String(value[field] || '').trim();
+      if (!normalized[field]) throw projectionFailure('blocked_invalid_legacy_facts', `legacy fact is missing ${field}: ${item.relative}`);
+    }
+    const serialized = stableJson(normalized);
+    const digest = crypto.createHash('sha256').update(serialized).digest('hex');
+    const memoryId = `legacy.fact_compatibility.${digest.slice(0, 12)}`;
+    const content = `${normalized.entity}（${normalized.chapter}）：${normalized.state}`;
+    candidates.set(memoryId, {
+      id: memoryId,
+      memory_id: memoryId,
+      source_kind: String(options.sourceKind || ''),
+      type: item.type,
+      title: normalized.entity,
+      aliases: [normalized.entity],
+      triggers: extractTriggers(content),
+      scope: { book: 'current', chapter: normalized.chapter },
+      priority: item.priority,
+      tokenBudget: Math.min(480, Math.max(120, Math.ceil(content.length / 2))),
+      content,
+      constraints: [],
+      sourceRefs: [{
+        path: item.relative,
+        hash: sourceHash,
+        note: 'migrated from legacy fact compatibility source',
+      }],
+      status: 'active',
+      version: 1,
+      memoryLayer: 'book',
+      migrated: true,
+      compatibility_schema: 'legacy_fact_v1',
+      legacy_fact_type: normalized.type,
+    });
+  }
+  return Array.from(candidates.values());
 }
 
 function buildCandidate(projectRoot, item, options = {}) {
@@ -616,9 +678,33 @@ function extractTriggers(text) {
 
 function detectPollution(text) {
   if (/([\u4e00-\u9fff]{2,8})\1{8,}/.test(String(text || ''))) return true;
-  const counts = new Map();
-  for (const line of String(text || '').split(/\r?\n/).map(item => item.trim()).filter(Boolean)) counts.set(line, (counts.get(line) || 0) + 1);
-  return Array.from(counts.values()).some(count => count >= 4);
+  const occurrences = new Map();
+  const lines = String(text || '').split(/\r?\n/).map(item => item.trim()).filter(Boolean);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (isMarkdownStructureLine(lines, index)) continue;
+    const positions = occurrences.get(line) || [];
+    while (positions.length && index - positions[0] >= DUPLICATE_BURST_WINDOW_LINES) positions.shift();
+    positions.push(index);
+    if (positions.length >= 4) return true;
+    occurrences.set(line, positions);
+  }
+  return false;
+}
+
+function isMarkdownStructureLine(lines, index) {
+  const line = lines[index];
+  if (/^#{1,6}(?!#)/.test(line) || /^(?:`{3,}|~{3,})/.test(line)) return true;
+  if (/^(?:[-*+]|\d+[.)])\s+\*\*[^*\r\n]+\*\*(?:\s*[：:].*)?\s*$/.test(line)) return true;
+  if (/^=+$/.test(line)) return true;
+  if (/^(?:(?:-\s*){3,}|(?:_\s*){3,}|(?:\*\s*){3,})$/.test(line)) return true;
+  if (isMarkdownTableSeparator(line)) return true;
+  return line.includes('|') && isMarkdownTableSeparator(lines[index + 1] || '');
+}
+
+function isMarkdownTableSeparator(line) {
+  const cells = String(line || '').trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
+  return cells.length > 0 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
 }
 
 function normalizeSources(values) {

@@ -536,10 +536,30 @@ function hasHeading(source, labels) {
 }
 
 function numberedItems(text) {
-  return String(text || '').split(/\r?\n/)
+  const lines = String(text || '').split(/\r?\n/);
+  const numbered = lines
     .map(line => line.match(/^\s*\d+[.)、]\s*(.+?)\s*$/))
     .filter(Boolean)
     .map(match => match[1]);
+  const table = [];
+  let beatColumn = -1;
+  for (const line of lines) {
+    const row = line.match(/^\s*\|(.*)\|\s*$/);
+    if (!row) {
+      if (line.trim()) beatColumn = -1;
+      continue;
+    }
+    const cells = row[1].split('|').map(cell => cell.trim());
+    const headerColumn = cells.findIndex(cell => cell === '情节点');
+    if (headerColumn >= 0) {
+      beatColumn = headerColumn;
+      continue;
+    }
+    if (beatColumn < 0 || cells.every(cell => /^:?-{3,}:?$/.test(cell))) continue;
+    const beat = String(cells[beatColumn] || '').trim();
+    if (beat) table.push(beat);
+  }
+  return numbered.concat(table);
 }
 
 function csv(value) {

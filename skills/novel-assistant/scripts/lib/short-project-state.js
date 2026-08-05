@@ -93,7 +93,7 @@ function ensureShortProjectState(projectRoot, options = {}) {
   const previousOwner = String(current.active_write_workflow_id || '').trim();
   const history = Array.isArray(current.workflow_history) ? current.workflow_history.slice() : [];
   if (ownership.status === 'rebind_allowed' && previousOwner && !history.includes(previousOwner)) history.push(previousOwner);
-  const title = meaningfulTitle(options.title) || meaningfulTitle(current.project_title) || path.basename(root);
+  const title = meaningfulTitle(options.title) || resolveShortProjectTitle(current, path.basename(root));
   const planned = positiveInt(current.planned_sections || ((current.narrative || {}).planned_sections));
   const state = {
     ...current,
@@ -169,8 +169,25 @@ function isUnfinished(task) {
 
 function meaningfulTitle(value) {
   const title = String(value || '').trim();
-  if (!title || /^(新短篇|短篇|未命名(?:新书|短篇)?|new-book)$/iu.test(title)) return '';
+  if (!title
+    || /^(新短篇|短篇|未命名(?:新书|短篇)?|new-book)$/iu.test(title)
+    || /^第\s*0*\d+\s*[章节](?:\s*(?:现稿|草稿|正文))?$/u.test(title)) return '';
   return title;
+}
+
+function resolveShortProjectTitle(state = {}, fallback = '') {
+  const source = state && typeof state === 'object' ? state : {};
+  for (const candidate of [
+    source.working_title,
+    source.book_title,
+    source.title,
+    source.project_title,
+    fallback,
+  ]) {
+    const title = meaningfulTitle(candidate);
+    if (title) return title;
+  }
+  return '';
 }
 
 function safeProjectFile(root, relativePath) {
@@ -210,6 +227,7 @@ module.exports = {
   migrateShortStateStorage,
   outlineSectionCount,
   readShortProjectState,
+  resolveShortProjectTitle,
   resolveShortStateRelative,
   shortStateFile,
 };

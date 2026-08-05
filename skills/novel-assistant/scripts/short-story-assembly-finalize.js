@@ -26,6 +26,7 @@ function main() {
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 0, args.json);
   const task = authority.task;
+  if (Number(task.engine_version) === 3) return finish({ status: 'v3_engine_apply_required', workflow_id: workflowId, instruction: 'V3 任务必须调用全篇收束共享 service，并通过 V3 Engine 应用 StageResult。' }, 2, args.json);
   if (String(task.current_stage || '') !== 'full_story_assembly') {
     return finish({ status: 'stage_action_not_applicable', expected: 'full_story_assembly', actual: task.current_stage || '', instruction: '重新读取当前任务的 execution_command，不要运行旧阶段命令。' }, 0, args.json);
   }

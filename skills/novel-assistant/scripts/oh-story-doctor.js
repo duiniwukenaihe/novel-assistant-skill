@@ -167,10 +167,39 @@ function runValidatorCheck(id, command, commandArgs, successMessage) {
 }
 
 function chapterSet(projectDir, relDir, pattern) {
-  return uniqueNumbers(readDirSafe(path.join(projectDir, relDir))
-    .filter(name => pattern.test(name))
+  return uniqueNumbers(chapterFiles(path.join(projectDir, relDir))
+    .filter(name => pattern.test(path.basename(name)))
     .map(parseChapterNo)
     .filter(Boolean));
+}
+
+function chapterFiles(rootDir) {
+  const ignoredDirs = new Set([
+    'legacy-flat-layout', '历史', '备份', '归档', '版本',
+    'archive', 'archives', 'backup', 'backups', 'history', 'versions',
+  ]);
+  const files = [];
+
+  function visit(dir) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const absolute = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!ignoredDirs.has(entry.name)) visit(absolute);
+      } else if (entry.isFile()) {
+        files.push(entry.name);
+      }
+    }
+  }
+
+  visit(rootDir);
+  return files;
 }
 
 function hasAny(dir, files) {

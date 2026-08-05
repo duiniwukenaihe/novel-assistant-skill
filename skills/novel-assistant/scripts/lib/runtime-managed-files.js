@@ -184,8 +184,7 @@ function prepareSnapshot(plan, operations) {
   const snapshot = buildSnapshot(plan, operations, snapshotId);
   const snapshotBytes = snapshot.files.reduce((total, file) => total + file.size, 0)
     + Buffer.byteLength(`${JSON.stringify(snapshot, null, 2)}\n`);
-  const existingBytes = lstatIfExists(snapshotBase) ? directoryBytes(snapshotBase) : 0;
-  if (existingBytes + snapshotBytes > SNAPSHOT_TOTAL_BYTE_CAP) {
+  if (snapshotBytes > SNAPSHOT_TOTAL_BYTE_CAP) {
     throw new Error(`runtime snapshot byte cap would be exceeded: ${SNAPSHOT_TOTAL_BYTE_CAP}`);
   }
 
@@ -249,6 +248,12 @@ function pruneSnapshots(projectRoot, safeFs) {
   const snapshotBase = snapshotRootPath(projectRoot);
   let snapshots = listManagedSnapshots(snapshotBase);
   while (snapshots.length > RETAINED_SNAPSHOT_COUNT) {
+    const oldest = snapshots.shift();
+    const snapshotDir = targetPath(snapshotBase, oldest);
+    assertNoSymlinkTree(snapshotDir);
+    safeFs.removeTree(snapshotDirectoryRelativePath(oldest));
+  }
+  while (snapshots.length > 1 && directoryBytes(snapshotBase) > SNAPSHOT_TOTAL_BYTE_CAP) {
     const oldest = snapshots.shift();
     const snapshotDir = targetPath(snapshotBase, oldest);
     assertNoSymlinkTree(snapshotDir);

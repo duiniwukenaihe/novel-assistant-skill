@@ -11,6 +11,17 @@ const { inferLongChapter, resolveChapterDraft } = require('./lib/long-stage-cont
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 
 const CHECKS = ['brief_alignment', 'causal_chain', 'character_consistency', 'promise_and_hook', 'protagonist_agency', 'continuity', 'story_attraction', 'drift_control'];
+const UPSTREAM_BRIEF_CHECKS = new Set(['brief_alignment', 'drift_control']);
+const CHECK_MESSAGES = {
+  brief_alignment: '正文与冻结细纲或当前 Brief 不一致，需要先重建并复核 Brief。',
+  causal_chain: '正文因果推进不完整，需要修订当前章。',
+  character_consistency: '人物动机或行为边界不一致，需要修订当前章。',
+  promise_and_hook: '本章承诺兑现或章末钩子不足，需要修订当前章。',
+  protagonist_agency: '主角缺少有效选择与行动，需要修订当前章。',
+  continuity: '正文与已确认连续性事实冲突，需要修订当前章。',
+  story_attraction: '当前章可读性或吸引力不足，需要修订当前章。',
+  drift_control: '正文出现规划外剧情漂移，需要先重建并复核 Brief。',
+};
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -32,9 +43,12 @@ function main() {
       },
     }), 0, args.json);
   }
+  const chapterTarget = execution.chapter_target && typeof execution.chapter_target === 'object'
+    ? execution.chapter_target
+    : task.active_chapter_target;
   const chapter = inferLongChapter(root, task, 'prose_acceptance');
-  const volume = volumeFromTask(task);
-  const draft = args.draft ? safeProjectFile(root, args.draft) : resolveChapterDraft(root, task, chapter, volume);
+  const volume = String((chapterTarget || {}).volume || volumeFromTask(task));
+  const draft = args.draft ? safeProjectFile(root, args.draft) : resolveChapterDraft(root, task, chapterTarget);
   const machineRel = `${task.task_dir}/artifacts/chapter-${String(chapter).padStart(3, '0')}-machine-gate.json`;
   const machine = readJson(safeProjectFile(root, machineRel));
   if (!machine || machine.status !== 'pass' || Number(machine.blocking_count || 0) > 0) return finish(recoverableStageResult(task, 'blocked_machine_gate_required', '先完成当前章机器检查并修完阻断项，再回到故事质量检查。', { machine_evidence: machineRel }), 0, args.json);
@@ -43,22 +57,23 @@ function main() {
   if (args.decision === 'revise' && failed.size === 0) failed.add('story_attraction');
   if (args.decision === 'pass' && failed.size) return finish(recoverableStageResult(task, 'blocked_quality_decision_conflict', '质量证据仍有需修订项；修订当前章或把结论改为 revise 后重跑。', { failed: [...failed] }), 0, args.json);
   const passed = args.decision === 'pass';
+  const revisionStage = [...failed].some((id) => UPSTREAM_BRIEF_CHECKS.has(id)) ? 'chapter_brief' : 'prose';
   const packetRel = String(execution.expected_result_packet || `${task.task_dir}/result-packets/prose_acceptance.result.json`);
   const packetFile = safeProjectFile(root, packetRel);
   const stageContract = { owner_module: String(execution.owner_module || 'story-review'), lifecycle_node: String(execution.lifecycle_node || 'prose_acceptance'), asset_target: { ...(execution.asset_target || {}) }, review_requirement: { ...(execution.review_requirement || {}) } };
   atomicWriteJson(packetFile, {
     workflow_id: workflowId, workflow_type: 'long_write', stage_id: 'prose_acceptance', step_id: 'prose_acceptance', ...stageContract,
-    step_status: passed ? 'completed' : 'blocked', outputs: [relative(root, draft), machineRel], changed_files: [machineRel],
+    step_status: passed ? 'completed' : 'blocked', outputs: [relative(root, draft), machineRel], changed_files: [], chapter_target: chapterTarget,
     evidence: [{ chapter, volume, draft: relative(root, draft), machine_gate: 'pass', checks: CHECKS.map((id) => ({ id, status: failed.has(id) ? 'revise' : 'pass' })), summary: args.summary || '' }],
     verification_result: passed ? 'accepted' : 'rejected', machine_gate_result: 'pass', story_value_result: passed ? 'pass' : 'revise',
-    blocking_findings: [...failed].map((id) => ({ code: id, message: `${id} 需要修订` })),
-    checkpoint_state: { current_stage: 'prose_acceptance', completed_range: passed ? `第${chapter}章验收` : '', remaining_range: passed ? '章节事务提交' : `第${chapter}章修订`, resume_from: passed ? 'chapter_commit' : 'prose' },
-    output_health_result: 'pass', next_stage_id: passed ? 'chapter_commit' : 'prose', next_recommendation: passed ? '进入章节事务提交。' : '只修当前章，不重写大纲或下一章。',
+    blocking_findings: [...failed].map((id) => ({ code: id, message: CHECK_MESSAGES[id] || '当前章需要修订。' })),
+    checkpoint_state: { current_stage: 'prose_acceptance', completed_range: passed ? `第${chapter}章验收` : '', remaining_range: passed ? '章节事务提交' : `第${chapter}章修订`, resume_from: passed ? 'chapter_commit' : revisionStage },
+    output_health_result: 'pass', next_stage_id: passed ? 'chapter_commit' : revisionStage, next_recommendation: passed ? '进入章节事务提交。' : revisionStage === 'chapter_brief' ? '先按冻结细纲重建当前章 Brief，再重新审阅和写作。' : '只修当前章正文，不改大纲或下一章。',
     handoff_summary: passed ? `第${chapter}章机器门与故事质量门通过。` : `第${chapter}章需修订：${[...failed].join(', ')}。`,
     memory_read_receipt: ((execution.memory_context || {}).memory_read_receipt) || null,
     asset_revision: { status: passed ? 'verified' : 'revision_required', asset_id: String((execution.asset_target || {}).id || 'current-chapter') },
-    review_decision: passed ? 'accepted' : 'rejected', downstream_effects: [], lifecycle_transition_request: { action: passed ? 'advance' : 'return', target: passed ? 'prose_acceptance' : 'prose' },
-    result_write_set: [machineRel], memory_updates: [], result_packet_path: packetRel,
+    review_decision: passed ? 'accepted' : 'rejected', downstream_effects: [], lifecycle_transition_request: { action: passed ? 'advance' : 'return', target: passed ? 'prose_acceptance' : revisionStage },
+    result_write_set: [], memory_updates: [], result_packet_path: packetRel,
   });
   if (!args.apply) return finish({ status: 'packet_ready', workflow_id: workflowId, chapter, decision: args.decision, result_packet: packetRel }, 0, args.json);
   const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });

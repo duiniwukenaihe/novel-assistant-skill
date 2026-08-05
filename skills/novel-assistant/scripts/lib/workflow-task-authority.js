@@ -117,17 +117,32 @@ function mutateTaskAuthority(projectRoot, workflowId, expectedStateVersion, muta
 }
 
 function createTaskAuthority(projectRoot, task, options = {}) {
+  preflightCreateTaskAuthority(projectRoot, task);
+  const root = path.resolve(projectRoot || '');
+  const id = String((task || {}).workflow_id || '');
+  const taskDir = normalizeTaskDir(id, task.task_dir);
+  const next = { ...clone(task), task_dir: taskDir, state_version: Number(task.state_version || 0) + 1, updated_at: new Date().toISOString() };
+  const file = path.join(root, next.task_dir, 'task.json');
+  atomicWriteJson(file, next);
+  if (options.focus !== false) writeFocusPointer(root, next);
+  return next;
+}
+
+// Side-effect-free creation preflight: the same validation createTaskAuthority
+// applies (workflow id format, safe task directory, no existing task.json),
+// extracted so a caller can run it BEFORE performing any other durable write
+// (e.g. task-family persistence). It writes nothing and throws the same
+// authority errors createTaskAuthority would, so a rejected create cannot leave
+// a half-registered family behind. This is not a second state authority: it
+// shares one validation path with createTaskAuthority.
+function preflightCreateTaskAuthority(projectRoot, task) {
   const root = path.resolve(projectRoot || '');
   const id = String((task || {}).workflow_id || '');
   if (!root || !WORKFLOW_ID.test(id)) throw authorityError('WORKFLOW_TASK_MUTATION_INVALID', 'workflow task creation requires a workflow id');
   const taskDir = normalizeTaskDir(id, task.task_dir);
-  const next = { ...clone(task), task_dir: taskDir, state_version: Number(task.state_version || 0) + 1, updated_at: new Date().toISOString() };
-  if (!isSafeTaskDir(root, id, next.task_dir)) throw authorityError('WORKFLOW_TASK_MUTATION_INVALID', 'workflow task directory is unsafe');
-  const file = path.join(root, next.task_dir, 'task.json');
+  if (!isSafeTaskDir(root, id, taskDir)) throw authorityError('WORKFLOW_TASK_MUTATION_INVALID', 'workflow task directory is unsafe');
+  const file = path.join(root, taskDir, 'task.json');
   if (fs.existsSync(file)) throw authorityError('WORKFLOW_TASK_CONFLICT', `durable task already exists for ${id}`);
-  atomicWriteJson(file, next);
-  if (options.focus !== false) writeFocusPointer(root, next);
-  return next;
 }
 
 function isSafeTaskDir(root, workflowId, taskDir) {
@@ -177,6 +192,7 @@ function authorityError(code, message) {
 
 module.exports = {
   createTaskAuthority,
+  preflightCreateTaskAuthority,
   mutateTaskAuthority,
   readFocusedTask,
   resolveTaskAuthority,

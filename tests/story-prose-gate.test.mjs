@@ -21,7 +21,7 @@ function makeBook() {
 test('passes clean canonical volume-local draft', () => {
   const root = makeBook()
   try {
-    writeFileSync(path.join(root, '正文/第1卷/第001章_干净稿.md'), '## 第1章 干净稿\n\n陈洛趴在泥里。\n狼在洞外。\n他没有动。\n', 'utf8')
+    writeFileSync(path.join(root, '正文/第1卷/第001章_干净稿.md'), '## 第1章 干净稿\n\n陆川趴在泥里。\n狼在洞外。\n他没有动。\n', 'utf8')
 
     const result = runGate(root, '--chapter', '1')
     assert.equal(result.status, 0, result.stderr || result.stdout)
@@ -35,7 +35,7 @@ test('passes clean canonical volume-local draft', () => {
 test('fails when legacy flat duplicate can pollute chapter context', () => {
   const root = makeBook()
   try {
-    writeFileSync(path.join(root, '正文/第1卷/第001章_新稿.md'), '## 第1章 新稿\n\n陈洛活下来了。\n', 'utf8')
+    writeFileSync(path.join(root, '正文/第1卷/第001章_新稿.md'), '## 第1章 新稿\n\n陆川活下来了。\n', 'utf8')
     writeFileSync(path.join(root, '正文/第001章_旧稿.md'), '## 第1章 旧稿\n\n陈——洛——死——了。\n', 'utf8')
 
     const result = runGate(root, '--chapter', '1')
@@ -51,7 +51,7 @@ test('fails when legacy flat duplicate can pollute chapter context', () => {
 test('allows sparse functional Chinese em dash but fails ellipsis remnants', () => {
   const root = makeBook()
   try {
-    writeFileSync(path.join(root, '正文/第1卷/第001章_坏稿.md'), '## 第1章 坏稿\n\n陈洛抬头——狼在洞外……\n', 'utf8')
+    writeFileSync(path.join(root, '正文/第1卷/第001章_坏稿.md'), '## 第1章 坏稿\n\n陆川抬头——狼在洞外……\n', 'utf8')
 
     const result = runGate(root, '--chapter', '1')
     assert.equal(result.status, 2, result.stdout)
@@ -70,8 +70,8 @@ test('fails on dash density overuse', () => {
     writeFileSync(path.join(root, '正文/第1卷/第001章_坏稿.md'), [
       '## 第1章 坏稿',
       '',
-      '陈洛停住——门外有人。',
-      '黑狗崽抬头——尾巴绷直。',
+      '陆川停住——门外有人。',
+      '幼兽抬头——尾巴绷直。',
       '风吹进来——血腥味更重。',
       '铃声一响——所有人都看向他。',
       '',
@@ -90,7 +90,7 @@ test('fails on dash density overuse', () => {
 test('fails on nonstandard dash forms', () => {
   const root = makeBook()
   try {
-    writeFileSync(path.join(root, '正文/第1卷/第001章_坏稿.md'), '## 第1章 坏稿\n\n陈洛抬头--狼在洞外。\n他一顿—没再说话。\n', 'utf8')
+    writeFileSync(path.join(root, '正文/第1卷/第001章_坏稿.md'), '## 第1章 坏稿\n\n陆川抬头--狼在洞外。\n他一顿—没再说话。\n', 'utf8')
 
     const result = runGate(root, '--chapter', '1')
     assert.equal(result.status, 2, result.stdout)
@@ -108,9 +108,9 @@ test('fails when prose leaks writing workflow terms into dialogue', () => {
     writeFileSync(path.join(root, '正文/第1卷/第001章_坏稿.md'), [
       '## 第1章 坏稿',
       '',
-      '沈七把锅铲一放。',
-      '绿珠问：“那现在怎么办？”',
-      '沈七说：“该到下一章了，本章任务已经完成。”',
+      '陆川把锅铲一放。',
+      '苏禾问：“那现在怎么办？”',
+      '陆川说：“该到下一章了，本章任务已经完成。”',
       '灶火还在响。',
       '',
     ].join('\n'), 'utf8')
@@ -133,7 +133,7 @@ test('allows chapter wording when it is an in-world reading object', () => {
       '',
       '先生把旧书推到桌边。',
       '“翻到下一章。”他说，“照着经文读。”',
-      '沈七低头，纸页边缘都是油烟。',
+      '陆川低头，纸页边缘都是油烟。',
       '',
     ].join('\n'), 'utf8')
 
@@ -154,7 +154,7 @@ test('allows in-world system task panel wording', () => {
       '',
       '蓝色光幕在灶台前展开。',
       '【任务描述：在厨房立足，拿到第一口热锅。】',
-      '沈七盯着那行字，心里更稳了。',
+      '陆川盯着那行字，心里更稳了。',
       '',
     ].join('\n'), 'utf8')
 
@@ -245,7 +245,7 @@ test('accepts prose that fulfills outline duty through action without field name
     writeFileSync(path.join(root, '正文/第1卷/第001章_动作兑现.md'), [
       '## 第1章 动作兑现',
       '',
-      '陈洛把辞职信放在主任桌上。',
+      '陆川把辞职信放在主任桌上。',
       '主任没看，只是把茶杯推到他面前。',
       '他没接。',
       '走廊里有人在打电话，说的是下个月的排班。',

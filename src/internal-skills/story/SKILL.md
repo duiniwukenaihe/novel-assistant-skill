@@ -150,3 +150,19 @@ route-reference-contract -->
 - 无项目目录时，开书/写作先走 `story-setup` 后续接 `story-long-write`；扫榜、拆文可直接路由。
 - 已有项目检查 `.story-deployed`；未部署的已有小说项目（`正文/`、`大纲/`、`设定/`、`追踪/` 任意两个目录，或加 `CLAUDE.md`）必须先更新协作环境，不能直接读取章节状态或写正文。
 - 多书写入类任务（继续写、回炉、扩容、合并、迁移章节结构、更新大纲/细纲、删除、发布改稿）先确认目标书；查询类可宽松。多书且 `.active-book` 缺失、失效或冲突时，先选书，再读取章节状态或写入。只发现一本时可确认它为活跃书。
+
+## 全局可见长回复污染门禁
+
+router 直接回复用户的可见长回复、阶段摘要、修复方案、设定基准对齐建议和批量总结超过 800 中文字符时不得直接输出长报告。必须先写 `追踪/输出门禁/.visible_reply_draft_{YYYYMMDD_HHMMSS}.md`，运行 `node scripts/output-pollution-check.js --learn --project-root <book-root> <draft-file>`；命中重复填充、术语循环、用户可见术语缩写或已学习污染词组时删除污染段并重写，复扫到 0 后再回复用户。若污染已经开始输出，立即停止并落盘 `paused_after_output_pollution`。完整协议由 `story-workflow/references/output-safety-contract.md` 统一定义，本模块只强制引用，不复制长协议。
+
+### 可见回复前置自检
+
+候选回复写盘前必须先做 `visible_reply_draft` 草稿自检：先查 `output-pollution-check.js --json`，命中 `internal-workflow-narration` / `encoded-gibberish-blob` / `user-facing-jargon-leak` / `domain-token-flood` 任一硬污染时记为 `污染段#N`，证据只给文件路径/行号；命中 `blocked_model_degradation` 时调用 `node scripts/blocked-recovery-template.js --status blocked_model_degradation` 短模板，不复述污染短语。
+
+### 交互选项污染门禁
+
+`next_candidates`、阶段选择菜单、修复选项等 `option_payload_draft` 候选也必须走 `output-pollution-check.js`；选项描述不得承载修复报告正文、不得超过 120 个中文字符、不得把长报告、修复清单或污染段塞进选项描述。命中污染时不得展示选择器，必须回退到最后可信断点并输出干净的 2-4 个意图式候选。
+
+### 污染恢复协议
+
+命中输出污染后不是继续润色。先定位最后可信事实点，丢弃污染段及其后内容；把未完成报告拆成“范围、证据、结论、修复建议、下一步”五块分块重写，每块写完复扫。连续 2 次复扫仍失败时停止生成长报告，落盘 `paused_after_output_pollution`，记录最后可信事实点、丢弃污染段、未完成块和新会话续跑句。

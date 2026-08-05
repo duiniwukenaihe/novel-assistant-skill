@@ -65,6 +65,33 @@ MD
   node -e 'const x=JSON.parse(process.argv[1]).outputs.detail_outline_quality; if(x.status!=="pass" || x.activated_dimensions.length!==3 || x.workflow_id!=="wf-long-1" || x.stage_id!=="detail_outline_review" || x.outline_path!=="大纲/细纲_第001章.md" || !/^[0-9a-f]{64}$/.test(x.outline_sha256) || x.contract_projection.length || x.memory_projection.length) process.exit(1)' "$output"
 }
 
+@test "CLI aggregates three repeated outline targets into one deterministic v2 packet" {
+  workflow_id='wf-long-batch'
+  mkdir -p "$BOOK/追踪/workflow/tasks/$workflow_id/work"
+  args=()
+  for chapter in 001 002 003; do
+    outline="大纲/细纲_第${chapter}章.md"
+    semantic="追踪/workflow/tasks/$workflow_id/work/detail-outline-semantic-review-${chapter}.json"
+    make_valid_transition_outline "$BOOK/$outline"
+    hash="$(shasum -a 256 "$BOOK/$outline" | awk '{print $1}')"
+    printf '{"outline_path":"%s","outline_sha256":"%s","reviewer":"main-session","findings":[]}' "$outline" "$hash" > "$BOOK/$semantic"
+    args+=(--outline "$outline" --semantic-review "$semantic")
+  done
+  result="追踪/workflow/tasks/$workflow_id/result-packets/detail_outline_review.result.json"
+
+  run node "$CHECK" --project-root "$BOOK" "${args[@]}" --workflow-id "$workflow_id" --write-result "$result" --json
+  [ "$status" -eq 0 ]
+  node - "$output" "$BOOK/$result" <<'NODE'
+const fs=require('fs');
+const stdout=JSON.parse(process.argv[2]),packet=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+const quality=packet.outputs.detail_outline_quality;
+if(JSON.stringify(stdout)!==JSON.stringify(packet)) throw new Error('stdout and packet diverged');
+if(quality.version!=='detail_outline_quality_v2'||quality.identities.length!==3) throw new Error(JSON.stringify(quality));
+if(packet.evidence.length!==3||new Set(quality.identities.map((item)=>item.outline_path)).size!==3) throw new Error(JSON.stringify(packet));
+if(quality.identities.some((item)=>!['pass','pass_with_advisory'].includes(item.status))) throw new Error(JSON.stringify(quality.identities));
+NODE
+}
+
 @test "baseline gate revises a summary-only outline" {
   printf '# 第001章\n- 核心事件：主角遇到麻烦并解决。\n- 目标情绪：爽。\n#### 情节安排\n1. 主角完成任务并解决问题。\n2. 故事继续推进并发生变化。\n' > "$BOOK/大纲/细纲_第001章.md"
   run node "$CHECK" --project-root "$BOOK" --outline 大纲/细纲_第001章.md --workflow-id wf-long-1 --json
@@ -77,6 +104,25 @@ MD
   run node "$CHECK" --project-root "$BOOK" --outline 大纲/细纲_第001章.md --workflow-id wf-long-1 --json
   [ "$status" -eq 2 ]
   node -e 'const x=JSON.parse(process.argv[1]).outputs.detail_outline_quality; if(x.status!=="outline_underfilled" || x.contract_projection.length || x.memory_projection.length) process.exit(1)' "$output"
+}
+
+@test "official outline fields and beat table are parsed as populated outline fields" {
+  run node - "$REPO/scripts/lib/detail-outline-quality.js" "$REPO/tests/fixtures/detail-outline-quality/official-table-outline.md" <<'NODE'
+const assert = require('assert');
+const fs = require('fs');
+const { evaluateDetailOutline } = require(process.argv[2]);
+const text = fs.readFileSync(process.argv[3], 'utf8');
+const result = evaluateDetailOutline({ text });
+
+assert.equal(result.parsed_outline.coreEvent, '值班员保存巡检记录，因此确认设备编号异常。');
+assert.equal(result.parsed_outline.targetEmotion, '疑虑转为主动。');
+assert.deepEqual(result.parsed_outline.beats, [
+  '值班员打开记录并保存截图，因此确认编号异常。',
+  '值班员拨打值班电话，却拿到需要继续检查的新地址。',
+]);
+assert.notEqual(result.status, 'outline_underfilled');
+NODE
+  [ "$status" -eq 0 ]
 }
 
 @test "sequencing-only beats remain blocked by B1 causality" {

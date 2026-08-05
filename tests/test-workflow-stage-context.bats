@@ -3,7 +3,7 @@
 setup() {
     REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
     SCRIPT="$REPO/scripts/workflow-stage-context.js"
-    BOOK="$(mktemp -d)/果汁项目"
+    BOOK="$(mktemp -d)/档案复核"
     WORKFLOW_ID="wf-20260716014257097-private_short_startup-8318de87"
     TASK_DIR="$BOOK/追踪/workflow/tasks/$WORKFLOW_ID"
     PACKET_REL="追踪/workflow/tasks/$WORKFLOW_ID/context-packets/feedback_apply_patch/whole-story/sa-$WORKFLOW_ID-feedback_apply_patch-b5491f6d/stage-context.md"
@@ -48,4 +48,57 @@ teardown() {
     run node "$SCRIPT" refresh-current --project-root "$BOOK" --workflow-id "wf-unknown" --json
     [ "$status" -eq 2 ]
     [[ "$output" == *'blocked_task_authority_missing'* ]]
+}
+
+@test "build-and-read assembles the current V3 Brief packet and returns its content in one command" {
+    mkdir -p "$BOOK/追踪/story-system/short" "$BOOK/追踪/memory"
+    cat > "$BOOK/追踪/story-system/short/project-state.json" <<'JSON'
+{"project_id":"neutral-short","project_title":"中性短篇","plan_revision":1,"planned_sections":1,"current_section_index":1,"accepted_sections":[]}
+JSON
+    cat > "$BOOK/小节大纲.md" <<'EOF'
+# 小节大纲
+
+## 第1节：公开复核
+- 结构功能：开篇建立可核验冲突
+- 情绪目标：疑惑转为警觉
+- 因果链：发现重复编号 -> 拒绝撤回 -> 保留复核记录
+- 场景动作：主角在评审会上展示重复编号
+- 角色选择：主角拒绝删除记录
+- 可见阻力：主管要求立即撤回记录
+- 本节兑现：重复编号第一次被公开展示
+- 关系变化：主角与主管从配合转为公开分歧
+- 代价升级：主角可能失去复核权限
+- 核心承诺兑现：异常编号进入公开核验
+- 决定性行动：主角保存扫描回放
+- 即时代价：主管当场暂停她的操作权限
+- 子事件：
+  1. 主角发现两个批次编号重复
+  2. 主管要求撤回，主角拒绝
+- 节尾钩子：旧批次记录仍未公开
+EOF
+    printf '%s\n' '# 设定' '第一人称，主角负责档案复核。' > "$BOOK/设定.md"
+    printf '%s\n' '# 素材卡' '以公开记录推动责任落地。' > "$BOOK/素材卡.md"
+    node - "$TASK_DIR/task.json" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+const task = JSON.parse(fs.readFileSync(file, 'utf8'));
+task.current_stage = 'section_brief';
+task.current_section_index = 1;
+task.stage_execution = {
+  status: 'running',
+  stage_id: 'section_brief',
+  stage_attempt_id: 'sa-neutral-brief',
+  section_index: 1,
+};
+fs.writeFileSync(file, `${JSON.stringify(task, null, 2)}\n`);
+NODE
+
+    run node "$SCRIPT" build-and-read --project-root "$BOOK" \
+        --workflow-id "$WORKFLOW_ID" --stage section_brief --json
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    [[ "$output" == *'"status": "stage_context_ready"'* ]]
+    [[ "$output" == *'"packet_md"'* ]]
+    [[ "$output" == *'memory_read_receipt'* ]]
+    [[ "$output" == *'当前作品记忆快照'* ]]
+    [[ "$output" == *'第1节故事合同'* ]]
 }

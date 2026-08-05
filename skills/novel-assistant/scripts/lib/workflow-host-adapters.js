@@ -62,6 +62,9 @@ function buildAdapterInvocation(adapter, request = {}) {
     NOVEL_ASSISTANT_EVALUATION_ATTEMPT: String(request.evaluationAttempt || 0),
     NOVEL_ASSISTANT_EVALUATION_HOST: String(request.evaluationHost || ''),
   };
+  if (adapter === 'fake' && process.env.NOVEL_ASSISTANT_FAKE_HOST_LOG) {
+    env.NOVEL_ASSISTANT_FAKE_HOST_LOG = process.env.NOVEL_ASSISTANT_FAKE_HOST_LOG;
+  }
   // Hosts do not reliably expose environment variables to the model. Give the
   // model one exact, project-local path instead of making it search for a
   // prompt file; the detailed prompt itself stays out of argv.
@@ -91,6 +94,11 @@ function buildAdapterInvocation(adapter, request = {}) {
       const budget = Number(request.maxBudgetUsd);
       if (!Number.isFinite(budget) || budget <= 0) throw new Error('maxBudgetUsd must be positive');
       args.push('--max-budget-usd', String(budget));
+    }
+    if (request.maxTurns !== undefined && request.maxTurns !== null && request.maxTurns !== '') {
+      const maxTurns = Number(request.maxTurns);
+      if (!Number.isInteger(maxTurns) || maxTurns <= 0) throw new Error('maxTurns must be a positive integer');
+      args.push('--max-turns', String(maxTurns));
     }
     return invocation(command, args, projectRoot, env);
   }
@@ -296,6 +304,28 @@ function composeStageContextGuidance(stageContextPacket) {
   return lines.join('\n');
 }
 
+// A V3 interaction is already the committed, Arbiter-owned author response.
+// Host adapters may transport it, but may not rebuild, renumber, localize or
+// decorate it. Returning the same object also makes byte identity explicit:
+// every host sees the exact text and four-field binding produced by V3 show.
+function renderHostVisibleResponse(adapter, visibleResponse) {
+  if (!['claude-code', 'codex', 'zcode'].includes(String(adapter || ''))) {
+    throw new Error(`unsupported adapter: ${adapter}`);
+  }
+  const response = visibleResponse && typeof visibleResponse === 'object'
+    ? visibleResponse
+    : null;
+  if (!response || typeof response.text !== 'string' || !response.binding || typeof response.binding !== 'object') {
+    throw new Error('v3 visible response is invalid');
+  }
+  const keys = Object.keys(response.binding).sort();
+  const expected = ['pending_action_id', 'state_version', 'visible_choice_hash', 'workflow_id'];
+  if (JSON.stringify(keys) !== JSON.stringify(expected)) {
+    throw new Error('v3 visible response binding must contain exactly four fields');
+  }
+  return response;
+}
+
 module.exports = {
   ADAPTERS,
   EVALUATION_ADAPTERS,
@@ -306,6 +336,7 @@ module.exports = {
   detectAdapters,
   minimalEnvironment,
   normalizeHostUsage,
+  renderHostVisibleResponse,
   resolveEvaluationAdapter,
   resolveExecutable,
 };

@@ -192,7 +192,7 @@ setup() {
     mkdir -p "$tmp/scripts" "$tmp/正文/第1卷"
     cp "$REPO/scripts/story-prose-gate.js" "$tmp/scripts/story-prose-gate.js"
     target="$tmp/正文/第1卷/第001章_坏稿.md"
-    printf '## 第1章 坏稿\n\n沈七说：“该到下一章了，本章任务已经完成。”\n' > "$target"
+    printf '## 第1章 坏稿\n\n陆川说：“该到下一章了，本章任务已经完成。”\n' > "$target"
 
     out="$(printf '{"tool_input":{"file_path":"%s"}}' "$target" | CLAUDE_PROJECT_DIR="$tmp" bash "$PROSE_HOOK" 2>&1 || true)"
     echo "$out" | grep -q "prose-meta-leak"

@@ -1,23 +1,23 @@
 {
-  "query": "绿珠会暴露什么身份",
+  "query": "苏禾会暴露什么身份",
   "entries": [
     {
-      "fact_id": "fact.green-pearl.identity",
-      "subject": "绿珠",
+      "fact_id": "fact.supporting.identity",
+      "subject": "苏禾",
       "predicate": "身份",
-      "object": "圣女",
-      "aliases": ["绿珠", "小绿"],
-      "dependencies": ["血脉觉醒"],
+      "object": "密使",
+      "aliases": ["苏禾", "小禾"],
+      "dependencies": ["身份线索"],
       "scope": {"book": "current", "volume": "第1卷"},
       "evidence": [{"path": "追踪/伏笔.md"}],
       "status": "active"
     },
     {
-      "fact_id": "fact.bloodline.trigger",
-      "subject": "血脉觉醒",
+      "fact_id": "fact.identity-clue.trigger",
+      "subject": "身份线索",
       "predicate": "触发",
-      "object": "圣女印记显现",
-      "aliases": ["圣女印记"],
+      "object": "密使印记显现",
+      "aliases": ["密使印记"],
       "dependencies": [],
       "scope": {"book": "current", "volume": "第1卷"},
       "evidence": [{"path": "追踪/时间线.md"}],
@@ -25,10 +25,10 @@
     },
     {
       "fact_id": "fact.saintess-peak",
-      "subject": "圣女峰",
+      "subject": "密使峰",
       "predicate": "地点",
       "object": "宗门后山",
-      "aliases": ["圣女峰"],
+      "aliases": ["密使峰"],
       "dependencies": [],
       "scope": {"book": "current", "volume": "第7卷"},
       "evidence": [{"path": "设定/地点.md"}],
@@ -36,10 +36,10 @@
     },
     {
       "fact_id": "fact.green-pearl.old",
-      "subject": "绿珠",
+      "subject": "苏禾",
       "predicate": "身份",
       "object": "魔女",
-      "aliases": ["绿珠"],
+      "aliases": ["苏禾"],
       "dependencies": [],
       "scope": {"book": "current"},
       "evidence": [{"path": "追踪/旧稿.md"}],
@@ -47,6 +47,6 @@
       "valid_to": "commit-new"
     }
   ],
-  "expected_top_ids": ["fact.green-pearl.identity", "fact.bloodline.trigger"],
+  "expected_top_ids": ["fact.supporting.identity", "fact.identity-clue.trigger"],
   "prohibited_ids": ["fact.green-pearl.old"]
 }

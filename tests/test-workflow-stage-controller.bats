@@ -155,6 +155,8 @@ if ((task.stage_execution || {}).status !== 'completed') process.exit(2);
 if ((task.stage_execution || {}).stage_id !== 'draft_next_section') process.exit(3);
 if ((task.unit_lifecycle || {}).current_stage !== 'section_machine_gate') process.exit(4);
 if ((task.unit_lifecycle || {}).status !== 'active') process.exit(5);
+if ((task.pending_action || {}).id !== 'pa-section_machine_gate') process.exit(6);
+if ((task.pending_action || {}).status === 'resolved') process.exit(7);
 NODE
 
     # 断言 2：单次推进只产生一次任务 journal transition（不得重复写）。
@@ -175,6 +177,228 @@ NODE
     run bash -c "find '$REPO/scripts' -maxdepth 1 -type f -name 'scan-*' -not -name 'scan-json-validate.js' -not -name 'scan-download-hints.js' -not -name 'scan-artifact-build.js' -print"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
+}
+
+@test "advanceStage rejects a result whose declared packet path differs from the file being applied" {
+    materialize_fixture "$BOOK"
+
+    local canonical="$BOOK/追踪/workflow/tasks/wf-short-sixth/result-packets/draft_next_section.result.json"
+    local temporary="$BOOK/.tmp-draft-next-section.result.json"
+    node - "$canonical" "$temporary" <<'NODE'
+const fs = require('fs');
+const [source, target] = process.argv.slice(2);
+const packet = JSON.parse(fs.readFileSync(source, 'utf8'));
+packet.result_packet_path = '追踪/workflow/tasks/wf-short-sixth/result-packets/draft_next_section.result.json';
+fs.writeFileSync(target, `${JSON.stringify(packet, null, 2)}\n`);
+fs.unlinkSync(source);
+NODE
+
+    local task_file
+    task_file=$(focused_task_file "$BOOK")
+    local before
+    before=$(shasum -a 256 "$task_file" | awk '{print $1}')
+
+    run node "$CONTROLLER" advance \
+        --project-root "$BOOK" \
+        --workflow-id wf-short-sixth \
+        --result "$temporary" \
+        --json
+    [ "$status" -eq 0 ]
+    node -e 'const x=JSON.parse(process.argv[1]);if(x.status!=="blocked_result_packet_path_mismatch")process.exit(1)' "$output"
+
+    local after
+    after=$(shasum -a 256 "$task_file" | awk '{print $1}')
+    [ "$before" = "$after" ]
+
+}
+
+@test "advanceStage rejects a matching temporary packet outside the current task result directory" {
+    materialize_fixture "$BOOK"
+
+    local canonical="$BOOK/追踪/workflow/tasks/wf-short-sixth/result-packets/draft_next_section.result.json"
+    local temporary="$BOOK/.tmp-draft-next-section.result.json"
+    node - "$canonical" "$temporary" <<'NODE'
+const fs = require('fs');
+const [source, target] = process.argv.slice(2);
+const packet = JSON.parse(fs.readFileSync(source, 'utf8'));
+packet.result_packet_path = '.tmp-draft-next-section.result.json';
+fs.writeFileSync(target, `${JSON.stringify(packet, null, 2)}\n`);
+fs.unlinkSync(source);
+NODE
+
+    local task_file
+    task_file=$(focused_task_file "$BOOK")
+    local before
+    before=$(shasum -a 256 "$task_file" | awk '{print $1}')
+
+    run node "$CONTROLLER" advance \
+        --project-root "$BOOK" \
+        --workflow-id wf-short-sixth \
+        --result "$temporary" \
+        --json
+    [ "$status" -eq 0 ]
+    node -e 'const x=JSON.parse(process.argv[1]);if(x.status!=="blocked_result_packet_path_mismatch")process.exit(1)' "$output"
+
+    local after
+    after=$(shasum -a 256 "$task_file" | awk '{print $1}')
+    [ "$before" = "$after" ]
+}
+
+@test "advanceStage rejects a completed interactive stage result that omits its bound memory receipt" {
+    materialize_fixture "$BOOK"
+
+    local task_file
+    task_file=$(focused_task_file "$BOOK")
+    REPO_DIR="$REPO" node - "$task_file" "$BOOK" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const taskFile = process.argv[2];
+const book = process.argv[3];
+const task = JSON.parse(fs.readFileSync(taskFile, 'utf8'));
+const { createMemoryContract, createMemoryReadReceipt } = require(path.join(process.env.REPO_DIR, 'scripts/lib/memory-query-contract.js'));
+const { StoryMemoryRepository } = require(path.join(process.env.REPO_DIR, 'scripts/lib/story-memory-repository.js'));
+const packetRel = `${task.task_dir}/result-packets/draft_next_section.result.json`;
+const contract = createMemoryContract({
+  query: {
+    project_id: 'controller-memory-fixture',
+    workflow_id: task.workflow_id,
+    workflow_type: task.workflow_type,
+    stage_id: task.current_stage,
+    owner_module: task.workflow_owner,
+    scope: { section_index: 6 },
+    needs: ['accepted_facts'],
+  },
+  memoryRevision: 'sha256:controller-memory',
+  packetDigest: 'sha256:controller-memory',
+});
+const receipt = {
+  ...createMemoryReadReceipt(contract),
+  source_digests: new StoryMemoryRepository(book).sourceRevisions(),
+};
+task.result_contract_version = 2;
+task.stage_execution = {
+  status: 'running',
+  stage_id: task.current_stage,
+  step_id: task.current_step,
+  owner_module: task.workflow_owner,
+  expected_result_packet: packetRel,
+  host_execution_mode: 'cooperative_interactive',
+  memory_contract_version: 2,
+  memory_contract: { receipt_required: true },
+  memory_context: {
+    status: 'assembled',
+    context_source: 'story_memory',
+    memory_contract: contract,
+    memory_read_receipt: receipt,
+  },
+};
+task.runtime_guard.checkpoint_policy.expected_result_packet = packetRel;
+fs.writeFileSync(taskFile, `${JSON.stringify(task, null, 2)}\n`);
+
+const packetFile = path.join(book, packetRel);
+const packet = JSON.parse(fs.readFileSync(packetFile, 'utf8'));
+packet.result_packet_path = packetRel;
+packet.outputs = Array.isArray(packet.outputs) ? packet.outputs : [];
+packet.evidence = Array.isArray(packet.evidence) ? packet.evidence : [];
+packet.checkpoint_state = packet.checkpoint_state || { stage_id: packet.stage_id };
+packet.output_health_result = packet.output_health_result || 'pass';
+delete packet.memory_read_receipt;
+fs.writeFileSync(packetFile, `${JSON.stringify(packet, null, 2)}\n`);
+NODE
+
+    local packet="$BOOK/追踪/workflow/tasks/wf-short-sixth/result-packets/draft_next_section.result.json"
+    local before
+    before=$(shasum -a 256 "$task_file" | awk '{print $1}')
+
+    run node "$CONTROLLER" advance \
+        --project-root "$BOOK" \
+        --workflow-id wf-short-sixth \
+        --result "$packet" \
+        --json
+    [ "$status" -eq 0 ]
+    node -e 'const x=JSON.parse(process.argv[1]);if(x.status!=="blocked_interactive_memory_receipt_invalid")process.exit(1)' "$output"
+
+    local after
+    after=$(shasum -a 256 "$task_file" | awk '{print $1}')
+    [ "$before" = "$after" ]
+
+    node - "$task_file" "$packet" <<'NODE'
+const fs = require('fs');
+const task = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const packetFile = process.argv[3];
+const packet = JSON.parse(fs.readFileSync(packetFile, 'utf8'));
+packet.memory_read_receipt = task.stage_execution.memory_context.memory_read_receipt;
+fs.writeFileSync(packetFile, `${JSON.stringify(packet, null, 2)}\n`);
+NODE
+    run node "$CONTROLLER" advance \
+        --project-root "$BOOK" \
+        --workflow-id wf-short-sixth \
+        --result "$packet" \
+        --json
+    [ "$status" -eq 0 ]
+    node -e 'const x=JSON.parse(process.argv[1]);if(x.status!=="advanced"||x.next_stage!=="section_machine_gate")process.exit(1)' "$output"
+}
+
+@test "advanceStage enforces the v2 result schema and current running stage execution" {
+    materialize_fixture "$BOOK"
+
+    local task_file
+    task_file=$(focused_task_file "$BOOK")
+    local packet="$BOOK/追踪/workflow/tasks/wf-short-sixth/result-packets/draft_next_section.result.json"
+    node - "$task_file" "$packet" <<'NODE'
+const fs = require('fs');
+const taskFile = process.argv[2];
+const packetFile = process.argv[3];
+const task = JSON.parse(fs.readFileSync(taskFile, 'utf8'));
+const packet = JSON.parse(fs.readFileSync(packetFile, 'utf8'));
+const packetRel = `${task.task_dir}/result-packets/draft_next_section.result.json`;
+task.result_contract_version = 2;
+task.stage_execution = {
+  status: 'running',
+  stage_id: task.current_stage,
+  step_id: task.current_step,
+  owner_module: task.workflow_owner,
+  expected_result_packet: packetRel,
+};
+task.runtime_guard.checkpoint_policy.expected_result_packet = packetRel;
+packet.result_packet_path = packetRel;
+delete packet.outputs;
+fs.writeFileSync(taskFile, `${JSON.stringify(task, null, 2)}\n`);
+fs.writeFileSync(packetFile, `${JSON.stringify(packet, null, 2)}\n`);
+NODE
+
+    run node "$CONTROLLER" advance \
+        --project-root "$BOOK" \
+        --workflow-id wf-short-sixth \
+        --result "$packet" \
+        --json
+    [ "$status" -eq 0 ]
+    node -e 'const x=JSON.parse(process.argv[1]);if(x.status!=="blocked_result_packet_incomplete")process.exit(1)' "$output"
+
+    node - "$task_file" "$packet" <<'NODE'
+const fs = require('fs');
+const taskFile = process.argv[2];
+const packetFile = process.argv[3];
+const task = JSON.parse(fs.readFileSync(taskFile, 'utf8'));
+const packet = JSON.parse(fs.readFileSync(packetFile, 'utf8'));
+task.stage_execution.status = 'completed';
+packet.outputs = [];
+packet.evidence = [];
+packet.checkpoint_state = { stage_id: packet.stage_id };
+packet.output_health_result = 'pass';
+fs.writeFileSync(taskFile, `${JSON.stringify(task, null, 2)}\n`);
+fs.writeFileSync(packetFile, `${JSON.stringify(packet, null, 2)}\n`);
+NODE
+    run node "$CONTROLLER" advance \
+        --project-root "$BOOK" \
+        --workflow-id wf-short-sixth \
+        --result "$packet" \
+        --json
+    [ "$status" -eq 0 ]
+    if ! node -e 'const x=JSON.parse(process.argv[1]);if(x.status!=="blocked_stage_execution_required")process.exit(1)' "$output"; then
+        printf '%s\n' "$output" >&2
+        false
+    fi
 }
 
 @test "advanceStage closes terminal workflow state and task family atomically" {

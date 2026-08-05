@@ -15,6 +15,14 @@ function main() {
     emit({ status: 'not_applicable', reason: 'target_outside_story_project' });
     return 0;
   }
+  const expectedResultWrite = validateExpectedResultPacketWrite(target, payload, projectRoot);
+  if (expectedResultWrite) {
+    if (expectedResultWrite.allowed) {
+      emit({ status: 'allowed_expected_result_packet', target: expectedResultWrite.target });
+      return 0;
+    }
+    return deny(expectedResultWrite.code, expectedResultWrite.message, { target: expectedResultWrite.target });
+  }
   const workflowStateTarget = directWorkflowStateTarget(target, projectRoot);
   if (workflowStateTarget) {
     return deny('blocked_direct_workflow_state_edit', '禁止使用 Write/Edit 直接修补 workflow 权威状态。请调用 workflow-state-machine.js 或 workflow-stage-controller.js 的受控命令。', { target: workflowStateTarget });
@@ -45,6 +53,62 @@ function main() {
     return 0;
   } catch (error) {
     return deny(error.code || 'blocked_canonical_write_guard_error', error.message, { targets: error.targets || [] });
+  }
+}
+
+function validateExpectedResultPacketWrite(target, payload, projectRoot) {
+  const relative = relativeProjectPath(target, projectRoot);
+  if (!/^\u8ffd\u8e2a\/workflow\/tasks\/[^/]+\/result-packets\/[^/]+\.result\.json$/u.test(relative)) return null;
+  const blocked = (code, message) => ({ allowed: false, code, message, target: relative });
+  if (findString(payload, ['tool_name', 'toolName']) !== 'Write') {
+    return blocked('blocked_direct_workflow_state_edit', '只允许 Write 创建当前运行阶段的唯一预期回执。');
+  }
+  const pointer = readJson(path.join(projectRoot, '追踪', 'workflow', 'current-task.json'));
+  const taskFile = pointer && pointer.task_dir
+    ? path.join(projectRoot, pointer.task_dir, 'task.json')
+    : '';
+  const task = readJson(taskFile);
+  const execution = task && task.stage_execution && typeof task.stage_execution === 'object'
+    ? task.stage_execution
+    : {};
+  if (!task || String(execution.status || '') !== 'running') {
+    return blocked('blocked_direct_workflow_state_edit', '当前没有正在运行且等待回执的 workflow 阶段。');
+  }
+  const expected = String(execution.expected_result_packet || '').replace(/\\/g, '/');
+  if (!expected || expected !== relative) {
+    return blocked('blocked_direct_workflow_state_edit', '只能写入当前阶段 expected_result_packet 指向的唯一回执。');
+  }
+  const absolute = path.resolve(projectRoot, relative);
+  if (require('fs').existsSync(absolute)) {
+    return blocked('blocked_result_packet_already_exists', '当前阶段回执已存在；禁止用模型工具覆盖可信结果。');
+  }
+  const content = findString(payload, ['content']);
+  let packet;
+  try {
+    packet = JSON.parse(content);
+  } catch (_) {
+    return blocked('blocked_result_packet_invalid', '当前阶段回执必须是合法 JSON。');
+  }
+  if (String(packet.workflow_id || '') !== String(task.workflow_id || '')
+      || String(packet.stage_id || '') !== String(execution.stage_id || task.current_stage || '')
+      || String(packet.result_packet_path || '').replace(/\\/g, '/') !== expected
+      || !['completed', 'blocked'].includes(String(packet.step_status || ''))) {
+    return blocked('blocked_result_packet_identity_mismatch', '回执的 workflow、stage、status 或声明路径与当前运行阶段不一致。');
+  }
+  const expectedOwner = String(execution.owner_module || '');
+  if (expectedOwner && String(packet.owner_module || '') !== expectedOwner) {
+    return blocked('blocked_result_packet_identity_mismatch', '回执 owner_module 与当前运行阶段不一致。');
+  }
+  return { allowed: true, target: relative };
+}
+
+function readJson(file) {
+  try {
+    return file && require('fs').existsSync(file)
+      ? JSON.parse(require('fs').readFileSync(file, 'utf8'))
+      : null;
+  } catch (_) {
+    return null;
   }
 }
 

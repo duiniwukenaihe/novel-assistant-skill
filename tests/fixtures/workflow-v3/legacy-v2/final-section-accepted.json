@@ -1,0 +1,19 @@
+{
+  "workflow_id": "wf-neutral-assembly",
+  "workflow_type": "short_write",
+  "workflow_contract_version": 3,
+  "task_dir": "追踪/workflow/tasks/wf-neutral-assembly",
+  "status": "running",
+  "current_stage": "full_story_assembly",
+  "current_step": "full_story_assembly",
+  "state_version": 33,
+  "scope": "全篇",
+  "stage_execution": {
+    "status": "running",
+    "stage_id": "full_story_assembly",
+    "step_id": "full_story_assembly",
+    "stage_attempt_id": "sa-neutral-assembly",
+    "expected_result_packet": "追踪/workflow/tasks/wf-neutral-assembly/result-packets/full_story_assembly.result.json"
+  },
+  "lifecycle": { "status": "active" }
+}

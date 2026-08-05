@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { appendIntegrationEvent } = require('./integration-outbox');
-const { readShortProjectState } = require('./short-project-state');
+const { readShortProjectState, resolveShortProjectTitle } = require('./short-project-state');
 const { SHORT_WORKFLOW_TYPES: SHORT_WORKFLOWS } = require('./short-workflow-types');
 
 function recordAcceptedShortFeedback(projectRoot, task = {}, result = {}) {
@@ -35,7 +35,7 @@ function recordAcceptedShortFeedback(projectRoot, task = {}, result = {}) {
       event_type: 'user_feedback_accepted',
       workflow_id: String(task.workflow_id || ''),
       project_id: String(project.project_id || ''),
-      project_title: String(project.project_title || ''),
+      project_title: resolveShortProjectTitle(project, path.basename(root)),
       artifact_path: artifactPath,
       artifact_digest: hashFile(path.join(root, artifactPath)),
       summary: `已执行反馈：${String(feedback.text || '').trim()}`,

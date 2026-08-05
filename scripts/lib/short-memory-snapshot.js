@@ -15,6 +15,7 @@ const {
   deriveMemoryTokenBudget,
   selectWithinTokenBudget,
 } = require('./memory-snapshot-engine');
+const { resolveShortProjectTitle } = require('./short-project-state');
 
 function buildShortMemorySnapshot(projectRoot, options = {}) {
   const root = path.resolve(projectRoot || '');
@@ -33,7 +34,12 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
   const stageId = String(options.stageId || task.current_stage || '');
   const sourceDigests = repository.sourceRevisions();
   const queryText = buildQuery(repository, sectionIndex, { stageId });
-  const memoryQuery = normalizeMemoryQuery({
+  const stageExecution = (task || {}).stage_execution && typeof (task || {}).stage_execution === 'object'
+    ? (task || {}).stage_execution
+    : {};
+  const attemptId = String(stageExecution.stage_attempt_id || '').trim();
+  const workUnitId = String(stageExecution.work_unit_id || '').trim();
+  const querySpec = {
     project_id: String(projectState.project_id || ''),
     project_instance_id: String((repository.projectIdentity() || {}).project_instance_id || ''),
     workflow_id: workflowId,
@@ -43,7 +49,10 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
     scope: { section_index: sectionIndex },
     needs: ['accepted_facts', 'active_cast', 'active_promises', 'reader_promise', 'confirmed_style_rules', 'confirmed_quality_rules', 'planning_constraints', 'continuity_obligations', 'canon_constraints'],
     query_text: queryText,
-  });
+  };
+  if (attemptId) querySpec.stage_attempt_id = attemptId;
+  if (workUnitId) querySpec.work_unit_id = workUnitId;
+  const memoryQuery = normalizeMemoryQuery(querySpec);
   const memoryTokenBudget = deriveMemoryTokenBudget({ task, query: queryText, stageId });
   const factSelection = selectFacts(
     repository.acceptedFacts(),
@@ -91,7 +100,7 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
     schema_version: '1.0.0',
     title: '当前作品记忆快照',
     project_id: String(projectState.project_id || ''),
-    project_title: String(projectState.project_title || projectState.working_title || projectState.title || ''),
+    project_title: resolveShortProjectTitle(projectState, path.basename(root)),
     section_index: sectionIndex,
     memory_revision: memoryRevision,
     ...selectedMemory,
@@ -312,16 +321,21 @@ function taskAcceptedPlanningConstraints(task, sectionIndex) {
   const queue = task.feedback_revision_queue && typeof task.feedback_revision_queue === 'object'
     ? task.feedback_revision_queue
     : null;
-  const inheritedAffected = [...new Set([
-    ...(Array.isArray(plan.affected_sections) ? plan.affected_sections : []),
-    ...(queue && String(queue.status || '') === 'running' && Array.isArray(queue.affected_sections) ? queue.affected_sections : []),
-  ].map(positiveInt).filter(Boolean))];
+  const planAffected = [...new Set((Array.isArray(plan.affected_sections) ? plan.affected_sections : [])
+    .map(positiveInt).filter(Boolean))];
+  const queueAffected = [...new Set((queue && String(queue.status || '') === 'running' && Array.isArray(queue.affected_sections)
+    ? queue.affected_sections
+    : []).map(positiveInt).filter(Boolean))];
+  const inheritedAffected = planAffected.length ? planAffected : queueAffected;
   return (Array.isArray(plan.requirements) ? plan.requirements : [])
     .map((row, index) => {
       const id = String((row || {}).requirement_id || `${plan.plan_id || 'accepted-plan'}.requirement-${index + 1}`);
       const content = String((row || {}).text || (row || {}).content || '').trim();
       const affected = requirementAffectedSections(row, content);
-      const scoped = affected.length ? affected : inheritedAffected;
+      const scoped = affected.length && planAffected.length
+        ? affected.filter(section => planAffected.includes(section))
+        : affected.length ? affected : inheritedAffected;
+      if (affected.length && planAffected.length && !scoped.length) return null;
       if (scoped.length && !scoped.includes(sectionIndex)) return null;
       return {
         id: `constraint.${id}`,

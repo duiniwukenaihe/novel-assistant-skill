@@ -38,7 +38,7 @@ setup() {
     tmp="$(mktemp -d)"
     mkdir -p "$tmp/正文/第1卷"
     target="$tmp/正文/第1卷/第001章_干净.md"
-    printf '陈洛趴在泥里。\\n' > "$target"
+    printf '陆川趴在泥里。\\n' > "$target"
 
     printf '{"tool_input":{"file_path":"%s"}}' "$target" | CLAUDE_PROJECT_DIR="$tmp" bash "$SCRIPT"
 

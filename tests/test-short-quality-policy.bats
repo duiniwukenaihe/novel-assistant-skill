@@ -1,11 +1,8 @@
 #!/usr/bin/env bats
 
-# P1.3 验证：篇幅按任务模式分级
-#   - 整篇回炉：单节篇幅偏差记入队列（section anchor），继续后续小节，整篇收束时统一提醒。
-#   - 单节精修：篇幅明显偏离时给"补写 / 保留并记录 / 调整基准"选择。
-# 单节精修的选择路径已在 test-short-section-repair-finalize.bats
-# (single-section task records length variance and asks before continuing) 覆盖；
-# 本文件聚焦"整篇回炉"链路：偏差落进 section anchor（队列），最终检查能汇总成统一提醒。
+# P1.3 验证：短于目标 10% 或长于目标 20% 必须自动回炉。
+#   - 单节精修与整篇回炉都不能把明显欠写推给作者确认。
+#   - 不得把超限正文推给作者确认。
 
 setup() {
   REPO="$BATS_TEST_DIRNAME/.."
@@ -20,9 +17,7 @@ teardown() {
   rm -rf "$TMP_DIR"
 }
 
-@test "length policy library defers whole-story variance without blocking the section" {
-  # P1.3 验证点一（库层）：普通小节偏离基准时不阻断，标记为 outside_story_band_deferred，
-  # 由整篇收束统一处理。这是"记入队列继续后续小节"的判定基础。
+@test "length policy blocks and repairs below the ten-percent floor" {
   cat > "$BOOK/追踪/private-short-extension/project-state.json" <<'JSON'
 {"accepted_sections":[
   {"section_index":1,"length_chars":2490},
@@ -30,9 +25,9 @@ teardown() {
   {"section_index":3,"length_chars":2520}
 ]}
 JSON
-  run node "$LENGTH_POLICY" --project-root "$BOOK" --section-index 4 --actual 1500 --json
+  run node "$LENGTH_POLICY" --project-root "$BOOK" --section-index 4 --actual 1500 --planned-target 2490 --json
   [ "$status" -eq 0 ]
-  node -e 'const x=JSON.parse(process.argv[1]); if(x.verdict!=="outside_story_band_deferred" || x.blocking!==false || x.status!=="advisory") process.exit(1)' "$output"
+  node -e 'const x=JSON.parse(process.argv[1]); if(x.verdict!=="under_target_repair_required" || x.blocking!==true || x.status!=="blocked" || x.author_decision_required) process.exit(1)' "$output"
 }
 
 @test "deferred length verdict flows into the section anchor queue consumed by final check" {
@@ -109,19 +104,14 @@ NODE
   [[ "$output" == *'"debt_type":"section_length_variance"'* ]]
 }
 
-@test "single-section task pauses with a three-option length choice rather than only deferring" {
-  # P1.3 验证点三（单节精修，与整篇回炉对照）：shouldAskSingleSectionLengthChoice
-  # 只对单节任务触发选择菜单（补写/保留/调整），整篇任务只 defer。这与上面两条
-  # 共同构成"按任务模式分级"。完整菜单暂停已在 repair-finalize 覆盖，这里做轻量回归。
+@test "length policy never pauses for an author override" {
   run node - "$REPO/scripts/lib/short-section-length-policy.js" <<'NODE'
 const { shouldAskSingleSectionLengthChoice } = require(process.argv[2]);
-const policy = { verdict: 'outside_story_band_deferred' };
+const repair = { verdict: 'under_target_repair_required', blocking: true, author_decision_required: false };
 const single = { lifecycle: { scope: '第 4 节' } };
 const whole = { lifecycle: { scope: '全篇' } };
-// 单节任务应触发选择（不静默 defer）。
-if (!shouldAskSingleSectionLengthChoice(single, policy)) process.exit(1);
-// 整篇任务应只 defer，不弹单节选择菜单。
-if (shouldAskSingleSectionLengthChoice(whole, policy)) process.exit(2);
+if (shouldAskSingleSectionLengthChoice(single, repair)) process.exit(1);
+if (shouldAskSingleSectionLengthChoice(whole, repair)) process.exit(2);
 NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }

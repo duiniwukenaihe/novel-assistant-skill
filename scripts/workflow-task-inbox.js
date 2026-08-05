@@ -15,13 +15,16 @@ const {
 } = require('./lib/task-family-store');
 const { isShortWorkflowType } = require('./lib/short-workflow-types');
 const { buildLifecycleStatus } = require('./longform-lifecycle-status');
-const { projectTaskActionView } = require('./lib/workflow-action-renderer');
+const {
+  buildShortRevisionTaskOverview,
+  projectTaskActionView,
+} = require('./lib/workflow-action-renderer');
 const { normalizeExecutionBoundary } = require('./lib/workflow-execution-boundary');
 const {
   taskHasOverview,
   taskOverviewPresentationRequired,
 } = require('./lib/workflow-task-overview-state');
-const { readShortProjectState } = require('./lib/short-project-state');
+const { readShortProjectState, shortStateFile } = require('./lib/short-project-state');
 
 const REVIEW_EVIDENCE_PROTOCOL_VERSION = '2.0.0';
 const SHORT_WORKFLOW_TYPES = new Set([
@@ -393,6 +396,8 @@ function addCandidate(candidates, candidate) {
     migration: candidate.migration || null,
     detail_lines: Array.isArray(candidate.detail_lines) ? candidate.detail_lines : [],
     action_resolution: candidate.action_resolution || null,
+	    ...(Object.prototype.hasOwnProperty.call(candidate, 'v3_interaction') ? { v3_interaction: candidate.v3_interaction } : {}),
+	    ...(candidate.task_overview ? { task_overview: candidate.task_overview } : {}),
 	    task_family_id: candidate.task_family_id || '',
 	    head_workflow_id: candidate.head_workflow_id || '',
 	    paused_branch_count: Number(candidate.paused_branch_count) || 0,
@@ -417,6 +422,53 @@ function actionResolutionMetadata(task) {
     state_version: Number(task.state_version),
     book_root: String(task.book_root || ''),
   };
+}
+
+function isV3ShortTask(task) {
+  return String((task || {}).workflow_type || '') === 'short_write'
+    && Number((task || {}).engine_version) === 3
+    && Number((task || {}).task_schema_version) === 3
+    && Number((task || {}).workflow_contract_version) === 3;
+}
+
+// V3 show is the only public read path allowed to render an author
+// interaction. Inbox consumes that envelope as data and never reconstructs
+// question text, option numbers or binding fields from task.pending_action.
+function v3CandidateRouting(root, task) {
+  if (!isV3ShortTask(task)) return null;
+  const child = spawnSync(process.execPath, [
+    path.join(__dirname, 'workflow-v3.js'),
+    'show',
+    '--project-root', root,
+    '--workflow-id', String(task.workflow_id || ''),
+    '--json',
+  ], { encoding: 'utf8', shell: false });
+  let output;
+  try {
+    output = JSON.parse(child.stdout || '{}');
+  } catch (error) {
+    throw new Error(`v3_show_invalid_output: ${error.message}`);
+  }
+  if (child.status !== 0 || output.ok !== true) {
+    throw new Error(`v3_show_failed: ${String(output.error || child.stderr || 'unknown error').trim()}`);
+  }
+  return {
+    next_actions: [],
+    action_resolution: null,
+    v3_interaction: output.interaction || null,
+    task_overview: buildV3RevisionTaskOverview(root, task),
+  };
+}
+
+function buildV3RevisionTaskOverview(root, task) {
+  if (!taskHasOverview(task)) return null;
+  const state = readShortProjectState(root) || {};
+  const lock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
+  const workingTitle = String(state.working_title || state.project_title || '').trim();
+  return buildShortRevisionTaskOverview({
+    ...task,
+    task_display_title: workingTitle ? `整篇回炉《${workingTitle}》` : String(task.user_goal || '整篇回炉'),
+  }, Array.isArray(lock.sections) ? lock.sections : [], Number(state.planned_sections || 0));
 }
 
 function extractTrustedArtifact(task) {
@@ -643,6 +695,8 @@ function stopReasonFromTask(task) {
 }
 
 function buildTaskCard(candidate, index) {
+  const carriesV3Interaction = Object.prototype.hasOwnProperty.call(candidate, 'v3_interaction')
+    && candidate.v3_interaction !== null;
   const overviewRequired = candidate.task_overview_required === true;
   const visibleStage = candidate.task_overview_label || candidate.visible_stage || humanStepLabel(candidate.current_stage || candidate.current_step || '');
   const stopReason = overviewRequired ? '等待进入任务总览' : candidate.stop_reason || '等待选择下一步';
@@ -697,11 +751,15 @@ function buildTaskCard(candidate, index) {
           execution_command: '',
         },
       ]
+      : carriesV3Interaction
+      ? []
       : Array.isArray(candidate.next_actions) && candidate.next_actions.length > 0
       ? candidate.next_actions
       : [{ number: 1, label: candidate.label || '继续当前任务', action_id: candidate.action || 'resume' }],
     free_text_enabled: candidate.free_text_enabled !== false,
     action_resolution: candidate.action_resolution || null,
+    ...(carriesV3Interaction ? { v3_interaction: candidate.v3_interaction } : {}),
+    ...(candidate.task_overview ? { v3_task_overview: candidate.task_overview } : {}),
     interaction_mode: taskCommand ? 'execute_command' : 'semantic_only',
     execution_command: taskCommand,
     migration: candidate.migration || null,
@@ -995,6 +1053,7 @@ function scanTaskFamilies(root, candidates, suppressedWorkflowIds) {
     if (!task || task.__error || hasUnsafeTaskDir(task)) continue;
     const pausedBranchCount = (family.branches || []).filter((branch) => String(branch.workflow_id || '') !== headId
       && ['paused', 'invalidated'].includes(String(branch.status || '').toLowerCase())).length;
+    const v3Routing = v3CandidateRouting(root, task);
     addCandidate(candidates, {
       ...projectIdentityCandidateFields(root, task),
       ...executionBoundaryCandidateFields(task),
@@ -1009,8 +1068,9 @@ function scanTaskFamilies(root, candidates, suppressedWorkflowIds) {
       scope_label: String(task.scope || ((task.lifecycle || {}).scope) || ''),
       last_trusted_artifact: extractTrustedArtifact(task),
       stop_reason: stopReasonFromTask(task),
-      next_actions: normalizeNextActions(task, firstCandidateLabel(task)),
-      action_resolution: actionResolutionMetadata(task),
+      next_actions: v3Routing ? v3Routing.next_actions : normalizeNextActions(task, firstCandidateLabel(task)),
+      action_resolution: v3Routing ? v3Routing.action_resolution : actionResolutionMetadata(task),
+      ...(v3Routing ? { v3_interaction: v3Routing.v3_interaction, task_overview: v3Routing.task_overview } : {}),
       free_text_enabled: !task.pending_action || task.pending_action.free_text_enabled !== false,
       source: rel(root, file),
       // task.json is authoritative; family.status is a projection and may lag
@@ -1046,6 +1106,7 @@ function scanWorkflow(root, candidates, suppressedWorkflowIds) {
   if (!task || task.__error || hasUnsafeTaskDir(task) || isSupersededTask(task) || suppressedWorkflowIds.has(task.workflow_id)) return;
   if (addReviewReacceptanceCandidate(root, candidates, task, rel(root, file))) return;
   if (!hasUnfinishedStatus(task.status)) return;
+  const v3Routing = v3CandidateRouting(root, task);
   addCandidate(candidates, {
     ...projectIdentityCandidateFields(root, task),
     ...executionBoundaryCandidateFields(task),
@@ -1057,8 +1118,9 @@ function scanWorkflow(root, candidates, suppressedWorkflowIds) {
     scope_label: String(task.scope || ((task.lifecycle || {}).scope) || ''),
     last_trusted_artifact: extractTrustedArtifact(task),
     stop_reason: stopReasonFromTask(task),
-    next_actions: normalizeNextActions(task, firstCandidateLabel(task)),
-    action_resolution: actionResolutionMetadata(task),
+    next_actions: v3Routing ? v3Routing.next_actions : normalizeNextActions(task, firstCandidateLabel(task)),
+    action_resolution: v3Routing ? v3Routing.action_resolution : actionResolutionMetadata(task),
+    ...(v3Routing ? { v3_interaction: v3Routing.v3_interaction, task_overview: v3Routing.task_overview } : {}),
     free_text_enabled: !task.pending_action || task.pending_action.free_text_enabled !== false,
     source: rel(root, file),
     status: task.status || '',
@@ -1081,6 +1143,7 @@ function scanTaskDirectories(root, candidates, suppressedWorkflowIds) {
     if (!task || task.__error || hasUnsafeTaskDir(task) || isSupersededTask(task) || suppressedWorkflowIds.has(task.workflow_id)) continue;
     if (addReviewReacceptanceCandidate(root, candidates, task, rel(root, file))) continue;
     if (!hasUnfinishedStatus(task.status)) continue;
+    const v3Routing = v3CandidateRouting(root, task);
     addCandidate(candidates, {
       ...projectIdentityCandidateFields(root, task),
       ...executionBoundaryCandidateFields(task),
@@ -1092,8 +1155,9 @@ function scanTaskDirectories(root, candidates, suppressedWorkflowIds) {
       scope_label: String(task.scope || ((task.lifecycle || {}).scope) || ''),
       last_trusted_artifact: extractTrustedArtifact(task),
       stop_reason: stopReasonFromTask(task),
-      next_actions: normalizeNextActions(task, firstCandidateLabel(task)),
-      action_resolution: actionResolutionMetadata(task),
+      next_actions: v3Routing ? v3Routing.next_actions : normalizeNextActions(task, firstCandidateLabel(task)),
+      action_resolution: v3Routing ? v3Routing.action_resolution : actionResolutionMetadata(task),
+      ...(v3Routing ? { v3_interaction: v3Routing.v3_interaction, task_overview: v3Routing.task_overview } : {}),
       free_text_enabled: !task.pending_action || task.pending_action.free_text_enabled !== false,
       source: rel(root, file),
       status: task.status || '',
@@ -1495,7 +1559,9 @@ function buildInbox(projectRoot) {
   const migrationScan = scanWorkflowMigrations(root);
   const migrationInventory = visibleMigrationInventory(migrationScan.inventory);
   const hasVisibleMigration = migrationInventory.items.length > 0;
-  if (focused.pointer && focused.authority.status === 'ok' && hasUnfinishedStatus(focused.authority.task.status)) {
+  if (focused.pointer && focused.authority.status === 'ok'
+      && !isV3ShortTask(focused.authority.task)
+      && hasUnfinishedStatus(focused.authority.task.status)) {
     const validation = runStateValidation(root);
     if (String(validation.status || '') === 'blocked') {
       const reasonCode = String(validation.reason_code || '');
@@ -1807,6 +1873,8 @@ function compactTaskCard(card, projectRoot) {
     interaction_mode: card.interaction_mode || (card.execution_command ? 'execute_command' : 'semantic_only'),
     execution_command: materializeTaskCommand(card.execution_command, projectRoot),
     next_actions: (card.next_actions || []).map((action) => compactNextAction(action, projectRoot)).filter(Boolean),
+    ...(Object.prototype.hasOwnProperty.call(card, 'v3_interaction') ? { v3_interaction: card.v3_interaction } : {}),
+    ...(card.v3_task_overview ? { v3_task_overview: card.v3_task_overview } : {}),
     display: card.display,
   };
 }
@@ -1841,6 +1909,42 @@ function actionView(inbox, action) {
       ? taskCards[0]
       : null;
     if (focusedCard) {
+      if (focusedCard.task_overview_required === true && focusedCard.v3_task_overview) {
+        const overview = focusedCard.v3_task_overview;
+        const currentLabel = String(((overview || {}).current_subtask || {}).label || '当前子任务');
+        const workflowId = String(focusedCard.head_workflow_id || focusedCard.id || inbox.focused_workflow_id || '');
+        const options = [
+          {
+            number: 1,
+            label: `继续当前子任务：${currentLabel}（推荐）`,
+            action_id: 'open_current_v3_subtask',
+            interaction_mode: 'execute_command',
+            execution_command: 'node scripts/workflow-entry-guard.js --project-root . --user-intent "查看当前进度" --write --compact --json',
+          },
+          {
+            number: 2,
+            label: '查看当前阶段执行依据',
+            action_id: 'inspect_current_v3_stage',
+            interaction_mode: 'execute_command',
+            execution_command: `node scripts/workflow-v3.js describe-stage --project-root . --workflow-id ${JSON.stringify(workflowId)} --json`,
+          },
+          { number: 3, label: '调整整篇回炉任务', action_id: 'request_task_revision_input', interaction_mode: 'semantic_only', execution_command: '' },
+          { number: 4, label: '暂停并保存断点', action_id: 'pause', interaction_mode: 'semantic_only', execution_command: '' },
+        ];
+        return {
+          ...base,
+          status: 'workflow_task_overview',
+          candidateCount: 1,
+          taskCardCount: 1,
+          focused_workflow_id: inbox.focused_workflow_id,
+          task_overview: overview,
+          selection_contract: 'execute_command_or_route_intent',
+          render_mode: 'text_numbers',
+          options,
+          visible_response: `${overview.text}\n\n${options.map((option) => `${option.number}. ${option.label}`).join('\n')}\n\n回复数字选择。`,
+          safe_default: '只继续当前 V3 子任务；不调用旧状态机。',
+        };
+      }
       if (focusedCard.task_overview_required === true) {
         return {
           ...base,
@@ -1859,6 +1963,19 @@ function actionView(inbox, action) {
             '回复 1/2/3/4，或直接输入你的要求。',
           ].filter(Boolean).join('\n'),
           safe_default: '先进入任务总览，再执行当前子任务；不会自动开启其他任务。',
+        };
+      }
+      if (Object.prototype.hasOwnProperty.call(focusedCard, 'v3_interaction')
+          && focusedCard.v3_interaction) {
+        return {
+          ...base,
+          status: 'current_v3_task',
+          candidateCount: 1,
+          taskCardCount: 1,
+          focused_workflow_id: inbox.focused_workflow_id,
+          visible_response: focusedCard.v3_interaction,
+          selection_contract: 'v3_committed_binding',
+          safe_default: '只转发 V3 已提交的交互；不重建菜单。',
         };
       }
       const projection = projectTaskActionView(focusedCard);

@@ -1,0 +1,5 @@
+## novel-assistant 自动路由
+
+本目录是 novel-assistant 管理的小说项目。收到写作、审阅、回炉、去 AI 味、项目恢复相关输入时，每一轮都必须先调用已安装的 `novel-assistant` skill，再按它返回的工作流合同执行。
+
+`继续`、`下一步`、`确认`、`接受`、纯数字选择，以及只再次提及 `novel-assistant`，都属于工作流输入；不得脱离状态机凭聊天记忆推断进度、发明菜单或声称已经落盘。数字选择只能执行当前可见选项绑定的命令。阶段要求 `completion_required_before_reply` 时，必须完成指定写入并执行 `stage_completion_command`，确认权威状态已推进后才能回复。

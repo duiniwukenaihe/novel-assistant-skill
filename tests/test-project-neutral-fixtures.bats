@@ -1,0 +1,77 @@
+#!/usr/bin/env bats
+# Shared source and test fixtures must not retain names or labels copied from a
+# real manuscript. Keep the terms encoded so the guard does not flag itself.
+
+setup() {
+    REPO="$BATS_TEST_DIRNAME/.."
+}
+
+@test "shared source and fixtures remain project-neutral" {
+    run node - "$REPO" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+const repo = process.argv[2];
+const banned = [
+  [0x679c, 0x6c41],
+  [0x9c9c, 0x69a8],
+  [0x7a7f, 0x8d8a, 0x540e, 0x6211, 0x9760, 0x86cb, 0x7092, 0x996d, 0x5f81, 0x670d, 0x4e86, 0x9b54, 0x6559, 0x5723, 0x5973],
+  [0x6c88, 0x4e03],
+  [0x7eff, 0x73e0],
+  [0x83ab, 0x9752, 0x5c71],
+  [0x5468, 0x4e91, 0x821f],
+  [0x6797, 0x7167],
+  [0x5510, 0x79be],
+  [0x963f, 0x4e11],
+  [0x4efb, 0x5343, 0x79cb],
+  [0x7ea2, 0x8896, 0x574a],
+  [0x9648, 0x6d1b],
+  [0x82cf, 0x7cd6],
+  [0x9ed1, 0x72d7, 0x5d3d],
+  [0x5951, 0x7ea6, 0x517d],
+  [0x8001, 0x5b50, 0x90fd, 0x6740, 0x75af, 0x4e86],
+  [0x65e5, 0x6708, 0x5fc3, 0x6cd5],
+  [0x7981, 0x95ed, 0x7b2c, 0x4e00, 0x591c],
+  [0x7981, 0x95ed, 0x7b2c, 0x4e8c, 0x591c],
+  [0x7981, 0x95ed, 0x7b2c, 0x4e09, 0x591c],
+  [0x86cb, 0x7092, 0x996d],
+  [0x9ed1, 0x94c1, 0x4ee4],
+  [0x5fa1, 0x517d, 0x5b97],
+  [0x63, 0x68, 0x61, 0x72, 0x2e, 0x73, 0x68, 0x65, 0x6e, 0x2d, 0x71, 0x69],
+  [0x8bfb, 0x5fc3, 0x7a7a, 0x767d],
+  [0x8bfb, 0x5fc3, 0x5f02, 0x5e38],
+  [0x8bfb, 0x5fc3, 0x672f],
+  [0x7cfb, 0x7edf, 0x771f, 0x76f8],
+  [0x8840, 0x8109, 0x89c9, 0x9192],
+  [0x8840, 0x8109, 0x6765, 0x6e90],
+  [0x5996, 0x738b],
+  [0x9b54, 0x6559, 0x5723, 0x5973],
+].map(codePoints => String.fromCodePoint(...codePoints));
+
+const files = execFileSync('git', [
+  'ls-files', '-z', '--cached', '--others', '--exclude-standard',
+  'config', 'docs', 'scripts', 'skills/novel-assistant', 'src', 'tests',
+], { cwd: repo, encoding: 'utf8' }).split('\0')
+  .filter(relativePath => relativePath && fs.existsSync(path.join(repo, relativePath)));
+
+const leaks = [];
+for (const relativePath of files) {
+  const text = fs.readFileSync(path.join(repo, relativePath), 'utf8');
+  for (const term of banned) {
+    if (relativePath.includes(term)) leaks.push(`${relativePath}: path contains ${term}`);
+    if (text.includes(term)) leaks.push(`${relativePath}: ${term}`);
+  }
+}
+
+if (leaks.length) {
+  console.error(leaks.join('\n'));
+  process.exit(1);
+}
+NODE
+
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "$output" >&2
+        return "$status"
+    fi
+}

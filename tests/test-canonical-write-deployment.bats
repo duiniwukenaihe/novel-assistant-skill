@@ -36,13 +36,13 @@ run_guard() {
     [ "$status" -eq 0 ]
 }
 
-@test "refreshing an existing project creates but does not force legacy policy" {
+@test "refreshing an existing project requires explicit write-policy migration" {
     run sync_book "$LEGACY_BOOK"
 
     [ "$status" -eq 0 ]
-    [ -f "$LEGACY_BOOK/追踪/story-system/write-policy.json" ]
-    run node -e 'const p=require(process.argv[1]); if(p.mode!=="legacy") process.exit(1)' "$LEGACY_BOOK/追踪/story-system/write-policy.json"
-    [ "$status" -eq 0 ]
+    [ ! -f "$LEGACY_BOOK/追踪/story-system/write-policy.json" ]
+    [[ "$output" == *'"writePolicy": "migration_required"'* ]]
+    [[ "$output" == *'book-write-policy-migrate.js preview'* ]]
     [ "$(cat "$LEGACY_BOOK/正文/第1卷/第001章.md")" = '# 已有章节' ]
 }
 
@@ -130,12 +130,28 @@ run_guard() {
     [[ "$output" == *'"status":"allowed"'* ]]
 }
 
-@test "canonical guard blocks model-authored workflow receipts and short runtime projections" {
+@test "canonical guard allows only the running stage exact result receipt" {
+    sync_book "$NEW_BOOK"
+
+    mkdir -p "$NEW_BOOK/追踪/workflow/tasks/wf-short/result-packets"
+    printf '%s\n' '{"workflow_id":"wf-short","task_dir":"追踪/workflow/tasks/wf-short"}' > "$NEW_BOOK/追踪/workflow/current-task.json"
+    printf '%s\n' '{"workflow_id":"wf-short","current_stage":"next_section_brief","stage_execution":{"status":"running","stage_id":"next_section_brief","expected_result_packet":"追踪/workflow/tasks/wf-short/result-packets/next_section_brief.result.json"}}' > "$NEW_BOOK/追踪/workflow/tasks/wf-short/task.json"
+
+    local content='{"workflow_id":"wf-short","stage_id":"next_section_brief","step_id":"next_section_brief","step_status":"completed","result_packet_path":"追踪/workflow/tasks/wf-short/result-packets/next_section_brief.result.json"}'
+    run_guard "$NEW_BOOK" "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"追踪/workflow/tasks/wf-short/result-packets/next_section_brief.result.json\",\"content\":$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$content")}}"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"allowed_expected_result_packet"'* ]]
+
+    run_guard "$NEW_BOOK" "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"追踪/workflow/tasks/wf-short/result-packets/other.result.json\",\"content\":$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$content")}}"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'blocked_direct_workflow_state_edit'* ]]
+}
+
+@test "canonical guard blocks other model-authored workflow projections" {
     sync_book "$NEW_BOOK"
 
     local target
     for target in \
-        "追踪/workflow/tasks/wf-short/result-packets/next_section_brief.result.json" \
         "追踪/workflow/tasks/wf-short/artifacts/section-007-acceptance.json" \
         "追踪/private-short-extension/briefs/section-007.json" \
         "追踪/private-short-extension/section-007-anchor.json" \
@@ -195,7 +211,7 @@ NODE
     [[ "$output" == *'blocked_canonical_transaction_not_prepared'* ]]
 }
 
-@test "guard warns but allows missing file paths and legacy canonical writes" {
+@test "guard warns for missing targets and blocks unmigrated legacy canonical writes" {
     sync_book "$NEW_BOOK"
     run_guard "$NEW_BOOK" '{"tool_name":"Write","tool_input":{"content":"draft"}}'
     [ "$status" -eq 0 ]
@@ -204,7 +220,7 @@ NODE
     sync_book "$LEGACY_BOOK"
     run_guard "$LEGACY_BOOK" '{"tool_name":"Edit","tool_input":{"file_path":"正文/第1卷/第001章.md","old_string":"旧","new_string":"新"}}'
     [ "$status" -eq 0 ]
-    [[ "$output" == *'legacy_canonical_write_unprotected'* ]]
+    [[ "$output" == *'blocked_write_policy_migration_required'* ]]
 }
 
 @test "legacy guard blocks a generated mutator script that embeds canonical prose writes" {

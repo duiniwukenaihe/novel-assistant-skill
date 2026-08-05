@@ -9,7 +9,10 @@ const VISIBLE_STAGE_LABELS = {
   repair_machine_gate: '检查修复草稿', execute_repair: '执行已确认修复方案', recheck: '复检修复结果', closure: '生成审阅总报告',
   material_card: '确认素材卡', short_setting: '确认短篇设定', section_outline: '确认小节大纲', section_plan_lock: '确认总节数与小节标题', section_brief: '生成当前小节写作说明',
   draft_section: '写当前小节正文', section_machine_gate: '检查当前小节', section_repair_loop: '修复当前小节',
-  prose: '写当前章节正文', chapter_machine_gate: '检查当前章节', drift_gate: '检查剧情连续性', handoff: '保存章节交接',
+  detail_outline_review: '复核后续阶段细纲', chapter_brief: '生成当前章节 Brief', brief_review: '审阅当前章节 Brief',
+  prose: '写当前章节正文', prose_acceptance: '验收当前章节正文', chapter_commit: '提交当前章节事实与记忆',
+  milestone_review: '复盘当前章节', volume_acceptance: '验收当前卷并生成交接', book_acceptance: '验收全书',
+  chapter_machine_gate: '检查当前章节', drift_gate: '检查剧情连续性', handoff: '保存章节交接',
 };
 function buildReviewBatchReacceptancePendingAction(task, batch) {
   const range = String(batch.range || '');
@@ -172,26 +175,31 @@ function buildShortDraftPendingAction(stageDef, task) {
   const sectionIndex = match ? Number(match[1]) : 0;
   const sectionLabel = sectionIndex ? `第 ${sectionIndex} 节` : '当前小节';
   const revisionItem = currentRevisionItem(task, sectionIndex);
+  const repairRequired = Boolean(revisionItem && String(revisionItem.prose_status || '') === 'revision_required');
   const recheckExisting = Boolean(revisionItem && String(revisionItem.prose_status || '') === 'pending_recheck');
   return decoratePendingAction({
     id: `pa-${String((stageDef || {}).stage_id || 'draft_section')}`,
-    question: recheckExisting
+    question: repairRequired
+      ? `${sectionLabel}质量检查未通过，必须先修订正文`
+      : recheckExisting
       ? `${sectionLabel}已有正文，当前进入复检与局部回炉`
       : `${sectionLabel}写作提要已通过，推荐下一步`,
     options: [
       {
         number: 1,
-        action_id: recheckExisting ? 'recheck_existing_section' : 'continue_next_stage',
-        label: recheckExisting ? `复检并局部回炉${sectionLabel}现有正文（推荐）` : `开始写${sectionLabel}正文（推荐）`,
-        description: recheckExisting
+        action_id: repairRequired ? 'repair_required_section' : recheckExisting ? 'recheck_existing_section' : 'continue_next_stage',
+        label: repairRequired ? `按质量反馈修订${sectionLabel}正文（推荐）` : recheckExisting ? `复检并局部回炉${sectionLabel}现有正文（推荐）` : `开始写${sectionLabel}正文（推荐）`,
+        description: repairRequired
+          ? `只改质量检查指出的正文缺口；正文发生实际变化后，才能进入机器检查和故事质量复检。`
+          : recheckExisting
           ? `保留符合新规划的现有内容，只修偏离项；通过机器检查和故事质量判断后重新采用。`
           : `只写${sectionLabel}，写完自动进入机器检查；通过后再做一次故事质量判断。`,
         frontend_surface: String((stageDef || {}).frontend_surface || 'short_draft_editor'),
-        target_stage: recheckExisting ? 'section_machine_gate' : String((stageDef || {}).stage_id || 'draft_section'),
+        target_stage: repairRequired ? 'section_repair_loop' : recheckExisting ? 'section_machine_gate' : String((stageDef || {}).stage_id || 'draft_section'),
         risk_level: String((stageDef || {}).risk_level || 'high'),
         requires_user_confirm: true,
-        execution_mode: recheckExisting ? 'recheck_existing_then_repair_if_needed' : 'exact_selected_option',
-        completion_boundary: recheckExisting ? 'section_reaccepted' : 'stop_after_stage',
+        execution_mode: repairRequired ? 'repair_then_recheck' : recheckExisting ? 'recheck_existing_then_repair_if_needed' : 'exact_selected_option',
+        completion_boundary: repairRequired || recheckExisting ? 'section_reaccepted' : 'stop_after_stage',
       },
       {
         number: 2,
@@ -238,10 +246,12 @@ function buildShortRevisionQueueProgress(task = {}, sectionTitles = []) {
     const sectionIndex = Number(item.section_index);
     const isCompleted = String(item.status || '') === 'accepted';
     const isCurrent = sectionIndex === currentSection && !isCompleted;
-    const currentStep = isCurrent && String(item.prose_status || '') === 'pending_recheck'
-      && ['draft_first_section', 'draft_section', 'draft_next_section'].includes(String(task.current_stage || ''))
-      ? '写作提要已通过，待复检现有正文'
-      : currentShortRevisionStep(task);
+    const draftStage = ['draft_first_section', 'draft_section', 'draft_next_section'].includes(String(task.current_stage || ''));
+    const currentStep = isCurrent && draftStage && String(item.prose_status || '') === 'revision_required'
+      ? '写作提要已通过，待按质量反馈修订正文'
+      : isCurrent && draftStage && String(item.prose_status || '') === 'pending_recheck'
+        ? '写作提要已通过，待复检现有正文'
+        : currentShortRevisionStep(task);
     return {
       section_index: sectionIndex,
       title: titleMap.get(sectionIndex) || '',
@@ -627,9 +637,10 @@ function buildShortSectionDecisionPendingAction(tpl, task) {
 function visibleStageLabel(stageDef) {
   if (!stageDef) return '当前步骤';
   if (String(stageDef.stage_id || '') === 'section_plan_lock') return VISIBLE_STAGE_LABELS.section_plan_lock;
+  if (VISIBLE_STAGE_LABELS[stageDef.stage_id]) return VISIBLE_STAGE_LABELS[stageDef.stage_id];
   const authorPhase = (((stageDef || {}).interaction_contract || {}).author_phase) || {};
   if (authorPhase.label) return String(authorPhase.label);
-  return String(stageDef.label || VISIBLE_STAGE_LABELS[stageDef.stage_id] || stageDef.stage_id);
+  return String(stageDef.label || stageDef.stage_id);
 }
 
 function decoratePendingAction(action) {
@@ -819,6 +830,13 @@ function visibleExecutionBoundaryHint(boundary) {
   return '';
 }
 
+function stageDescriptionForAction(action = {}, stageDef = {}) {
+  if (String(action.action_id || '') !== 'repair_required_section') {
+    return String(stageDef.description || '');
+  }
+  return '按已确认的故事质量反馈局部修订当前小节正文；必须兑现当前写作提要和已接受修订要求，正文发生实际变化后再回机器检查与故事质量复检。';
+}
+
 module.exports = {
   buildCompletionPendingAction,
   buildPendingAction,
@@ -835,5 +853,6 @@ module.exports = {
   normalizeSelectedAction,
   projectTaskActionView,
   renderPendingActionText,
+  stageDescriptionForAction,
   visibleStageLabel,
 };

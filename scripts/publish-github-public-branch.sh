@@ -163,7 +163,7 @@ git -C "$WORKTREE_DIR" diff --check
 
 if [ "$SKIP_RUNTIME_VERIFY" -ne 1 ]; then
   node "$WORKTREE_DIR/scripts/production-smoke-matrix.js" --repo-root "$WORKTREE_DIR" --json
-  bats "$WORKTREE_DIR/tests/test-short-workflow-production-e2e.bats"
+  bats "$WORKTREE_DIR/tests/test-workflow-v3-new-short-e2e.bats"
   node "$WORKTREE_DIR/scripts/workflow-state-machine.js" templates --json > "$WORKTREE_DIR/.public-workflow-templates.json"
   node - "$WORKTREE_DIR" "$WORKTREE_DIR/.public-workflow-templates.json" <<'NODE'
 const fs = require('fs');
@@ -226,7 +226,15 @@ if [ "$COMMIT_CHANGES" -eq 1 ]; then
   if git -C "$WORKTREE_DIR" diff --cached --quiet; then
     echo "No public release changes to commit."
   else
-    git -C "$WORKTREE_DIR" commit -m "chore(release): prepare GitHub public branch"
+    PUBLIC_RELEASE_COMMIT_SUBJECT="公开发布：同步 novel-assistant 的 GitHub 公开分支"
+    PUBLIC_RELEASE_COMMIT_BODY="本次提交用于在 GitHub 公开发布同步：
+
+- 同步公开 Workflow / Memory / 短篇运行时等公共代码与资源
+- 移除私有模块、内部计划与本地内容，仅保留公共部分
+- 已执行隐私审计与强制运行门禁，确认本提交可对外发布"
+    git -C "$WORKTREE_DIR" commit \
+      -m "$PUBLIC_RELEASE_COMMIT_SUBJECT" \
+      -m "$PUBLIC_RELEASE_COMMIT_BODY"
   fi
 fi
 

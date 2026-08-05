@@ -33,5 +33,5 @@
 ## Examples
 
 - “疑似师父真实身份”是 `fact_proposals`，不是 `confirmed_facts`。
-- “第 12 章主角已知道读心术限制”是 `confirmed_facts`，后续章节不能假装不知道。
+- “第 12 章主角已知道特殊能力限制”是 `confirmed_facts`，后续章节不能假装不知道。
 - “第 13 章只出现主角、师姐、掌柜”时，只注入这三人的上下文和相关伏笔。

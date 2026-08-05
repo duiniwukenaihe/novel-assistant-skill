@@ -1,0 +1,48 @@
+{
+  "workflow_id": "wf-neutral-planning",
+  "workflow_type": "short_write",
+  "workflow_contract_version": 3,
+  "task_dir": "追踪/workflow/tasks/wf-neutral-planning",
+  "status": "running",
+  "current_stage": "next_section_brief",
+  "current_step": "next_section_brief",
+  "state_version": 7,
+  "scope": "第2节",
+  "stage_execution": {
+    "status": "running",
+    "stage_id": "next_section_brief",
+    "step_id": "next_section_brief",
+    "stage_attempt_id": "sa-neutral-planning",
+    "expected_result_packet": "追踪/workflow/tasks/wf-neutral-planning/result-packets/next_section_brief.section-002.result.json"
+  },
+  "machine": {
+    "remaining_stages": ["next_section_brief", "draft_next_section"],
+    "next_stop_reason": "stage_running_waiting_result_packet"
+  },
+  "unit_lifecycle": {
+    "status": "active",
+    "current_stage": "next_section_brief"
+  },
+  "runtime_guard": {
+    "checkpoint_policy": {
+      "resume_from": "next_section_brief"
+    }
+  },
+  "recommended_next": [
+    { "number": 1, "label": "继续旧阶段" }
+  ],
+  "last_selection": {
+    "target_stage": "next_section_brief",
+    "book_root": "/private/tmp/neutral-old-copy"
+  },
+  "navigation": {
+    "task_overview": { "presented_at": "2026-01-01T00:00:00.000Z" }
+  },
+  "next_stop_reason": "stage_running_waiting_result_packet",
+  "stage_attempt_history": [
+    { "stage_id": "next_section_brief", "status": "completed" }
+  ],
+  "pending_action": null,
+  "pending_feedback": null,
+  "lifecycle": { "status": "active" }
+}

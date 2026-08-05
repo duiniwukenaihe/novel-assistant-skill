@@ -370,7 +370,7 @@ function findShortParagraphFragmentation(proseLines) {
           column: 1,
           type: 'short-paragraph-fragmentation',
           severity: 'advisory',
-          message: `连续短段：${shortItems.length} 行短句/短段过密；短篇可以用短句压迫，但同一镜头内应合并部分动作、感知、判断或界面信息，形成长短交错。`,
+          message: `连续短段：${shortItems.length} 行短句/短段过密；短句可以制造压迫感，但同一镜头内应合并部分动作、感知、判断或界面信息，形成长短交错。`,
           excerpt: compact(run.slice(0, 7).map((item) => item.sample).join(' / ')),
         });
       }

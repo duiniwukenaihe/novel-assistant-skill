@@ -41,6 +41,12 @@ const DOMAIN_TOKEN_RULES = [
 
 const RAW_ARTIFACT_RULES = [
   {
+    type: 'escaped-smart-quote',
+    pattern: /\\[“”‘’]/g,
+    phrase: 'escaped smart quote',
+    message: '正文中的中文弯引号前混入了反斜杠；只删除反斜杠并重新检查，不要改写句子。',
+  },
+  {
     type: 'terminal-escape-residue',
     pattern: /(?:\x1B\[[0-?]*[ -/]*[@-~]|\[e~\[|\[(?:\?[0-9;]{1,16}[hl]|[0-9]{1,4}(?:;[0-9]{0,4})*[A-Za-z~]))/g,
     phrase: 'terminal escape residue',
@@ -518,15 +524,25 @@ function findEngineeringTermLeaks(input) {
 function findLowInformationOutput(normalized) {
   const text = normalized.text;
   if (text.length < 1200) return [];
-  const uniqueChars = new Set([...text]).size;
-  const uniqueRatio = uniqueChars / text.length;
-  if (uniqueRatio >= 0.08) return [];
+  const windowSize = 1200;
+  const starts = text.length <= windowSize
+    ? [0]
+    : [0, Math.max(0, Math.floor((text.length - windowSize) / 2)), text.length - windowSize];
+  const ratios = [...new Set(starts)].map((start) => {
+    const window = text.slice(start, start + windowSize);
+    return new Set([...window]).size / window.length;
+  });
+  const uniqueRatio = Math.max(...ratios);
+  // A whole-book ratio naturally shrinks as Chinese prose gets longer. Only
+  // block when every fixed-size sample is extremely low-diversity; ordinary
+  // repetition is handled separately by the phrase and repeated-line gates.
+  if (uniqueRatio >= 0.04) return [];
   return [{
     type: 'low-information-output',
     phrase: 'unique-char-ratio',
     count: Number(uniqueRatio.toFixed(4)),
     offset: normalized.offsets[0] || 0,
-    message: `疑似输出健康失败：长输出信息密度过低（unique ratio ${(uniqueRatio * 100).toFixed(1)}%）；必须缩小任务粒度重试。`,
+    message: `疑似输出健康失败：多个固定长度采样窗口的信息密度均过低（最高 unique ratio ${(uniqueRatio * 100).toFixed(1)}%）；必须缩小任务粒度重试。`,
   }];
 }
 

@@ -150,6 +150,8 @@ node scripts/workflow-state-machine.js activate --project-root <book-root> --wor
 
 每个阶段都允许自由反馈：`pending_action.free_text_enabled=true` 是硬约束，不是 UI 装饰。用户可以在任何阶段 chat、提交人工修改、粘贴重写段落、要求重新规划、改变题材方向或指出“不好看/人物不像人/逻辑不成立”。L2 必须先分类这类输入：
 
+V3 短篇的自由文本不能消费旧数字，也不能调用 V2 `resolve-action`。入口先执行 `workflow-v3.js submit-feedback`，使原文、workflow、stage、section 和时间一次性进入 `pending_feedback.messages`；若存在旧菜单，只归档到 `interaction_history`，不执行其中动作。恢复时 `v3_feedback_pending_analysis` 必须继续分析该反馈，不得恢复原阶段写作。分析结果通过 `workflow-v3.js propose-feedback` 形成固定四项作者确认；只有 `accept_feedback_plan` 才把方案标为 accepted，其他选择均不得修改创作资产。
+
 - 当前阶段修订：只改当前素材卡、设定段、小节大纲、Brief 或正文小节。
 - 上游设定/大纲/Brief 回写：用户反馈影响人物动机、因果渠道、核心反转、标题承诺、节奏套路或结尾兑现时，先回写上游，再继续。
 - 规划回写被接受后必须建立持久 `feedback_revision_queue`：按受影响小节逐一重建 Brief、复检正文并重新采用。队列未清空时不得生成计划外新小节，队列完成后才重新合稿。

@@ -8,10 +8,10 @@ const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { inferShortSectionIndex } = require('./lib/short-workflow-state');
-const { deriveSectionLengthPolicy, shouldAskSingleSectionLengthChoice } = require('./lib/short-section-length-policy');
 const { decoratePendingAction } = require('./lib/workflow-action-renderer');
 const { atomicWriteJson, mutateTask } = require('./lib/workflow-state-store');
 const { readShortProjectState } = require('./lib/short-project-state');
+const { runMachineGate } = require('./lib/short-production/section-loop');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -21,6 +21,7 @@ function main() {
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 2, args.json);
   let task = authority.task;
+  if (Number(task.engine_version) === 3) return finish({ status: 'v3_engine_apply_required', workflow_id: workflowId, instruction: 'V3 任务必须直接调用共享 service，并通过 V3 Engine 应用 StageResult。' }, 2, args.json);
   if (!['short_write', 'private_short_startup', 'short_startup'].includes(String(task.workflow_type || ''))) {
     return finish({ status: 'blocked_not_short_write', workflow_id: workflowId }, 2, args.json);
   }
@@ -48,45 +49,38 @@ function main() {
   const draft = resolveDraft(root, task, sectionIndex, args.draft);
   if (!draft) return finish({ status: 'short_draft_missing', section_index: sectionIndex, instruction: '返回当前节草稿阶段恢复候选稿。' }, 0, args.json);
 
-  const draftText = fs.readFileSync(draft, 'utf8');
-  const actualChars = (draftText.match(/[\u3400-\u9fff]/g) || []).length;
-  const lengthPolicy = deriveSectionLengthPolicy({ projectState, sectionIndex, actual: actualChars });
-  const checks = [
-    ...runChecks(root, draft),
-    {
-      id: 'short-section-length-policy',
-      status: lengthPolicy.blocking ? 'blocking' : lengthPolicy.status,
-      blocking: lengthPolicy.blocking === true,
-      exit_code: 0,
-      finding_count: ['advisory', 'warning'].includes(String(lengthPolicy.status || '')) ? 1 : lengthPolicy.blocking ? 1 : 0,
-      message: lengthPolicy.note || '',
-      details: lengthPolicy,
+  const draftRel = relative(root, draft);
+  const shared = runMachineGate({
+    projectRoot: root,
+    task: {
+      ...task,
+      current_stage: 'machine_gate',
+      stage_execution: { ...execution, stage_id: 'machine_gate', section_index: sectionIndex },
     },
-  ];
-  const blocking = checks.filter((item) => item.blocking);
+    draft: draftRel,
+  });
+  if (!['completed', 'needs_author_choice'].includes(shared.kind)) {
+    return finish({
+      status: shared.code === 'short_section_identity_missing'
+        ? 'blocked_short_section_identity_missing'
+        : shared.code,
+      workflow_id: workflowId,
+      section_index: shared.section_index || sectionIndex,
+      instruction: shared.instruction,
+    }, 0, args.json);
+  }
+  const lengthChoiceRequired = shared.kind === 'needs_author_choice';
+  const passed = lengthChoiceRequired || shared.next_stage === 'story_gate';
+  const blocking = Array.isArray(shared.blocking_findings) ? shared.blocking_findings : [];
+  const lengthPolicy = shared.length_policy || {};
   const packetRel = String(execution.expected_result_packet || `追踪/workflow/tasks/${workflowId}/result-packets/section_machine_gate.result.json`);
   const packetFile = safeProjectFile(root, packetRel);
   if (!packetFile) return finish({ status: 'blocked_result_packet_path_unsafe', path: packetRel }, 2, args.json);
-  const evidenceRel = `追踪/workflow/tasks/${workflowId}/artifacts/section-${String(sectionIndex).padStart(3, '0')}-machine-gate.json`;
+  const evidenceRel = String(shared.evidence || `追踪/workflow/tasks/${workflowId}/artifacts/section-${String(sectionIndex).padStart(3, '0')}-machine-gate.json`);
   const evidenceFile = safeProjectFile(root, evidenceRel);
-  const draftRel = relative(root, draft);
-  const draftDigest = digestFile(draft);
-  atomicWriteJson(evidenceFile, {
-    schemaVersion: '1.0.0',
-    workflow_id: workflowId,
-    section_index: sectionIndex,
-    draft: draftRel,
-    draft_digest: draftDigest,
-    checks,
-    length_policy: lengthPolicy,
-    quality_debts: lengthPolicy.verdict === 'outside_story_band_deferred'
-      ? [{ debt_type: 'section_length_variance', severity: 'advisory', scope: `第${sectionIndex}节`, details: lengthPolicy, recommended_fix: '整篇收束时结合剧情功能决定补写、压缩或保留。' }]
-      : [],
-    blocking_count: blocking.length,
-    created_at: new Date().toISOString(),
-  });
-
-  const passed = blocking.length === 0;
+  const evidenceArtifact = readJson(evidenceFile) || {};
+  const checks = Array.isArray(evidenceArtifact.checks) ? evidenceArtifact.checks : [];
+  const draftDigest = String(shared.draft_digest || '');
   atomicWriteJson(packetFile, {
     workflow_id: workflowId,
     workflow_type: String(task.workflow_type || 'short_write'),
@@ -102,7 +96,7 @@ function main() {
     machine_gate_result: passed ? 'pass' : 'blocking',
     draft_digest: draftDigest,
     length_policy: lengthPolicy,
-    blocking_findings: blocking.map((item) => ({ code: item.id, message: item.message || `${item.id} 未通过` })),
+    blocking_findings: blocking,
     checkpoint_state: {
       current_stage: 'section_machine_gate',
       completed_range: passed ? `第${sectionIndex}节机器门完成` : '',
@@ -129,7 +123,7 @@ function main() {
   ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   const outcome = classifyWorkflowApply(applied);
   let applyResult = outcome.result;
-  const lengthChoice = outcome.applied && shouldAskSingleSectionLengthChoice(task, lengthPolicy)
+  const lengthChoice = outcome.applied && lengthChoiceRequired
     ? pauseForSingleSectionLengthChoice(root, workflowId, applyResult, sectionIndex, lengthPolicy)
     : null;
   if (lengthChoice) applyResult = lengthChoice.task;
@@ -316,34 +310,6 @@ function reopenMachineGateForPolicyRecheck(root, task, explicitDraft) {
   return { status: 'reopened', task: next };
 }
 
-function runChecks(root, draft) {
-  const commands = [
-    ['check-ai-patterns', 'check-ai-patterns.js', ['--check', '--json', '--fail-on=blocking', draft]],
-    ['anti-ai-diagnose', 'anti-ai-diagnose.js', ['--json', '--work-type=shortform', '--prose-profile=fiction', draft]],
-    ['output-pollution-check', 'output-pollution-check.js', ['--check', '--json', draft]],
-    ['check-degeneration', 'check-degeneration.js', ['--check', '--json', '--fail-on=blocking', draft]],
-    ['story-prose-gate', 'story-prose-gate.js', [draft, '--json']],
-  ];
-  return commands.map(([id, script, cliArgs]) => {
-    const run = spawnSync(process.execPath, [path.join(__dirname, script), ...cliArgs], {
-      cwd: root,
-      encoding: 'utf8',
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    const parsed = parseJson(run.stdout);
-    const findingCount = countFindings(parsed);
-    const blocking = run.status !== 0 || hasBlocking(parsed);
-    return {
-      id,
-      status: blocking ? 'blocking' : 'pass',
-      blocking,
-      exit_code: Number.isInteger(run.status) ? run.status : 1,
-      finding_count: findingCount,
-      message: blocking ? firstMessage(parsed, run.stderr) : '',
-    };
-  });
-}
-
 function resolveDraft(root, task, sectionIndex, explicit) {
   const candidates = [];
   if (explicit) candidates.push(explicit);
@@ -380,41 +346,6 @@ function prepareExistingRevisionDraft(root, task, execution, sectionIndex, expli
   return targetRel;
 }
 
-function hasBlocking(value) {
-  if (!value || typeof value !== 'object') return false;
-  if (Array.isArray(value)) return value.some(hasBlocking);
-  for (const [key, child] of Object.entries(value)) {
-    if (/blocking_count|blockingCount|blocking/i.test(key) && typeof child === 'number' && child > 0) return true;
-    if (/blocking|blocked/i.test(key) && child === true) return true;
-    if (/status|result|verdict/i.test(key) && typeof child === 'string' && /(block|fail|reject|error)/i.test(child)) return true;
-    if (/severity/i.test(key) && String(child).toLowerCase() === 'blocking') return true;
-    if (hasBlocking(child)) return true;
-  }
-  return false;
-}
-
-function countFindings(value) {
-  if (!value || typeof value !== 'object') return 0;
-  if (Array.isArray(value)) return value.reduce((sum, item) => sum + countFindings(item), 0);
-  let count = 0;
-  for (const [key, child] of Object.entries(value)) {
-    if (/findings/i.test(key) && Array.isArray(child)) count += child.length;
-    else count += countFindings(child);
-  }
-  return count;
-}
-
-function firstMessage(parsed, stderr) {
-  const stack = [parsed];
-  while (stack.length) {
-    const item = stack.shift();
-    if (!item || typeof item !== 'object') continue;
-    if (typeof item.message === 'string' && item.message.trim()) return item.message.trim().slice(0, 300);
-    stack.push(...(Array.isArray(item) ? item : Object.values(item)));
-  }
-  return String(stderr || '').trim().slice(0, 300);
-}
-
 function focusedWorkflowId(root) {
   return singleUnfinishedWorkflowId(root);
 }
@@ -430,24 +361,8 @@ function relative(root, file) {
   return path.relative(root, file).split(path.sep).join('/');
 }
 
-function digestFile(file) {
-  return `sha256:${require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`;
-}
-
 function readJson(file) {
   try { return file && fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null; } catch (_) { return null; }
-}
-
-function parseJson(text) {
-  const value = String(text || '').trim();
-  if (!value) return null;
-  try { return JSON.parse(value); } catch (_) {
-    const lines = value.split(/\r?\n/).filter(Boolean);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      try { return JSON.parse(lines[index]); } catch (_) { /* continue */ }
-    }
-    return null;
-  }
 }
 
 function parseArgs(argv) {

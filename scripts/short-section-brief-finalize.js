@@ -10,16 +10,18 @@ const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { inferShortSectionIndex } = require('./lib/short-workflow-state');
 const { currentShortFeedbackRevisionSection } = require('./lib/short-feedback-revision-queue');
-const { writeBriefFreshnessSnapshot } = require('./lib/short-brief-freshness');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { ensureShortProjectState, resolveShortStateRelative, shortStateFile } = require('./lib/short-project-state');
 const {
-  buildShortSectionOutlineContract,
-  validateBriefOutlineCoverage,
-} = require('./lib/short-section-outline-contract');
+  finalizeBrief,
+  analyzeBriefQuality,
+  countCausalBeats,
+  evidenceMechanismCount,
+  plannedTargetChars,
+  sectionResponsibilityCount,
+} = require('./lib/short-production/section-loop');
 
 const BRIEF_STAGES = new Set(['first_section_brief', 'section_brief', 'next_section_brief']);
-const REQUIRED_SIGNALS = ['视角', '人物', '因果', '钩子', '禁止', '验收'];
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -29,6 +31,7 @@ function main() {
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 2, args.json);
   const task = authority.task;
+  if (Number(task.engine_version) === 3) return finish({ status: 'v3_engine_apply_required', workflow_id: workflowId, instruction: 'V3 任务必须直接调用共享 service，并通过 V3 Engine 应用 StageResult。' }, 2, args.json);
   const stageId = String(task.current_stage || '');
   if (!BRIEF_STAGES.has(stageId)) return finish({ status: 'stage_action_not_applicable', expected: [...BRIEF_STAGES], actual: stageId, instruction: '重新读取当前任务的 execution_command；不要重试旧阶段命令。' }, 0, args.json);
   const execution = task.stage_execution || {};
@@ -45,61 +48,17 @@ function main() {
   const sectionIndex = currentShortFeedbackRevisionSection(task)
     || inferShortSectionIndex({ projectState, stageId, scope: String(task.scope || '') });
   if (!sectionIndex) return finish({ status: 'blocked_short_section_identity_missing', instruction: '当前任务没有可靠的小节身份；先由 workflow 恢复小节范围，不得默认生成第1节 Brief。' }, 0, args.json);
-  const titleLock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
-  const titleEntry = (Array.isArray(titleLock.sections) ? titleLock.sections : []).find((item) => Number((item || {}).section_index) === sectionIndex);
-  if (!titleEntry || titleEntry.confirmed !== true) {
-    return finish({
-      status: 'short_section_title_confirmation_required',
-      section_index: sectionIndex,
-      message: `第${sectionIndex}节标题尚未经用户在全篇小节大纲阶段确认，禁止 Brief 自行命名。`,
-      preview_command: `node scripts/short-section-title-lock.js --project-root ${JSON.stringify(root)} --workflow-id ${JSON.stringify(workflowId)} --json`,
-    }, 0, args.json);
-  }
-  if (String(titleLock.workflow_id || '') !== workflowId
-      || String(titleLock.project_id || '') !== String(projectState.project_id || '')
-      || Number(titleLock.plan_revision || 0) !== Number(projectState.plan_revision || 0)) {
-    return finish({
-      status: 'short_section_title_lock_stale',
-      section_index: sectionIndex,
-      workflow_id: workflowId,
-      message: '标题清单不属于当前作品规划版本，必须重新展示并确认后再生成 Brief。',
-      preview_command: `node scripts/short-section-title-lock.js --project-root ${JSON.stringify(root)} --workflow-id ${JSON.stringify(workflowId)} --json`,
-    }, 0, args.json);
-  }
   const briefRel = args.brief || `写作Brief_第${String(sectionIndex).padStart(3, '0')}节.md`;
   const briefFile = safeProjectFile(root, briefRel);
-  if (!briefFile || !fs.existsSync(briefFile)) return finish({ status: 'awaiting_short_brief', brief: briefRel, instruction: '只生成当前节写作提要，然后重新运行本命令。' }, 0, args.json);
-  const text = fs.readFileSync(briefFile, 'utf8').trim();
-  const missingSignals = REQUIRED_SIGNALS.filter((signal) => !text.includes(signal));
-  if (text.length < 240 || missingSignals.length > 2) {
-    return finish(recoverableStageResult(task, 'short_brief_revision_required', '只补齐当前写作提要缺失部分一次；不要读取全篇或进入正文。', { brief: briefRel, chars: text.length, missing_signals: missingSignals }), 0, args.json);
-  }
-  const outlineContract = buildShortSectionOutlineContract(root, sectionIndex);
-  if (outlineContract.status !== 'current') {
-    return finish({
-      status: 'short_outline_contract_required',
-      section_index: sectionIndex,
-      finding: outlineContract.code || 'outline_contract_missing',
-      instruction: '先回到小节大纲补足本节结构功能、子事件与节尾钩子；不得让 Brief 或正文临场补剧情。',
-    }, 0, args.json);
-  }
-  const outlineCoverage = validateBriefOutlineCoverage(text, outlineContract);
-  if (outlineCoverage.status !== 'pass') {
-    return finish({
-      status: 'short_brief_outline_drift',
-      section_index: sectionIndex,
-      brief: briefRel,
-      outline_contract_digest: outlineContract.contract_digest,
-      findings: outlineCoverage.findings,
-      missing_obligations: outlineCoverage.findings
-        .filter(item => item.obligation_id)
-        .map(item => item.obligation_id),
-      instruction: '当前写作提要缺少已确认的大纲义务。只补缺失的剧情功能、因果动作或承接钩子；不要复制机器编号，也不得进入正文。',
-    }, 0, args.json);
-  }
-  const briefQuality = analyzeBriefQuality(text);
-  if (briefQuality.status !== 'pass') {
+  const shared = finalizeBrief({ projectRoot: root, task, brief: briefRel });
+  if (shared.kind === 'needs_author_choice' || (shared.kind === 'retryable_internal' && shared.failure_family === 'brief_quality')) {
+    const text = briefFile && fs.existsSync(briefFile) ? fs.readFileSync(briefFile, 'utf8').trim() : '';
+    const briefQuality = analyzeBriefQuality(text);
     const recovery = registerBriefRevision({ root, task, briefRel, text, briefQuality, apply: args.apply });
+    if (recovery.exhausted && args.apply) {
+      const choice = registerBriefOverloadChoice({ root, workflowId, briefRel, findings: shared.findings || briefQuality.findings });
+      if (choice) return finish({ brief: briefRel, ...choice }, 0, args.json);
+    }
     return finish({
       brief: briefRel,
       ...briefQuality,
@@ -114,26 +73,24 @@ function main() {
       recovery_record: recovery.recordRel,
     }, 0, args.json);
   }
-
-  const acceptedAnchor = sectionIndex > 1
-    ? resolveShortStateRelative(root, `section-${String(sectionIndex - 1).padStart(3, '0')}-anchor.json`)
-    : '';
-  const freshness = writeBriefFreshnessSnapshot({ projectRoot: root, briefPath: briefRel, sectionIndex, acceptedAnchorPath: acceptedAnchor });
-  if (freshness.status !== 'snapshot_written') return finish({ status: 'short_brief_dependencies_changed', freshness, instruction: '规划依赖已变化，重新生成当前节写作提要。' }, 0, args.json);
-  const coverageRel = `${task.task_dir}/artifacts/section-${String(sectionIndex).padStart(3, '0')}-brief-outline-coverage.json`;
-  const coverageFile = safeProjectFile(root, coverageRel);
-  if (!coverageFile) return finish({ status: 'blocked_outline_coverage_path_unsafe', path: coverageRel }, 2, args.json);
-  atomicWriteJson(coverageFile, {
-    schema_version: '1.0.0',
-    workflow_id: workflowId,
-    section_index: sectionIndex,
-    brief: briefRel,
-    coverage_mode: outlineCoverage.coverage_mode,
-    outline_contract_digest: outlineContract.contract_digest,
-    section_block_digest: outlineContract.section_block_digest,
-    coverage: outlineCoverage.coverage,
-    generated_at: new Date().toISOString(),
-  });
+  if (shared.kind !== 'completed') {
+    const legacyStatus = shared.code === 'short_section_identity_missing'
+      ? 'blocked_short_section_identity_missing'
+      : shared.code;
+    if (shared.kind === 'retryable_internal') {
+      return finish(recoverableStageResult(task, legacyStatus, shared.instruction, {
+        section_index: shared.section_index,
+        brief: shared.brief,
+        chars: shared.chars,
+        missing_signals: shared.missing_signals,
+        findings: shared.findings,
+      }), 0, args.json);
+    }
+    return finish({ status: legacyStatus, ...shared }, 0, args.json);
+  }
+  const text = fs.readFileSync(briefFile, 'utf8').trim();
+  const freshnessRel = String(shared.freshness_sidecar || '');
+  const coverageRel = String(shared.outline_coverage_sidecar || '');
 
   const packetRel = String(execution.expected_result_packet || `${task.task_dir}/result-packets/${stageId}.result.json`);
   const packetFile = safeProjectFile(root, packetRel);
@@ -145,18 +102,18 @@ function main() {
     step_id: stageId,
     owner_module: String(execution.owner_module || task.workflow_owner || ''),
     step_status: 'completed',
-    outputs: [briefRel, freshness.sidecar, coverageRel],
-    changed_files: [briefRel, freshness.sidecar, coverageRel, resolveShortStateRelative(root, 'project-state.json', { forWrite: true })],
-    created_files: [freshness.sidecar, coverageRel],
+    outputs: [briefRel, freshnessRel, coverageRel].filter(Boolean),
+    changed_files: [briefRel, freshnessRel, coverageRel, resolveShortStateRelative(root, 'project-state.json', { forWrite: true })].filter(Boolean),
+    created_files: [freshnessRel, coverageRel].filter(Boolean),
     evidence: [{
       brief: briefRel,
       section_index: sectionIndex,
       chars: text.length,
-      freshness: freshness.status,
-      outline_contract_digest: outlineContract.contract_digest,
-      section_block_digest: outlineContract.section_block_digest,
-      outline_obligations: outlineContract.obligations.map((item) => item.id),
-      outline_coverage_mode: outlineCoverage.coverage_mode,
+      freshness: freshnessRel ? 'snapshot_written' : 'unknown',
+      outline_contract_digest: shared.outline_contract_digest,
+      section_block_digest: shared.section_block_digest,
+      outline_obligations: shared.outline_obligations,
+      outline_coverage_mode: shared.outline_coverage_mode,
       outline_coverage_sidecar: coverageRel,
     }],
     verification_result: 'pass',
@@ -238,84 +195,6 @@ function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file.startsWith(`${root}${path.sep}`) ? file : ''; }
 function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
 function parseJson(text) { try { return JSON.parse(String(text || '').trim()); } catch (_) { return null; } }
-function analyzeBriefQuality(text) {
-  const source = String(text || '');
-  const compactChars = source.replace(/\s/gu, '').length;
-  const targetChars = plannedTargetChars(source);
-  const briefBudget = targetChars ? Math.max(1200, Math.round(targetChars * 2.5)) : 6000;
-  const beatCount = countCausalBeats(source);
-  const beatBudget = targetChars ? Math.max(4, Math.ceil(targetChars / 220)) : 12;
-  const findings = [];
-  if (compactChars > briefBudget) findings.push('brief_repeats_or_exceeds_dynamic_budget');
-  if (beatCount > beatBudget) findings.push('beat_density_exceeds_prose_capacity');
-  const executionText = source.replace(/#{1,6}\s+大纲覆盖映射[^\n]*\n[\s\S]*?(?=\n#{1,6}\s+|$)/u, '');
-  const evidenceCount = evidenceMechanismCount(executionText);
-  const responsibilityCount = sectionResponsibilityCount(executionText);
-  if (evidenceCount > 3) findings.push('evidence_mechanism_overload');
-  if (responsibilityCount > 4) findings.push('section_responsibility_overload');
-  if (evidenceCount >= 3 && responsibilityCount >= 4) findings.push('section_focus_overload');
-  return {
-    status: findings.length ? 'blocking' : 'pass',
-    target_chars: targetChars,
-    brief_chars: compactChars,
-    dynamic_brief_budget: briefBudget,
-    beat_count: beatCount,
-    dynamic_beat_budget: beatBudget,
-    evidence_mechanism_count: evidenceCount,
-    section_responsibility_count: responsibilityCount,
-    findings,
-  };
-}
-function evidenceMechanismCount(text) {
-  const source = String(text || '');
-  const mechanisms = [
-    /档案|工商记录|登记记录/u,
-    /回执|签收凭证|领取凭证/u,
-    /账本|报表|工资表|财务表/u,
-    /合同|协议|授权书|担保函/u,
-    /邮件|聊天记录|录音|视频记录/u,
-    /清单|申请|通知书/u,
-    /批次|追溯码|检测报告|检验报告/u,
-    /采购单|入库单|出库单|物流单/u,
-  ];
-  return mechanisms.filter(pattern => pattern.test(source)).length;
-}
-function sectionResponsibilityCount(text) {
-  const source = String(text || '');
-  const responsibilities = [
-    /召回|退款|退货|下架/u,
-    /停产|整改|复产|恢复生产/u,
-    /员工|工资|转岗|裁员|赔偿/u,
-    /董事会|股东会|暂停职务|辞职|职业经理人/u,
-    /直播|公开说明|舆论|消费者/u,
-    /父亲|母亲|兄弟|姐妹|舍友|朋友|婚姻|亲情/u,
-    /三个月后|半年后|一年后|多年后/u,
-  ];
-  return responsibilities.filter(pattern => pattern.test(source)).length;
-}
-function countCausalBeats(text) {
-  const source = String(text || '');
-  const section = extractHeadingSection(source, /(?:因果(?:动作|链)?|动作链|情节节拍|事件节拍)/u);
-  if (!section) return 0;
-  const numbered = section.split(/\r?\n/u).filter((line) => /^\s*\d+[.、)]\s*/u.test(line)).length;
-  if (numbered) return numbered;
-  return section
-    .replace(/^\s*[-*]\s*/gmu, '')
-    .split(/[;；\n]+/u)
-    .map((item) => item.trim())
-    .filter((item) => item && !/^#+\s*/u.test(item)).length;
-}
-function extractHeadingSection(text, headingPattern) {
-  const lines = String(text || '').split(/\r?\n/u);
-  const start = lines.findIndex((line) => /^#{1,6}\s+/u.test(line) && headingPattern.test(line));
-  if (start < 0) return '';
-  const body = [];
-  for (let index = start + 1; index < lines.length; index += 1) {
-    if (/^#{1,6}\s+/u.test(lines[index])) break;
-    body.push(lines[index]);
-  }
-  return body.join('\n').trim();
-}
 function registerBriefRevision({ root, task, briefRel, text, briefQuality, apply }) {
   const attemptId = String((((task || {}).stage_execution || {}).stage_attempt_id) || 'brief');
   const safeAttemptId = attemptId.replace(/[^A-Za-z0-9._-]/gu, '_');
@@ -342,12 +221,18 @@ function registerBriefRevision({ root, task, briefRel, text, briefQuality, apply
   }
   return { attemptCount, exhausted, recordRel: apply ? recordRel : '' };
 }
-function plannedTargetChars(text) {
-  const normalized = String(text || '').replace(/[，,]/gu, '');
-  const range = normalized.match(/目标\s*([0-9]+)\s*(?:-|~|至|到)\s*([0-9]+)\s*(?:个)?中文/u);
-  if (range) return Math.round((Number(range[1]) + Number(range[2])) / 2);
-  const single = normalized.match(/(?:目标(?:字数)?|本节目标)\s*[:：=]?\s*([0-9]+)\s*(?:个)?中文/u);
-  return single ? Number(single[1]) : 0;
+function registerBriefOverloadChoice({ root, workflowId, briefRel, findings }) {
+  const result = spawnSync(process.execPath, [
+    path.join(__dirname, 'workflow-state-machine.js'),
+    'register-short-brief-overload',
+    '--project-root', root,
+    '--workflow-id', workflowId,
+    '--scope', briefRel,
+    '--reason', (Array.isArray(findings) ? findings : []).join('|'),
+    '--json',
+  ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const parsed = parseJson(result.stdout);
+  return result.status === 0 && parsed && String(parsed.status || '') === 'workflow_choice_required' ? parsed : null;
 }
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }
 function usage(message) { process.stderr.write(`${message}\nUsage: node short-section-brief-finalize.js --project-root <book> --workflow-id <id> [--brief file] [--apply] [--json]\n`); process.exit(2); }

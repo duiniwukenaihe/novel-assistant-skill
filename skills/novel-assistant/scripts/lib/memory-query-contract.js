@@ -14,7 +14,10 @@ function normalizeMemoryQuery(value = {}) {
   const unknown = needs.filter(need => !NEEDS.has(need));
   if (unknown.length) throw invalid(`unsupported memory needs: ${unknown.join(', ')}`);
   if (!needs.length) throw invalid('memory query needs at least one typed need');
-  return {
+  const attemptRaw = String(value.stage_attempt_id || '').trim();
+  const workUnitRaw = String(value.work_unit_id || '').trim();
+  if (!attemptRaw && workUnitRaw) throw invalid('stage_attempt_id is required when work_unit_id is provided');
+  const base = {
     schema_version: CONTRACT_VERSION,
     project_id: required(value.project_id, 'project_id'),
     project_instance_id: String(value.project_instance_id || ''),
@@ -26,6 +29,9 @@ function normalizeMemoryQuery(value = {}) {
     needs,
     query_text: String(value.query_text || ''),
   };
+  if (attemptRaw) base.stage_attempt_id = attemptRaw;
+  if (workUnitRaw) base.work_unit_id = workUnitRaw;
+  return base;
 }
 
 function createMemoryContract(options = {}) {
@@ -49,25 +55,40 @@ function createMemoryContract(options = {}) {
 
 function createMemoryReadReceipt(contract) {
   if (!contract || !contract.contract_digest) throw invalid('memory contract is required');
-  return {
+  const query = contract.query || {};
+  const receipt = {
     schema_version: CONTRACT_VERSION,
     provider: String(contract.provider || 'story-memory'),
-    workflow_id: String((contract.query || {}).workflow_id || ''),
-    stage_id: String((contract.query || {}).stage_id || ''),
+    workflow_id: String(query.workflow_id || ''),
+    stage_id: String(query.stage_id || ''),
     contract_digest: String(contract.contract_digest || ''),
     memory_revision: String(contract.memory_revision || ''),
     packet_digest: String(contract.packet_digest || ''),
     selected_entry_ids: unique(contract.selected_entry_ids),
   };
+  if (query.stage_attempt_id) receipt.stage_attempt_id = String(query.stage_attempt_id);
+  if (query.work_unit_id) receipt.work_unit_id = String(query.work_unit_id);
+  return receipt;
 }
 
 function validateMemoryReadReceipt(contract, receipt) {
   if (!contract || !contract.read_receipt_required) return { status: 'not_required' };
   if (!receipt || typeof receipt !== 'object') return { status: 'missing' };
+  const query = contract.query || {};
   const fields = ['provider', 'contract_digest', 'memory_revision', 'packet_digest'];
   const stale_fields = fields.filter(field => String(receipt[field] || '') !== String(contract[field] || ''));
-  if (String(receipt.workflow_id || '') !== String((contract.query || {}).workflow_id || '')) stale_fields.push('workflow_id');
-  if (String(receipt.stage_id || '') !== String((contract.query || {}).stage_id || '')) stale_fields.push('stage_id');
+  if (String(receipt.workflow_id || '') !== String(query.workflow_id || '')) stale_fields.push('workflow_id');
+  if (String(receipt.stage_id || '') !== String(query.stage_id || '')) stale_fields.push('stage_id');
+  // Execution binding: when the contract was minted with stage_attempt_id +
+  // work_unit_id the receipt must echo the same pair. Legacy contracts
+  // without binding keep validating by the old fields only — backward
+  // compatibility for old projects that never carried execution context.
+  if (query.stage_attempt_id) {
+    if (String(receipt.stage_attempt_id || '') !== String(query.stage_attempt_id || '')) stale_fields.push('stage_attempt_id');
+  }
+  if (query.work_unit_id) {
+    if (String(receipt.work_unit_id || '') !== String(query.work_unit_id || '')) stale_fields.push('work_unit_id');
+  }
   return stale_fields.length ? { status: 'stale', stale_fields: unique(stale_fields) } : { status: 'current' };
 }
 

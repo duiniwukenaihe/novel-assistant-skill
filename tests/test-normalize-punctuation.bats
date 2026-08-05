@@ -33,9 +33,29 @@ teardown() {
     grep -q '「别过来——」' "$FILE"
 }
 
+@test "normalize-punctuation repairs quote style despite standalone scene separators" {
+    FILE="$TMP_DIR/body.md"
+    printf '"你还想说……"\n——\n第一场结束。\n——\n第二场结束。\n——\n第三场结束。\n——\n第四场结束。\n——\n第五场结束。\n——\n第六场结束。\n' > "$FILE"
+
+    node "$SCRIPT" --quote-mode=mainland "$FILE"
+
+    grep -q '“你还想说……”' "$FILE"
+    ! grep -q '^——$' "$FILE"
+}
+
+@test "mainland quote mode converts paired ASCII single quotes around Chinese text" {
+    FILE="$TMP_DIR/body.md"
+    printf '他说：“档案里不写'"'"'恶意'"'"'两个字。”\nEnglish don'"'"'t changes.\n' > "$FILE"
+
+    node "$SCRIPT" --quote-mode=mainland "$FILE"
+
+    grep -q '档案里不写‘恶意’两个字' "$FILE"
+    grep -q "English don't changes." "$FILE"
+}
+
 @test "normalize-punctuation rejects per-character dash corruption for rewrite" {
     FILE="$TMP_DIR/body.md"
-    printf '最——后——一——件——事——情——记——得——是——刹——车——声——。\n系——统：「本——系——统——记——录——宿——主——觉——醒」\n陈洛——听——到——这——个——声——音——他——愣——住——了——。\n' > "$FILE"
+    printf '最——后——一——件——事——情——记——得——是——刹——车——声——。\n系——统：「本——系——统——记——录——宿——主——觉——醒」\n陆川——听——到——这——个——声——音——他——愣——住——了——。\n' > "$FILE"
 
     if node "$SCRIPT" "$FILE" > "$TMP_DIR/output.txt" 2>&1; then
         echo "expected normalize-punctuation to reject corrupted prose"
@@ -51,7 +71,7 @@ teardown() {
 
 @test "normalize-punctuation rejects dash density overuse without erasing prose" {
     FILE="$TMP_DIR/body.md"
-    printf '他停住——门外有人。\n她抬头——灯灭了。\n风一吹——血腥味更重。\n黑狗崽龇牙——没退。\n陈洛笑了——掌心却在疼。\n下一秒——铃声响了。\n' > "$FILE"
+    printf '他停住——门外有人。\n她抬头——灯灭了。\n风一吹——血腥味更重。\n幼兽龇牙——没退。\n陆川笑了——掌心却在疼。\n下一秒——铃声响了。\n' > "$FILE"
 
     if node "$SCRIPT" "$FILE" > "$TMP_DIR/output.txt" 2>&1; then
         echo "expected normalize-punctuation to reject dash density overuse"
@@ -65,6 +85,7 @@ teardown() {
 }
 
 @test "normalize-punctuation shared script copies stay byte-identical" {
+    cmp -s "$REPO/src/internal-skills/story-deslop/scripts/normalize-punctuation.js" "$REPO/scripts/normalize-punctuation.js"
     cmp -s "$REPO/src/internal-skills/story-deslop/scripts/normalize-punctuation.js" "$REPO/src/internal-skills/story-review/scripts/normalize-punctuation.js"
     cmp -s "$REPO/src/internal-skills/story-deslop/scripts/normalize-punctuation.js" "$REPO/src/internal-skills/story-long-write/scripts/normalize-punctuation.js"
     cmp -s "$REPO/src/internal-skills/story-deslop/scripts/normalize-punctuation.js" "$REPO/src/internal-skills/story-short-write/scripts/normalize-punctuation.js"

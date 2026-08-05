@@ -3,7 +3,7 @@
 setup() {
     REPO="$BATS_TEST_DIRNAME/.."
     SCRIPT="$REPO/scripts/legacy-short-project-migrate.js"
-    INBOX="$REPO/scripts/workflow-task-inbox.js"
+    V3="$REPO/scripts/workflow-v3.js"
     TMP_DIR="$(mktemp -d)"
     BOOK="$TMP_DIR/book"
     SHORT_STATE="$BOOK/追踪/story-system/short/project-state.json"
@@ -124,6 +124,65 @@ NODE
     [ "$status" -eq 2 ]
     [[ "$output" == *'blocked_legacy_short_canonical_conflict'* ]]
     grep -q '另一份根目录正文' "$BOOK/正文.md"
+    test ! -e "$BOOK/小节大纲.md"
+    test ! -e "$BOOK/追踪/workflow/current-task.json"
+}
+
+@test "legacy migration rolls back copied assets and control state when V3 task creation fails" {
+    mkdir -p "$BOOK/追踪/workflow"
+    printf '%s\n' '{"workflow_type":"private_short_write","work_title":"旧任务","current_stage":"draft"}' \
+      > "$BOOK/追踪/workflow/current-task.json"
+    cp "$BOOK/追踪/workflow/current-task.json" "$TMP_DIR/legacy-before.json"
+
+    run node - "$BOOK" "$REPO" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const [root, repo] = process.argv.slice(2);
+const engine = require(path.join(repo, 'scripts/lib/workflow-v3/engine'));
+engine.createTaskWithInitialInteraction = () => { throw new Error('forced_task_create_failure'); };
+const migration = require(path.join(repo, 'scripts/lib/workflow-v3/migrations/legacy-short-project'));
+const out = migration.runLegacyShortProjectMigration(root, { write: true, confirm: true });
+process.stdout.write(`${JSON.stringify(out)}\n`);
+process.exitCode = out.exitCode;
+NODE
+
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'legacy_short_migration_failed'* ]]
+    test ! -e "$BOOK/正文.md"
+    test ! -e "$BOOK/小节大纲.md"
+    test ! -e "$SHORT_STATE"
+    cmp "$BOOK/追踪/workflow/current-task.json" "$TMP_DIR/legacy-before.json"
+    [ "$(find "$BOOK/追踪/workflow/migrations" -type f 2>/dev/null | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "confirmed legacy migration fails closed while another import owns the migration lock" {
+    run node - "$BOOK" "$REPO" <<'NODE'
+const path = require('path');
+const [root, repo] = process.argv.slice(2);
+const stateStore = require(path.join(repo, 'scripts/lib/workflow-state-store'));
+const release = stateStore.acquireNamedProjectLock(root, {
+  relativeDir: path.join('追踪', 'workflow'),
+  lockName: '.legacy-short-migration.lock',
+  owner: 'concurrency-test',
+  ttlMs: 300000,
+  errorCode: 'LEGACY_SHORT_MIGRATION_LOCKED',
+  errorLabel: 'legacy short migration lock',
+});
+try {
+  const migration = require(path.join(repo, 'scripts/lib/workflow-v3/migrations/legacy-short-project'));
+  const out = migration.runLegacyShortProjectMigration(root, { write: true, confirm: true });
+  process.stdout.write(`${JSON.stringify(out)}\n`);
+  process.exitCode = out.exitCode;
+} finally {
+  release();
+}
+NODE
+
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_legacy_short_migration_locked'* ]]
+    test ! -e "$BOOK/正文.md"
+    test ! -e "$BOOK/小节大纲.md"
+    test ! -e "$SHORT_STATE"
     test ! -e "$BOOK/追踪/workflow/current-task.json"
 }
 
@@ -210,11 +269,15 @@ if (task.legacy_resume.source_stage !== 'hook_retention_revision' || task.legacy
 if (task.legacy_resume.user_feedback.summary !== legacy.user_feedback.summary) throw new Error('feedback lost');
 if (task.legacy_resume.quality_gate.hook_retention_failed !== true) throw new Error('quality result lost');
 if (task.legacy_resume.recommended_action.label !== '做卖点重构') throw new Error('next action lost');
-if (task.current_stage !== 'startup_scan') throw new Error('legacy evidence must be revalidated by startup scan');
+if (task.current_stage !== 'creative_entry') throw new Error('legacy import must enter the V3 author recovery boundary');
+if (![task.engine_version, task.task_schema_version, task.workflow_contract_version].every(value => value === 3)) throw new Error('legacy import did not create a V3 task');
+if (!task.pending_action || task.pending_action.status !== 'pending' || task.pending_action.options.length !== 3) throw new Error('legacy recovery choice was not persisted');
+if (task.state_version !== 1 || task.pending_action.state_version !== 1) throw new Error('initial task and recovery choice were not committed atomically');
+if (!task.pending_action.options.some(option => option.action_id === 'inspect_legacy_checkpoint')) throw new Error('legacy evidence inspection choice missing');
 if (!out.legacy_task_state_preserved) throw new Error(JSON.stringify(out));
 NODE
 
-    node "$INBOX" --project-root "$BOOK" --json > "$TMP_DIR/inbox.json"
-    grep -q '旧断点：检查钩子保留（needs_hook_revision）' "$TMP_DIR/inbox.json"
-    grep -q '恢复建议：做卖点重构' "$TMP_DIR/inbox.json"
+    node "$V3" show --project-root "$BOOK" --workflow-id "$(jq -r .workflow_id "$TMP_DIR/result.json")" --json > "$TMP_DIR/v3-show.json"
+    grep -q '旧短篇已经安全导入 V3' "$TMP_DIR/v3-show.json"
+    grep -q '查看旧断点、反馈与质量依据' "$TMP_DIR/v3-show.json"
 }

@@ -5,9 +5,32 @@ setup() {
     STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
     VALIDATE="$REPO/scripts/workflow-state-validate.js"
     TASK_FIXTURE="$REPO/tests/helpers/workflow-task-fixture.js"
+    V2_SHORT_FIXTURE="$REPO/tests/fixtures/workflow-v3/legacy-v2/planning-confirmed.json"
     TMP_DIR="$(mktemp -d)"
     PROJECT="$TMP_DIR/book"
     mkdir -p "$PROJECT"
+}
+
+materialize_v2_short_task() {
+    node - "$PROJECT" "$V2_SHORT_FIXTURE" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const [root, fixtureFile] = process.argv.slice(2);
+const task = JSON.parse(fs.readFileSync(fixtureFile, 'utf8'));
+task.workflow_id = 'wf-v2-short-invariant';
+task.task_dir = `追踪/workflow/tasks/${task.workflow_id}`;
+task.stage_execution.stage_attempt_id = 'sa-v2-short-invariant';
+const taskFile = path.join(root, task.task_dir, 'task.json');
+fs.mkdirSync(path.dirname(taskFile), { recursive: true });
+fs.writeFileSync(taskFile, `${JSON.stringify(task, null, 2)}\n`);
+fs.writeFileSync(path.join(root, '追踪/workflow/current-task.json'), `${JSON.stringify({
+  schemaVersion: '1.0.0',
+  workflow_id: task.workflow_id,
+  task_dir: task.task_dir,
+  state_version: task.state_version,
+  focused_at: '2026-01-01T00:00:00.000Z',
+}, null, 2)}\n`);
+NODE
 }
 
 teardown() {
@@ -107,8 +130,7 @@ JSON
 }
 
 @test "workflow validator blocks stale short section result packet at checkpoint" {
-    mkdir -p "$PROJECT/追踪/workflow"
-    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$PROJECT" --scope "第6节" --user-goal "继续短篇" --json >/dev/null
+    materialize_v2_short_task
 
     node - "$PROJECT" "$TASK_FIXTURE" <<'NODE'
 const fs = require('fs');
@@ -171,7 +193,7 @@ NODE
 }
 
 @test "workflow validator keeps analyzed short feedback blocked until repair and reacceptance finish" {
-    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$PROJECT" --scope "第6节" --user-goal "继续短篇" --json >/dev/null
+    materialize_v2_short_task
 
     node - "$PROJECT" "$TASK_FIXTURE" <<'NODE'
 const fs = require('fs');
@@ -229,8 +251,8 @@ NODE
     grep -q 'blocked_short_feedback_unreconciled' "$TMP_DIR/validate.json"
 }
 
-@test "pending short feedback resumes through one deterministic recovery command" {
-    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$PROJECT" --scope "第6节" --user-goal "继续短篇" --json >/dev/null
+@test "pending V2 short feedback stays read-only until the compatibility boundary is resolved" {
+    materialize_v2_short_task
 
     mkdir -p "$PROJECT/追踪/private-short-extension"
     cat > "$PROJECT/追踪/private-short-extension/project-state.json" <<'JSON'
@@ -286,16 +308,13 @@ task.pending_action = { id: 'pa-stale-next', status: 'pending', options: [{ numb
 fs.writeFileSync(taskFile, `${JSON.stringify(task, null, 2)}\n`);
 NODE
 
+    before="$(shasum -a 256 "$(node -e 'const f=require(process.argv[1]);process.stdout.write(f.focusedTaskFile(process.argv[2]))' "$TASK_FIXTURE" "$PROJECT")" | awk '{print $1}')"
     workflow_id="$(node -e 'const f=require(process.argv[1]);console.log(f.readFocusedTask(process.argv[2]).workflow_id)' "$TASK_FIXTURE" "$PROJECT")"
     run node "$STATE_MACHINE" resume-pending-short-feedback --project-root "$PROJECT" --workflow-id "$workflow_id" --json
-    [ "$status" -eq 0 ]
-    [[ "$output" == *'"status": "pending_short_feedback_resumed"'* ]]
-    [[ "$output" == *'"target_stage": "section_repair_loop"'* ]]
-    node - "$PROJECT" "$TASK_FIXTURE" <<'NODE'
-const fixture = require(process.argv[3]);
-const task = fixture.readFocusedTask(process.argv[2]);
-if (task.current_stage !== 'section_repair_loop' || task.stage_execution.status !== 'running' || task.scope !== '第6节') throw new Error(JSON.stringify(task));
-NODE
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'"status": "blocked_v2_short_task_migration_required"'* ]]
+    after="$(shasum -a 256 "$(node -e 'const f=require(process.argv[1]);process.stdout.write(f.focusedTaskFile(process.argv[2]))' "$TASK_FIXTURE" "$PROJECT")" | awk '{print $1}')"
+    [ "$before" = "$after" ]
 }
 
 @test "state version increases after each successful mutation" {

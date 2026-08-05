@@ -2,7 +2,7 @@
   "source_kind": "canonical_setting",
   "presentCharacters": [],
   "characters": {
-    "林照": { "role": "protagonist", "aliases": ["我"] },
-    "林建川": { "role": "supporting", "aliases": ["哥哥", "哥"], "goal": "保住公司" }
+    "阿岚": { "role": "protagonist", "aliases": ["我"] },
+    "主管": { "role": "supporting", "aliases": ["上级"], "goal": "保住部门" }
   }
 }

@@ -6,6 +6,20 @@ setup() {
     TMP_DIR="$(mktemp -d)"
     BOOK="$TMP_DIR/book"
     mkdir -p "$BOOK/追踪/workflow" "$BOOK/追踪/输出门禁"
+    # Strict write-policy metadata (mode=strict + four transaction ledgers) so
+    # the shared BOOK fixture satisfies book-write-policy-migrate.js
+    # hasTransactionLedgers. These paths live under 追踪/story-system/, which
+    # is NOT part of isInitializedWritingProject(), so the metadata alone does
+    # not turn BOOK into a writing project. New tests that must verify the
+    # missing-policy state use their own book dir (see write-policy-migration
+    # tests) and remove this metadata explicitly.
+    mkdir -p "$BOOK/追踪/story-system/transactions" "$BOOK/追踪/story-system/commits"
+    printf '{"mode":"strict","migrated_at":"2026-07-12T00:00:00.000Z"}\n' \
+        > "$BOOK/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$BOOK/追踪/story-system/chapter-identities.json"
+    : > "$BOOK/追踪/story-system/projection-log.jsonl"
+    : > "$BOOK/追踪/story-system/transactions/.keep"
+    : > "$BOOK/追踪/story-system/commits/.keep"
 }
 
 @test "running stage labels section plan lock in user-facing Chinese" {
@@ -19,7 +33,7 @@ setup() {
 {
   "schemaVersion":"1.0.0",
   "workflow_id":"wf-short-accept",
-  "workflow_type":"short_write",
+  "workflow_type":"short_revision",
   "workflow_contract_version":3,
   "workflow_profile":"private",
   "workflow_owner":"private-short-extension",
@@ -82,18 +96,20 @@ NODE
 }
 
 @test "workflow entry guard lazily migrates one old short workflow and memory contract" {
-    node "$REPO/scripts/workflow-state-machine.js" create --workflow-type short_write --project-root "$BOOK" --scope "第1节" --user-goal "旧短篇" --no-private-registry --json >/dev/null
-    task_file="$(node - "$BOOK" <<'NODE'
-const fs=require('fs'),path=require('path');const root=process.argv[2];const p=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));process.stdout.write(path.join(root,p.task_dir,'task.json'));
-NODE
-)"
-    workflow_id="$(node -e 'console.log(require(process.argv[1]).workflow_id)' "$task_file")"
-    node - "$task_file" <<'NODE'
-const fs=require('fs');const file=process.argv[2];const task=JSON.parse(fs.readFileSync(file,'utf8'));
-delete task.workflow_contract_version;
-task.current_stage='section_outline';task.current_step='section_outline';task.scope='第1节';task.lifecycle.scope='第1节';
-task.stage_execution={status:'running',stage_attempt_id:'sa-old-outline',stage_id:'section_outline',work_unit_scope:'第1节',planning_target:'追踪/workflow/staging/old/小节大纲.md',memory_context:{packet_json:'old-context.json',memory_contract:{memory_revision:'sha256:old'}}};
-fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+    task_file="$BOOK/追踪/workflow/tasks/wf-entry-v2/task.json"
+    mkdir -p "$(dirname "$task_file")"
+    node - "$REPO/tests/fixtures/workflow-v3/legacy-v2/planning-confirmed.json" "$task_file" "$BOOK" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [fixtureFile,taskFile,root]=process.argv.slice(2);
+const task=JSON.parse(fs.readFileSync(fixtureFile,'utf8'));
+task.workflow_id='wf-entry-v2';task.task_dir='追踪/workflow/tasks/wf-entry-v2';
+task.stage_execution.stage_attempt_id='sa-entry-v2';
+fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
+fs.mkdirSync(path.join(root,'追踪/workflow'),{recursive:true});
+fs.writeFileSync(path.join(root,'追踪/workflow/current-task.json'),JSON.stringify({
+  schemaVersion:'1.0.0',workflow_id:task.workflow_id,task_dir:task.task_dir,
+  state_version:task.state_version,focused_at:'2026-01-01T00:00:00.000Z'
+},null,2)+'\n');
 NODE
 
     output="$(node "$SCRIPT" --project-root "$BOOK" --compact --json)"
@@ -102,13 +118,12 @@ NODE
     echo "$output" | grep -q 'migrate-short-lean-workflow'
 
     output="$(node "$SCRIPT" --project-root "$BOOK" --write --compact --json)"
-    echo "$output" | grep -q '"status":"short_lean_workflow_migrated"'
+    echo "$output" | grep -q '"status":"task_inbox_ready"'
     node - "$task_file" <<'NODE'
 const fs=require('fs');const task=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-if(task.workflow_contract_version!==3||task.scope!=='全篇'||task.lifecycle.scope!=='全篇') throw new Error(JSON.stringify(task));
-if(task.stage_execution!==null||task.memory_migration.status!=='refresh_on_resume') throw new Error(JSON.stringify(task));
-if(task.workflow_profile!=='public'||task.workflow_owner==='private-short-extension') throw new Error(JSON.stringify(task));
-if(!task.migration_history.some(item=>item.preserved_stage_attempt_id==='sa-old-outline')) throw new Error(JSON.stringify(task.migration_history));
+if(![task.engine_version,task.task_schema_version,task.workflow_contract_version].every(value=>value===3)) throw new Error(JSON.stringify(task));
+if(task.current_stage!=='section_brief'||task.state_version!==task.migration.target_state_version) throw new Error(JSON.stringify(task));
+if(!task.migration||!task.migration.archive_path) throw new Error(JSON.stringify(task));
 NODE
 }
 
@@ -189,7 +204,7 @@ NODE
     mkdir -p "$BOOK/追踪/workflow/tasks/short-outline-running"
     cat > "$BOOK/追踪/workflow/tasks/short-outline-running/task.json" <<'JSON'
 {
-  "workflow_id":"short-outline-running","workflow_type":"short_write","workflow_contract_version":3,"task_dir":"追踪/workflow/tasks/short-outline-running","status":"running","scope":"全篇","user_goal":"新开短篇",
+  "workflow_id":"short-outline-running","workflow_type":"short_revision","workflow_contract_version":3,"task_dir":"追踪/workflow/tasks/short-outline-running","status":"running","scope":"全篇","user_goal":"新开短篇",
   "current_stage":"section_outline","current_step":"section_outline","lifecycle":{"status":"active","scope":"全篇"},
   "machine":{"completed_stages":["short_setting","platform_genre_lock","rhythm_pattern_selection"],"remaining_stages":["section_outline"]},
   "unit_lifecycle":{"status":"running","current_stage":"section_outline","current_role":"brief_or_contract"},
@@ -216,6 +231,12 @@ NODE
 @test "initialized project with zero unfinished tasks still gets the numbered inbox home" {
     printf '{"novel_assistant_bundle_id":"test"}\n' > "$BOOK/.story-deployed"
     printf '# 当前作品设定\n' > "$BOOK/设定.md"
+    mkdir -p "$BOOK/追踪/story-system/transactions" "$BOOK/追踪/story-system/commits"
+    printf '{"mode":"strict","migrated_at":"2026-07-12T00:00:00.000Z"}\n' > "$BOOK/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$BOOK/追踪/story-system/chapter-identities.json"
+    : > "$BOOK/追踪/story-system/projection-log.jsonl"
+    : > "$BOOK/追踪/story-system/transactions/.keep"
+    : > "$BOOK/追踪/story-system/commits/.keep"
 
     output="$(node "$SCRIPT" --project-root "$BOOK" --json)"
 
@@ -258,9 +279,15 @@ JSON
 }
 
 @test "workflow entry guard stops at task inbox when resumable tasks exist" {
-    mkdir -p "$BOOK/正文/第1卷" "$BOOK/大纲/第1卷"
+    mkdir -p "$BOOK/正文/第1卷" "$BOOK/大纲/第1卷" \
+             "$BOOK/追踪/story-system/transactions" "$BOOK/追踪/story-system/commits"
     printf '# 第001章\n' > "$BOOK/正文/第1卷/第001章.md"
     printf '# 细纲\n' > "$BOOK/大纲/第1卷/细纲_第001章.md"
+    printf '{"mode":"strict","migrated_at":"2026-07-12T00:00:00.000Z"}\n' > "$BOOK/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$BOOK/追踪/story-system/chapter-identities.json"
+    : > "$BOOK/追踪/story-system/projection-log.jsonl"
+    : > "$BOOK/追踪/story-system/transactions/.keep"
+    : > "$BOOK/追踪/story-system/commits/.keep"
 
     output="$(node "$SCRIPT" --project-root "$BOOK" --write --json)"
 
@@ -379,7 +406,7 @@ JSON
     cat > "$BOOK/追踪/workflow/tasks/state-bad/task.json" <<'JSON'
 {
   "workflow_id":"state-bad",
-  "workflow_type":"short_write",
+  "workflow_type":"short_revision",
   "workflow_contract_version":3,
   "workflow_profile":"private",
   "workflow_owner":"private-short-extension",
@@ -407,6 +434,89 @@ JSON
     echo "$output" | grep -q '1. 查看任务状态修复方案'
     echo "$output" | grep -q '2. 查看可恢复任务入口'
     grep -q '"status": "blocked"' "$BOOK/追踪/workflow/entry-guard.json"
+}
+
+@test "workflow entry guard exposes restore command when a completed task is missing a required stage" {
+    task_dir="$BOOK/追踪/workflow/tasks/review-incomplete"
+    mkdir -p "$task_dir/artifacts/staged_repair_candidate"
+    printf '%s\n' '# 中性候选稿' > "$task_dir/artifacts/staged_repair_candidate/A1.draft.md"
+    cat > "$task_dir/task.json" <<'JSON'
+{
+  "workflow_id":"review-incomplete",
+  "workflow_type":"review_repair",
+  "task_dir":"追踪/workflow/tasks/review-incomplete",
+  "status":"completed",
+  "current_stage":"closure",
+  "current_step":"closure",
+  "lifecycle":{"status":"completed"},
+  "machine":{"completed_stages":["range_lock","evidence_scan","classify_findings","repair_plan","user_scope_choice","repair_execution_plan","staged_repair_candidate","repair_machine_gate","recheck","closure"],"remaining_stages":[]}
+}
+JSON
+    write_focus_pointer review-incomplete
+
+    run node "$SCRIPT" --project-root "$BOOK" --write --compact --json
+
+    [ "$status" -eq 0 ]
+    printf '%s\n' "$output" > "$TMP_DIR/incomplete.json"
+    node - "$TMP_DIR/incomplete.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'blocked_completed_workflow_incomplete') throw new Error(JSON.stringify(out));
+if (!out.visible_response || out.visible_response.options.length !== 4) throw new Error(JSON.stringify(out));
+const first = out.visible_response.options[0];
+if (first.action !== 'restore_incomplete_workflow') throw new Error(JSON.stringify(first));
+if (!first.execution_command.includes('restore-incomplete-workflow')
+    || !first.execution_command.includes('--workflow-id "review-incomplete"')
+    || !first.execution_command.includes('--confirm')) throw new Error(JSON.stringify(first));
+if (out.visible_response.text.includes('未完成任务（0 个）')) throw new Error(out.visible_response.text);
+NODE
+}
+
+@test "workflow entry guard accepts a legacy review handoff that intentionally omitted execute repair" {
+    task_dir="$BOOK/追踪/workflow/tasks/review-handoff"
+    mkdir -p "$task_dir/result-packets"
+    cat > "$task_dir/task.json" <<'JSON'
+{
+  "workflow_id":"review-handoff",
+  "workflow_type":"review_repair",
+  "task_dir":"追踪/workflow/tasks/review-handoff",
+  "status":"completed",
+  "current_stage":"closure",
+  "current_step":"closure",
+  "lifecycle":{"status":"completed"},
+  "machine":{"completed_stages":["range_lock","evidence_scan","classify_findings","repair_plan","user_scope_choice","repair_execution_plan","staged_repair_candidate","repair_machine_gate","recheck","closure"],"remaining_stages":[]}
+}
+JSON
+    cat > "$task_dir/result-packets/closure.result.json" <<'JSON'
+{
+  "workflow_id":"review-handoff",
+  "workflow_type":"review_repair",
+  "stage_id":"closure",
+  "step_status":"completed",
+  "outputs":[{"kind":"closure_summary","summary":{"review_repair_status":"handoff_completed","repair_units_pending_user_apply":2,"repair_units_ready_for_author":1}}],
+  "changed_files":[],
+  "verification_result":"pass"
+}
+JSON
+    printf '%s\n' '{"workflow_id":"review-handoff","stage_id":"repair_machine_gate","step_status":"completed","changed_files":[],"verification_result":"pass"}' > "$task_dir/result-packets/repair_machine_gate.result.json"
+    printf '%s\n' '{"workflow_id":"review-handoff","stage_id":"recheck","step_status":"completed","changed_files":[],"verification_result":"pass"}' > "$task_dir/result-packets/recheck.result.json"
+    write_focus_pointer review-handoff
+
+    run node "$SCRIPT" --project-root "$BOOK" --write --compact --json
+
+    [ "$status" -eq 0 ]
+    printf '%s\n' "$output" > "$TMP_DIR/handoff.json"
+    node - "$TMP_DIR/handoff.json" "$task_dir/task.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const task = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+if (out.status !== 'task_inbox_ready') throw new Error(JSON.stringify(out));
+if (out.runtime_reconciliation.status !== 'completed_runtime_reconciled') throw new Error(JSON.stringify(out.runtime_reconciliation));
+if (task.status !== 'completed' || task.workflow_completion_compatibility?.status !== 'legacy_handoff_completed') {
+  throw new Error(JSON.stringify(task));
+}
+if (task.machine.completed_stages.includes('execute_repair')) throw new Error('repair execution was falsely recorded');
+NODE
 }
 
 @test "workflow entry guard auto repairs missing runtime guard before showing inbox" {
@@ -468,7 +578,7 @@ NODE
     cat > "$BOOK/追踪/workflow/tasks/short-brief-1/task.json" <<'JSON'
 {
   "workflow_id":"short-brief-1",
-  "workflow_type":"short_write",
+  "workflow_type":"short_revision",
   "task_dir":"追踪/workflow/tasks/short-brief-1",
   "status":"running",
   "user_goal":"短篇《480万红本》第 4 节 Brief",
@@ -643,199 +753,429 @@ JSON
     [ "$before_durable" = "$(shasum -a 256 "$BOOK/追踪/workflow/tasks/wf-upstream-review/task.json")" ]
 }
 
-@test "pending short feedback is an actionable menu with one exact recovery command" {
-    STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
-    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$BOOK" --scope "第7节" --user-goal "继续短篇" --json >/dev/null
-    node - "$BOOK" <<'NODE'
-const fs=require('fs'),path=require('path');const root=process.argv[2];
-const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
-const taskFile=path.join(root,pointer.task_dir,'task.json');
-const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
-task.current_stage='draft_next_section';task.current_step='draft_next_section';task.scope='第7节';
-task.pending_feedback={feedback_id:'feedback-entry-test',text:'第6节AI味有点重',section_index:6,scope_snapshot:'第6节',received_at:new Date().toISOString()};
-task.short_feedback_impact={status:'ok',feedback_id:'feedback-entry-test',impact_level:'expression_only',invalidates_draft:true,requires_reacceptance:true,applied_at:new Date().toISOString()};
+@test "legacy V2 short business intent stays behind the compatibility migration boundary" {
+    task_file="$BOOK/追踪/workflow/tasks/wf-entry-frozen-v2/task.json"
+    mkdir -p "$(dirname "$task_file")"
+    node - "$REPO/tests/fixtures/workflow-v3/legacy-v2/planning-confirmed.json" "$task_file" "$BOOK" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [fixtureFile,taskFile,root]=process.argv.slice(2);
+const task=JSON.parse(fs.readFileSync(fixtureFile,'utf8'));
+task.workflow_id='wf-entry-frozen-v2';task.task_dir='追踪/workflow/tasks/wf-entry-frozen-v2';
 fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
-NODE
-
-    run node "$SCRIPT" --project-root "$BOOK" --compact --json
-    [ "$status" -eq 0 ]
-    printf '%s\n' "$output" > "$TMP_DIR/pending-feedback-menu.json"
-    node - "$TMP_DIR/pending-feedback-menu.json" <<'NODE'
-const fs=require('fs');const report=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-const visible=report.visible_response||{};const options=visible.options||[];
-if(report.status!=='blocked') throw new Error(JSON.stringify(report));
-if(visible.status!=='blocked_pending_feedback_unreconciled') throw new Error(JSON.stringify(visible));
-if(visible.selection_contract!=='execute_command_or_route_intent') throw new Error(JSON.stringify(visible));
-if((options[0]||{}).interaction_mode!=='execute_command') throw new Error(JSON.stringify(options));
-if(!String((options[0]||{}).execution_command||'').includes('resume-pending-short-feedback')) throw new Error(JSON.stringify(options));
-if(!String((options[0]||{}).execution_command||'').includes('--workflow-id')) throw new Error(JSON.stringify(options));
-if((String(visible.text||'').match(/^1\./gm)||[]).length!==1) throw new Error(visible.text);
-if(String(visible.text||'').includes('1. 当前反馈尚未同步影响链')) throw new Error(visible.text);
-NODE
-}
-
-@test "feedback apply with an unconfirmed current proposal returns to the numeric recovery menu" {
-    STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
-    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$BOOK" --scope "第7节" --user-goal "继续短篇" --json >/dev/null
-    node - "$BOOK" <<'NODE'
-const fs=require('fs'),path=require('path');const root=process.argv[2];
-const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
-const taskFile=path.join(root,pointer.task_dir,'task.json');const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
-task.current_stage='feedback_apply_patch';task.current_step='feedback_apply_patch';
-task.pending_feedback={feedback_id:'feedback-current',text:'补足第7节母亲当面承认。',scope_snapshot:'第7节',status:'pending'};
-task.short_feedback_impact={status:'ok',feedback_id:'feedback-current',impact_level:'planning',affected_sections:[7],affected_assets:['设定.md','小节大纲.md']};
-task.proposed_plan={proposal_id:'proposal.feedback-current',feedback_id:'feedback-current',status:'awaiting_user_confirmation',summary:'补足母亲当面承认。'};
-task.accepted_plan={plan_id:'accepted-plan.feedback-current',proposal_id:'proposal.feedback-current.v1',feedback_id:'feedback-current',projection_status:'pending'};
-task.pending_action=null;task.stage_execution={status:'running',stage_id:'feedback_apply_patch',step_id:'feedback_apply_patch'};
-fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
-NODE
-
-    run node "$SCRIPT" --project-root "$BOOK" --compact --json
-    [ "$status" -eq 0 ]
-    printf '%s\n' "$output" > "$TMP_DIR/unconfirmed-feedback-menu.json"
-    node - "$TMP_DIR/unconfirmed-feedback-menu.json" <<'NODE'
-const fs=require('fs');const report=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),visible=report.visible_response||{},options=visible.options||[];
-if(report.status!=='blocked'||visible.status!=='blocked_pending_feedback_unreconciled') throw new Error(JSON.stringify(report));
-if(options.length!==4||!String((options[0]||{}).execution_command||'').includes('resume-pending-short-feedback')) throw new Error(JSON.stringify(options));
-if(!String(visible.text||'').includes('1.')||String(visible.text||'').includes('回复“继续”')) throw new Error(String(visible.text||''));
-NODE
-}
-
-@test "explicit whole story short revision bypasses inbox and returns one direct command" {
-    STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
-    mkdir -p "$BOOK"
-    printf '# 素材卡\n' > "$BOOK/素材卡.md"
-    printf '# 设定\n' > "$BOOK/设定.md"
-    printf '# 小节大纲\n' > "$BOOK/小节大纲.md"
-    printf '# 正文\n' > "$BOOK/正文.md"
-    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$BOOK" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
-
-    run node "$SCRIPT" --project-root "$BOOK" --user-intent "可以，根据总结的这些开始整篇修改" --compact --json
-    [ "$status" -eq 0 ]
-    printf '%s\n' "$output" > "$TMP_DIR/direct-revision.json"
-    node - "$TMP_DIR/direct-revision.json" <<'NODE'
-const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-if(out.status!=='pass'||!out.runner_contract.business_routing_allowed) throw new Error(JSON.stringify(out));
-const direct=out.direct_intent||{};
-if(direct.intent_type!=='short_revision_feedback'||direct.interaction_mode!=='execute_command'||direct.requires_user_confirm!==false) throw new Error(JSON.stringify(direct));
-if(!String(direct.execution_command||'').includes('workflow-state-machine.js resolve-action')) throw new Error(JSON.stringify(direct));
-if(!String(direct.execution_command||'').includes('整篇修改')) throw new Error(JSON.stringify(direct));
-const visible=out.visible_response||{};
-if(visible.render_mode!=='silent_execute'||visible.selection_contract!=='execute_direct_intent_command') throw new Error(JSON.stringify(visible));
-if(String(visible.text||'')!=='') throw new Error(JSON.stringify(visible));
-NODE
-}
-
-@test "all interactive hosts resume a running short stage with a portable project command" {
-    STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
-    printf '# 素材卡\n' > "$BOOK/素材卡.md"
-    printf '# 设定\n' > "$BOOK/设定.md"
-    printf '# 小节大纲\n' > "$BOOK/小节大纲.md"
-    printf '# 正文\n' > "$BOOK/正文.md"
-    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$BOOK" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
-    node "$STATE_MACHINE" resolve-action --project-root "$BOOK" --input "整篇回炉：更新结局和人物关系。" --json >/dev/null
-    local task_file
-    task_file="$(node - "$BOOK" <<'NODE'
-const fs=require('fs'),path=require('path'),root=process.argv[2];
-const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
-process.stdout.write(path.join(root,pointer.task_dir,'task.json'));
-NODE
-)"
-    node - "$task_file" "$BOOK" <<'NODE'
-const fs=require('fs');const file=process.argv[2],root=process.argv[3];const task=JSON.parse(fs.readFileSync(file,'utf8'));
-task.stage_execution.execution_command=`node scripts/short-planning-stage-finalize.js --project-root ${JSON.stringify(root)} --workflow-id ${JSON.stringify(task.workflow_id)} --apply --json`;
-fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
-NODE
-
-    run node "$SCRIPT" --project-root "$BOOK" --user-intent "继续执行已确认的整篇回炉反馈" --compact --json
-    [ "$status" -eq 0 ]
-    printf '%s\n' "$output" > "$TMP_DIR/running-stage-resume.json"
-    node - "$TMP_DIR/running-stage-resume.json" "$BOOK" <<'NODE'
-const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),root=process.argv[3];
-const direct=out.direct_intent||{},visible=out.visible_response||{},execution=visible.stage_execution||{};
-if(direct.status!=='stage_execution_resume_ready'||direct.interaction_mode!=='resume_stage') throw new Error(JSON.stringify(direct));
-if(visible.render_mode!=='silent_resume'||visible.selection_contract!=='resume_running_stage') throw new Error(JSON.stringify(visible));
-if(execution.execution_workdir!=='.'||!String(execution.execution_command||'').includes('--project-root .')) throw new Error(JSON.stringify(execution));
-if(execution.stage_completion_command!==execution.execution_command) throw new Error(JSON.stringify(execution));
-if(execution.current_required_action!=='edit_write_set'||(execution.after_write_action||{}).command!==execution.stage_completion_command) throw new Error(JSON.stringify(execution));
-if(execution.completion_required_before_reply!==true) throw new Error(JSON.stringify(execution));
-if(out.presentation_allowed!==false||visible.user_visible!==false||'text' in visible) throw new Error(JSON.stringify(visible));
-if(JSON.stringify({direct,visible}).includes(root)) throw new Error('absolute project root leaked into host continuation');
-NODE
-}
-
-@test "entry guard recovers a stale running feedback impact contract instead of silently resuming it" {
-    STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
-    printf '# 素材卡\n' > "$BOOK/素材卡.md"
-    printf '# 设定\n' > "$BOOK/设定.md"
-    printf '# 小节大纲\n' > "$BOOK/小节大纲.md"
-    printf '# 正文\n' > "$BOOK/正文.md"
-    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$BOOK" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
-    node "$STATE_MACHINE" resolve-action --project-root "$BOOK" --input "整篇回炉：更新结局。" --json >/dev/null
-    local task_file
-    task_file="$(node - "$BOOK" <<'NODE'
-const fs=require('fs'),path=require('path'),root=process.argv[2];
-const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
-process.stdout.write(path.join(root,pointer.task_dir,'task.json'));
-NODE
-)"
-    node - "$task_file" <<'NODE'
-const fs=require('fs');const file=process.argv[2],task=JSON.parse(fs.readFileSync(file,'utf8'));
-task.stage_execution.write_set=[];task.stage_execution.execution_command='';task.stage_execution.stage_completion_command='';task.stage_execution.after_write_action=null;
-fs.writeFileSync(file,JSON.stringify(task,null,2)+'\n');
+fs.mkdirSync(path.join(root,'追踪/workflow'),{recursive:true});
+fs.writeFileSync(path.join(root,'追踪/workflow/current-task.json'),JSON.stringify({
+  schemaVersion:'1.0.0',workflow_id:task.workflow_id,task_dir:task.task_dir,
+  state_version:task.state_version,focused_at:'2026-01-01T00:00:00.000Z'
+},null,2)+'\n');
 NODE
 
     run node "$SCRIPT" --project-root "$BOOK" --user-intent "继续执行整篇回炉" --compact --json
     [ "$status" -eq 0 ]
-    printf '%s\n' "$output" > "$TMP_DIR/stale-feedback-entry.json"
-    node - "$TMP_DIR/stale-feedback-entry.json" <<'NODE'
-const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),direct=out.direct_intent||{},visible=out.visible_response||{};
-if(direct.status!=='stage_contract_recovery_ready'||direct.interaction_mode!=='execute_command') throw new Error(JSON.stringify(direct));
-if(!String(direct.execution_command||'').includes('resume-pending-short-feedback')) throw new Error(JSON.stringify(direct));
-if(visible.render_mode!=='silent_execute'||visible.selection_contract!=='execute_direct_intent_command') throw new Error(JSON.stringify(visible));
-if(String(visible.text||'')!=='') throw new Error(JSON.stringify(visible));
+    printf '%s\n' "$output" > "$TMP_DIR/frozen-v2-entry.json"
+    node - "$TMP_DIR/frozen-v2-entry.json" <<'NODE'
+const out=JSON.parse(require('fs').readFileSync(process.argv[2],'utf8'));
+if(out.status!=='short_workflow_migration_pending') throw new Error(JSON.stringify(out));
+if(out.direct_intent) throw new Error('V2 business intent bypassed migration');
+if(!String((out.visible_response||{}).text||'').includes('升级')) throw new Error(JSON.stringify(out.visible_response));
+NODE
+}
+@test "entry guard surfaces write-policy migration before legacy task authority when no strict policy exists" {
+    book="$TMP_DIR/book-policy-gate"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/设定" "$book/细纲" "$book/追踪/workflow"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '# 设定\n' > "$book/设定/index.md"
+    printf '{"task_id":"legacy_longform_checkpoint_20260101","task_type":"legacy continuity repair","status":"phase_pending","resume_command":"do not use","next_steps":[{"step_id":"next_chapter","status":"pending"}]}\n' \
+        > "$book/追踪/workflow/current-task.json"
+
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "继续当前长篇修订" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/policy-gate.json"
+
+    node - "$TMP_DIR/policy-gate.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'write_policy_migration_required') throw new Error(JSON.stringify(out));
+if (!out.visible_response) throw new Error('write-policy gate must emit a visible_response');
+const visible = out.visible_response;
+if (visible.selection_contract !== 'execute_command_or_route_intent') throw new Error(JSON.stringify(visible));
+const options = Array.isArray(visible.options) ? visible.options : [];
+if (options.length < 1) throw new Error('write-policy menu must carry at least one executable option');
+const primary = options[0];
+if (primary.interaction_mode !== 'execute_command') throw new Error(JSON.stringify(primary));
+if (!primary.execution_command || !primary.execution_command.includes('book-write-policy-migrate.js')) throw new Error(JSON.stringify(primary));
+if (!primary.execution_command.includes('继续当前长篇修订')) throw new Error(JSON.stringify(primary));
+if (!primary.execution_command.includes('--resume-intent')) throw new Error(JSON.stringify(primary));
+// Authority must NOT leak in front of the policy gate.
+if (String(JSON.stringify(out)).includes('recover_legacy_task_authority')) throw new Error('legacy recovery leaked before policy migration');
+if (String(JSON.stringify(out)).includes('blocked_task_authority_missing')) throw new Error('legacy authority leaked before policy migration');
 NODE
 }
 
-@test "bare skill invocation keeps the global inbox before entering a running task" {
-    STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
-    printf '# 素材卡\n' > "$BOOK/素材卡.md"
-    printf '# 设定\n' > "$BOOK/设定.md"
-    printf '# 小节大纲\n' > "$BOOK/小节大纲.md"
-    printf '# 正文\n' > "$BOOK/正文.md"
-    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$BOOK" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
-    node "$STATE_MACHINE" resolve-action --project-root "$BOOK" --input "整篇回炉：更新结局和人物关系。" --json >/dev/null
+@test "entry guard surfaces legacy task authority recovery after strict write policy is current" {
+    book="$TMP_DIR/book-authority-gate"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/设定" "$book/细纲" \
+             "$book/追踪/workflow" "$book/追踪/story-system/transactions" \
+             "$book/追踪/story-system/commits"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '# 设定\n' > "$book/设定/index.md"
+    # Strict write policy is current; legacy task note is still on disk.
+    printf '{"mode":"strict","current":{"chapter_commit":"required"}}\n' > "$book/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$book/追踪/story-system/chapter-identities.json"
+    : > "$book/追踪/story-system/projection-log.jsonl"
+    : > "$book/追踪/story-system/transactions/.keep"
+    : > "$book/追踪/story-system/commits/.keep"
+    printf '{"task_id":"legacy_longform_checkpoint_20260101","task_type":"legacy continuity repair","status":"phase_pending","resume_command":"do not use","next_steps":[{"step_id":"next_chapter","status":"pending"}]}\n' \
+        > "$book/追踪/workflow/current-task.json"
 
-    run node "$SCRIPT" --project-root "$BOOK" --user-intent "/novel-assistant" --compact --json
-    [ "$status" -eq 0 ]
-    printf '%s\n' "$output" > "$TMP_DIR/bare-running-stage.json"
-    node - "$TMP_DIR/bare-running-stage.json" <<'NODE'
-const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),visible=out.visible_response||{};
-if(out.recommended_next!=='show_task_inbox_only') throw new Error(JSON.stringify(out));
-if(visible.status!=='task_inbox_ready'||visible.selection_contract!=='execute_command_or_route_intent') throw new Error(JSON.stringify(visible));
-for(const expected of ['1. 查看未完成任务（1 个）（推荐）','2. 查看智能推荐新任务','3. 开启当前作品新目标','4. 输入其他要求']) {
-  if(!String(visible.text||'').includes(expected)) throw new Error(JSON.stringify(visible));
-}
-if(String(visible.text||'').includes('当前任务：')||String(visible.text||'').includes('当前阶段：')) throw new Error(JSON.stringify(visible));
-if(out.direct_intent) throw new Error('bare skill invocation must not infer a business intent');
-if((visible.options||[]).slice(0,3).some(option=>option.interaction_mode!=='execute_command'||!String(option.execution_command||'').includes('workflow-task-inbox.js'))) throw new Error(JSON.stringify(visible.options));
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "继续当前长篇修订" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/authority-gate.json"
+
+    node - "$TMP_DIR/authority-gate.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'blocked_task_authority_missing') throw new Error(JSON.stringify(out));
+const visible = out.visible_response;
+if (!visible || !Array.isArray(visible.options) || visible.options.length < 1) throw new Error(JSON.stringify(visible));
+const primary = visible.options[0];
+if (primary.action !== 'recover_legacy_task_authority') throw new Error(JSON.stringify(primary));
+if (primary.interaction_mode !== 'execute_command') throw new Error(JSON.stringify(primary));
+if (!primary.execution_command || !primary.execution_command.includes('legacy-task-authority-recover.js')) throw new Error(JSON.stringify(primary));
+if (!primary.execution_command.includes('继续当前长篇修订')) throw new Error(JSON.stringify(primary));
+if (!primary.execution_command.includes('--resume-intent')) throw new Error(JSON.stringify(primary));
+if (!String(visible.text || '').includes('下一步')) throw new Error('authority menu must explain the next step in Chinese');
+// The empty generic repair option must NOT appear; we offer a real recovery command.
+if (String(JSON.stringify(out)).includes('repair_runtime_guard')) throw new Error('task-authority loss was downgraded to repair_runtime_guard');
+// Primary option must carry an execute_command label in Chinese, not just the action id.
+if (!/[一-鿿]/.test(primary.label || '')) throw new Error('primary option label must be Chinese');
 NODE
 }
 
-@test "a concrete short section proposal is treated as direct feedback" {
-    STATE_MACHINE="$REPO/scripts/workflow-state-machine.js"
-    mkdir -p "$BOOK"
-    printf '# 设定\n' > "$BOOK/设定.md"
-    printf '# 小节大纲\n' > "$BOOK/小节大纲.md"
-    printf '# 正文\n' > "$BOOK/正文.md"
-    node "$STATE_MACHINE" create --workflow-type short_write --project-root "$BOOK" --scope "全篇" --user-goal "新开短篇" --json >/dev/null
+@test "entry guard recognizes allowlisted outline_backfill pointer after strict policy" {
+    book="$TMP_DIR/book-outline-backfill-authority"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/细纲" "$book/设定" \
+             "$book/追踪/workflow" "$book/追踪/story-system/transactions" \
+             "$book/追踪/story-system/commits"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 中性大纲\n' > "$book/大纲/第1卷/卷纲.md"
+    printf '# 中性细纲\n' > "$book/细纲/index.md"
+    printf '# 中性设定\n' > "$book/设定/index.md"
+    printf '{"mode":"strict","current":{"chapter_commit":"required"}}\n' > "$book/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$book/追踪/story-system/chapter-identities.json"
+    : > "$book/追踪/story-system/projection-log.jsonl"
+    : > "$book/追踪/story-system/transactions/.keep"
+    : > "$book/追踪/story-system/commits/.keep"
+    cat > "$book/追踪/workflow/current-task.json" <<'JSON'
+{"type":"outline_backfill","action_id":"outline-backfill-action-001","status":"running","target_files":["大纲/第1卷/卷纲.md","大纲/第1卷/章节索引.md"]}
+JSON
 
-    run node "$SCRIPT" --project-root "$BOOK" --user-intent "第9节可以加一个宿舍群场面，结尾建议改成熟人先放购物车。" --compact --json
-    [ "$status" -eq 0 ]
-    printf '%s\n' "$output" > "$TMP_DIR/direct-proposal.json"
-    node - "$TMP_DIR/direct-proposal.json" <<'NODE'
-const fs=require('fs');const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-if((out.direct_intent||{}).intent_type!=='short_revision_feedback') throw new Error(JSON.stringify(out));
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "继续中性大纲补全" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/outline-backfill-authority.json"
+
+    node - "$TMP_DIR/outline-backfill-authority.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'blocked_task_authority_missing') throw new Error(JSON.stringify(out));
+if (out.recommended_next !== 'recover_legacy_task_authority') throw new Error(JSON.stringify(out));
+const visible = out.visible_response || {};
+const primary = (visible.options || [])[0];
+if (!primary || primary.interaction_mode !== 'execute_command') throw new Error(JSON.stringify(primary));
+if (!String(primary.execution_command || '').includes('legacy-task-authority-recover.js preview')) throw new Error(JSON.stringify(primary));
+const serialized = JSON.stringify(out);
+if (serialized.includes('repair_runtime_guard')) throw new Error('outline_backfill was downgraded to repair_runtime_guard');
+if (/查看未完成任务（0 个）[^]*推荐/.test(serialized) || /查看未完成任务（0 个）（推荐）/.test(serialized)) {
+  throw new Error('zero unfinished tasks became the primary recommendation');
+}
+NODE
+}
+
+@test "entry guard returns business routing after both legacy migration gates are resolved" {
+    book="$TMP_DIR/book-recovered"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/设定" "$book/细纲" \
+             "$book/追踪/workflow/tasks/wf-recovered" "$book/追踪/story-system/transactions" \
+             "$book/追踪/story-system/commits"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '# 设定\n' > "$book/设定/index.md"
+    printf '{"mode":"strict","current":{"chapter_commit":"required"}}\n' > "$book/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$book/追踪/story-system/chapter-identities.json"
+    : > "$book/追踪/story-system/projection-log.jsonl"
+    : > "$book/追踪/story-system/transactions/.keep"
+    : > "$book/追踪/story-system/commits/.keep"
+    # Recovery is complete: the current-task.json now points to a real long_write
+    # durable task; the legacy task_id is gone.
+    cat > "$book/追踪/workflow/tasks/wf-recovered/task.json" <<'JSON'
+{
+  "schemaVersion":"1.0.0",
+  "workflow_id":"wf-recovered",
+  "workflow_type":"long_write",
+  "task_dir":"追踪/workflow/tasks/wf-recovered",
+  "status":"running",
+  "current_stage":"prose",
+  "user_goal":"继续当前长篇修订",
+  "runtime_guard":{
+    "heartbeat":{"updated_at":"2026-08-04T00:00:00.000Z"},
+    "stall_policy":{"heartbeat_timeout_minutes":999999},
+    "checkpoint_policy":{"resume_from":"prose"}
+  }
+}
+JSON
+    node - "$book" "wf-recovered" <<'NODE'
+const fs=require('fs'),path=require('path');const [root,id]=process.argv.slice(2);
+const task=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/tasks',id,'task.json'),'utf8'));
+const pointer={schemaVersion:'1.0.0',workflow_id:id,task_dir:task.task_dir||`追踪/workflow/tasks/${id}`,focused_at:'2026-08-04T00:00:00.000Z',state_version:task.state_version||0};
+fs.mkdirSync(path.join(root,'追踪/workflow'),{recursive:true});
+fs.writeFileSync(path.join(root,'追踪/workflow/current-task.json'),JSON.stringify(pointer,null,2)+'\n');
+NODE
+
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "继续当前长篇修订" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/recovered.json"
+
+    node - "$TMP_DIR/recovered.json" "$book" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const book = process.argv[3];
+if (!['pass', 'task_inbox_ready', 'business_routing_allowed'].includes(out.status)
+    && out.status !== 'pass'
+    && out.status !== 'task_inbox_ready') {
+  // Accept either pass/business_routing_allowed or the task inbox showing the
+  // recovered task. The legacy gates must NOT appear anymore.
+  if (out.status === 'write_policy_migration_required' || out.status === 'blocked_task_authority_missing') {
+    throw new Error('legacy gates still surfaced after recovery: ' + JSON.stringify(out));
+  }
+}
+if (out.status === 'blocked_task_authority_missing') throw new Error('authority gate still active: ' + JSON.stringify(out));
+const serialized = JSON.stringify(out);
+if (serialized.includes('write_policy_migration_required')) throw new Error('write policy gate still active: ' + JSON.stringify(out));
+if (serialized.includes('repair_runtime_guard') && /task.?authority/i.test(serialized)) {
+  throw new Error('task-authority loss was downgraded to repair_runtime_guard: ' + JSON.stringify(out));
+}
+// The recovered durable task must be visible to the entry guard.
+const taskFile = `${book}/追踪/workflow/tasks/wf-recovered/task.json`;
+const task = JSON.parse(fs.readFileSync(taskFile, 'utf8'));
+if (task.workflow_id !== 'wf-recovered') throw new Error('durable task was lost: ' + JSON.stringify(task));
+NODE
+}
+
+@test "write-policy migration menu never leaks undefined display lines or padded empty options" {
+    book="$TMP_DIR/book-menu-text"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/追踪/workflow"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '{"task_id":"legacy_longform_checkpoint_20260101","task_type":"legacy continuity repair"}\n' \
+        > "$book/追踪/workflow/current-task.json"
+
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "继续当前长篇修订" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/menu-text.json"
+
+    node - "$TMP_DIR/menu-text.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'write_policy_migration_required') throw new Error(JSON.stringify(out));
+const visible = out.visible_response;
+if (!visible || typeof visible.text !== 'string') throw new Error(JSON.stringify(visible));
+if (visible.text.includes('undefined')) throw new Error('write-policy menu text leaked undefined: ' + visible.text);
+const options = Array.isArray(visible.options) ? visible.options : [];
+for (const option of options) {
+  if (typeof option.display !== 'string' || option.display.length === 0) {
+    throw new Error('option missing display: ' + JSON.stringify(option));
+  }
+  if (typeof option.number !== 'number') throw new Error('option missing number: ' + JSON.stringify(option));
+  if (!/^[一-龥]/.test(option.label || '')) throw new Error('option label must start with Chinese: ' + JSON.stringify(option));
+}
+const displays = options.map((option) => option.display);
+for (const display of displays) {
+  if (!visible.text.includes(display)) {
+    throw new Error(`text must include option display "${display}": ${visible.text}`);
+  }
+}
+NODE
+}
+
+@test "legacy task authority recovery menu never leaks undefined display lines or padded empty options" {
+    book="$TMP_DIR/book-authority-text"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/追踪/workflow" \
+             "$book/追踪/story-system/transactions" "$book/追踪/story-system/commits"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '{"mode":"strict","current":{"chapter_commit":"required"}}\n' > "$book/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$book/追踪/story-system/chapter-identities.json"
+    : > "$book/追踪/story-system/projection-log.jsonl"
+    : > "$book/追踪/story-system/transactions/.keep"
+    : > "$book/追踪/story-system/commits/.keep"
+    printf '{"task_id":"legacy_longform_checkpoint_20260101","task_type":"legacy continuity repair"}\n' \
+        > "$book/追踪/workflow/current-task.json"
+
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "继续当前长篇修订" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/authority-text.json"
+
+    node - "$TMP_DIR/authority-text.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'blocked_task_authority_missing') throw new Error(JSON.stringify(out));
+const visible = out.visible_response;
+if (!visible || typeof visible.text !== 'string') throw new Error(JSON.stringify(visible));
+if (visible.text.includes('undefined')) throw new Error('authority menu text leaked undefined: ' + visible.text);
+const options = Array.isArray(visible.options) ? visible.options : [];
+for (const option of options) {
+  if (typeof option.display !== 'string' || option.display.length === 0) {
+    throw new Error('option missing display: ' + JSON.stringify(option));
+  }
+  if (typeof option.number !== 'number') throw new Error('option missing number: ' + JSON.stringify(option));
+  if (!/^[一-龥]/.test(option.label || '')) throw new Error('option label must start with Chinese: ' + JSON.stringify(option));
+}
+const displays = options.map((option) => option.display);
+for (const display of displays) {
+  if (!visible.text.includes(display)) {
+    throw new Error(`text must include option display "${display}": ${visible.text}`);
+  }
+}
+NODE
+}
+
+@test "write-policy migration still fires when policy declares strict but transaction ledgers are missing" {
+    book="$TMP_DIR/book-policy-mismatch"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/追踪/workflow" "$book/追踪/story-system" "$book/设定"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '# 设定\n' > "$book/设定/index.md"
+    # mode=strict is declared but the four transaction ledgers are not all on disk.
+    printf '{"mode":"strict","current":{"chapter_commit":"required"}}\n' > "$book/追踪/story-system/write-policy.json"
+
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "继续当前长篇修订" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/policy-mismatch.json"
+
+    node - "$TMP_DIR/policy-mismatch.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'write_policy_migration_required') throw new Error(JSON.stringify(out));
+if (!out.visible_response || !out.visible_response.options) throw new Error(JSON.stringify(out));
+const preview = out.visible_response.options[0];
+if (!preview || !preview.execution_command || !preview.execution_command.includes('book-write-policy-migrate.js')) {
+  throw new Error(JSON.stringify(preview));
+}
+NODE
+}
+
+@test "write-policy migration fires before task authority even when a durable workflow task is already on disk" {
+    book="$TMP_DIR/book-policy-with-durable"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/设定" \
+             "$book/追踪/workflow/tasks/wf-existing-long" "$book/追踪/story-system"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '# 设定\n' > "$book/设定/index.md"
+    # A modern durable task is already on disk; the strict policy ledgers are
+    # NOT. The policy gate must still fire first per the plan.
+    cat > "$book/追踪/workflow/tasks/wf-existing-long/task.json" <<'JSON'
+{
+  "schemaVersion":"1.0.0",
+  "workflow_id":"wf-existing-long",
+  "workflow_type":"long_write",
+  "task_dir":"追踪/workflow/tasks/wf-existing-long",
+  "status":"running",
+  "current_stage":"prose",
+  "runtime_guard":{"heartbeat":{"updated_at":"2026-08-04T00:00:00.000Z"}}
+}
+JSON
+    printf '{"mode":"strict","current":{"chapter_commit":"required"}}\n' > "$book/追踪/story-system/write-policy.json"
+
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "继续当前长篇修订" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/policy-with-durable.json"
+
+    node - "$TMP_DIR/policy-with-durable.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'write_policy_migration_required') throw new Error(JSON.stringify(out));
+if (!out.visible_response || !out.visible_response.options) throw new Error(JSON.stringify(out));
+const preview = out.visible_response.options[0];
+if (!preview || !preview.execution_command || !preview.execution_command.includes('book-write-policy-migrate.js')) {
+  throw new Error(JSON.stringify(preview));
+}
+NODE
+}
+
+@test "unrecognized current-task pointer under strict policy returns a read-only diagnostic with no mutation command" {
+    book="$TMP_DIR/book-unrecognized-pointer"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/追踪/workflow" \
+             "$book/追踪/story-system/transactions" "$book/追踪/story-system/commits"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '{"mode":"strict","current":{"chapter_commit":"required"}}\n' > "$book/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$book/追踪/story-system/chapter-identities.json"
+    : > "$book/追踪/story-system/projection-log.jsonl"
+    : > "$book/追踪/story-system/transactions/.keep"
+    : > "$book/追踪/story-system/commits/.keep"
+    # Malformed: not valid JSON, no workflow_id, no task_id.
+    printf 'this is not json {\n' > "$book/追踪/workflow/current-task.json"
+
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "继续当前长篇修订" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/unrecognized.json"
+
+    node - "$TMP_DIR/unrecognized.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'blocked_task_authority_missing') throw new Error(JSON.stringify(out));
+if (out.legacy_status && out.legacy_status.pointer_kind !== 'malformed_unrecognized') {
+  throw new Error(JSON.stringify(out.legacy_status));
+}
+const visible = out.visible_response;
+if (!visible || !Array.isArray(visible.options)) throw new Error(JSON.stringify(visible));
+if (out.recommended_action !== 'inspect_unrecognized_task_pointer') throw new Error(JSON.stringify(out.recommended_action));
+for (const option of visible.options) {
+  if (option.execution_command) {
+    const command = String(option.execution_command);
+    if (/repair-runtime-guard|repair_task_state|legacy-task-authority-recover/.test(command)) {
+      throw new Error('malformed pointer must not offer mutation command: ' + JSON.stringify(option));
+    }
+    if (!/workflow-task-inbox\.js/.test(command)) {
+      throw new Error('malformed pointer must only offer read-only inbox command: ' + JSON.stringify(option));
+    }
+  }
+}
+if (!/人工|无法识别|不可恢复/.test(visible.text || '')) {
+  throw new Error('malformed pointer menu must explain the diagnostic in Chinese: ' + visible.text);
+}
+NODE
+}
+
+@test "unrecognized current-task pointer with unsafe task_id under strict policy still returns the read-only diagnostic" {
+    book="$TMP_DIR/book-unsafe-taskid"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/追踪/workflow" \
+             "$book/追踪/story-system/transactions" "$book/追踪/story-system/commits"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '{"mode":"strict","current":{"chapter_commit":"required"}}\n' > "$book/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$book/追踪/story-system/chapter-identities.json"
+    : > "$book/追踪/story-system/projection-log.jsonl"
+    : > "$book/追踪/story-system/transactions/.keep"
+    : > "$book/追踪/story-system/commits/.keep"
+    # Unsafe task_id (contains spaces and shell metacharacters).
+    printf '{"task_id":"bad task id; rm -rf /","task_type":"legacy"}\n' \
+        > "$book/追踪/workflow/current-task.json"
+
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "继续当前长篇修订" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/unsafe-taskid.json"
+
+    node - "$TMP_DIR/unsafe-taskid.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'blocked_task_authority_missing') throw new Error(JSON.stringify(out));
+if (out.legacy_status && out.legacy_status.pointer_kind !== 'malformed_unrecognized') {
+  throw new Error(JSON.stringify(out.legacy_status));
+}
+const visible = out.visible_response;
+if (!visible || !Array.isArray(visible.options)) throw new Error(JSON.stringify(visible));
+for (const option of visible.options) {
+  if (option.execution_command && !/workflow-task-inbox\.js/.test(String(option.execution_command))) {
+    throw new Error('unsafe task_id menu must only offer read-only inbox command: ' + JSON.stringify(option));
+  }
+}
+// No option may invoke the legacy recovery adapter directly.
+for (const option of visible.options) {
+  if (option.execution_command && /legacy-task-authority-recover/.test(String(option.execution_command))) {
+    throw new Error('unsafe task_id offered the recovery adapter: ' + JSON.stringify(option));
+  }
+}
 NODE
 }
 

@@ -25,6 +25,7 @@ function main() {
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 0, args.json);
   const task = authority.task;
+  if (Number(task.engine_version) === 3) return finish({ status: 'v3_engine_apply_required', workflow_id: workflowId, instruction: 'V3 任务必须调用全篇收束共享 service，并通过 V3 Engine 应用 StageResult。' }, 2, args.json);
   const execution = task.stage_execution || {};
   if (String(task.current_stage || '') !== 'full_story_review'
     || String(execution.status || '') !== 'running'

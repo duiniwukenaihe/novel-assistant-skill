@@ -193,7 +193,7 @@ setup() {
     grep -q "不得直接进入 Revision Impact Analysis" "$WORKFLOW"
     grep -q "追踪/审阅反馈.md" "$WORKFLOW"
     grep -q "只处理当前阶段相关问题" "$WORKFLOW"
-    grep -q "御兽宗" "$WORKFLOW"
+    grep -q "外部势力" "$WORKFLOW"
     grep -q "灵石认知" "$WORKFLOW"
 }
 

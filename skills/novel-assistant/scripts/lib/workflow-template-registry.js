@@ -363,14 +363,14 @@ const BASE_TEMPLATES = {
     longformStage('volume_outline', 'story-long-write', ['master_outline_review'], ['volume_outline_review'], false, 'medium', '设计当前卷目标、阻力、代价、人物变化和跨卷承接。'),
     longformStage('volume_outline_review', 'story-review', ['volume_outline'], ['volume_outline', 'stage_detail_outline'], true, 'medium', '审阅当前卷对总纲的贡献及上下卷接口；通过后由作者确认卷纲。'),
     longformStage('stage_detail_outline', 'story-long-write', ['volume_outline_review'], ['detail_outline_review'], false, 'medium', '按剧情阶段设计连续事件、因果、冲突升级和回收位置。'),
-    longformStage('detail_outline_review', 'story-review', ['stage_detail_outline'], ['stage_detail_outline', 'chapter_brief'], true, 'medium', '审阅阶段细纲的基础可写性和按风险激活的专业维度；通过后由作者确认当前阶段细纲。', 'detail_outline_quality_v1'),
+    longformStage('detail_outline_review', 'story-review', ['stage_detail_outline'], ['stage_detail_outline', 'chapter_brief'], true, 'medium', '审阅阶段细纲的基础可写性和按风险激活的专业维度；通过后由作者确认当前阶段细纲。', 'detail_outline_quality_v2'),
     longformStage('chapter_brief', 'story-long-write', ['detail_outline_review'], ['brief_review'], false, 'medium', '锁定当前章节的视角、场景目标、阻力、动作、信息和承接。'),
     longformStage('brief_review', 'story-review', ['chapter_brief'], ['chapter_brief', 'prose'], true, 'medium', '确认 Brief 可写、与细纲一致且不把关键剧情留给正文临场生成；通过后由作者决定是否开始当前章正文。'),
     longformStage('prose', 'story-long-write', ['brief_review'], ['prose_acceptance'], true, 'high', '只生产已通过 Brief 的当前章节正文候选。'),
-    longformStage('prose_acceptance', 'story-review', ['prose'], ['prose', 'chapter_commit'], false, 'medium', '执行当前正文的机器质量门和创作质量门。'),
+    longformStage('prose_acceptance', 'story-review', ['prose'], ['prose', 'chapter_brief', 'chapter_commit'], false, 'medium', '执行当前正文的机器质量门和创作质量门。'),
     longformStage('chapter_commit', 'story-workflow', ['prose_acceptance'], ['chapter_brief', 'milestone_review'], false, 'high', '原子接受正文和事实增量，并投影到追踪与记忆。'),
     longformStage('milestone_review', 'story-review', ['chapter_commit'], ['chapter_commit', 'stage_detail_outline', 'chapter_brief', 'volume_acceptance'], false, 'medium', '在剧情阶段结束后复盘角色、主线、承诺、钩子和质量债。'),
-    longformStage('volume_acceptance', 'story-review', ['milestone_review'], ['milestone_review', 'volume_outline', 'book_acceptance'], false, 'medium', '检查卷级兑现并完成跨卷交接。'),
+    longformStage('volume_acceptance', 'story-review', ['milestone_review'], ['milestone_review', 'volume_outline', 'book_acceptance'], true, 'medium', '检查卷级兑现并完成跨卷交接；只有明确到达卷尾时才能进入。'),
     longformStage('book_acceptance', 'story-review', ['volume_acceptance'], ['volume_acceptance'], false, 'medium', '验收全书承诺、人物终局、钩子闭环、结构和发布资产。'),
   ], unitLifecycle('book_lifecycle', {
     positioning: 'workflow_preflight',
@@ -639,6 +639,9 @@ function stage(stageId, ownerModule, requiredInputs, allowedNext, requiresUserCo
 
 function longformStage(stageId, ownerModule, requiredInputs, allowedNext, requiresUserConfirm, riskLevel, description, resultContract) {
   const failureReturn = LONG_WRITE_REVIEW_RETURNS[stageId] || '';
+  const failureReturns = stageId === 'prose_acceptance'
+    ? ['prose', 'chapter_brief']
+    : failureReturn ? [failureReturn] : [];
   return {
     ...stage(stageId, ownerModule, requiredInputs, allowedNext, requiresUserConfirm, riskLevel, description),
     lifecycle_node: stageId,
@@ -646,18 +649,23 @@ function longformStage(stageId, ownerModule, requiredInputs, allowedNext, requir
     review_requirement: failureReturn
       ? { required: true, failure_return: failureReturn }
       : { required: false, failure_return: '' },
+    transition_contract: { failure_returns: failureReturns },
     write_set: longformStageWriteSet(stageId, ownerModule),
     ...(resultContract ? { result_contract: resultContract } : {}),
   };
 }
 
 function longformStageWriteSet(stageId, ownerModule) {
-  if (ownerModule === 'story-review') return ['追踪/**'];
+  // Review stages return findings through the result packet. Canonical
+  // tracking and story-memory projections are applied transactionally after
+  // acceptance; letting a reviewer write arbitrary tracking files here both
+  // duplicates that path and conflicts with the canonical-write guard.
+  if (ownerModule === 'story-review') return [];
   if (['positioning', 'story_bible'].includes(stageId)) return ['设定/**', '追踪/**'];
   if (['master_outline', 'volume_outline', 'stage_detail_outline', 'chapter_brief'].includes(stageId)) {
     return ['大纲/**', '追踪/**'];
   }
-  if (stageId === 'prose') return ['追踪/story-system/work/**'];
+  if (stageId === 'prose') return ['追踪/workflow/tasks/**'];
   if (stageId === 'chapter_commit') return ['正文/**', '追踪/**'];
   return ['追踪/**'];
 }

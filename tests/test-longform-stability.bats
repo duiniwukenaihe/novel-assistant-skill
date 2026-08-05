@@ -180,9 +180,9 @@ setup() {
     tmp="$(mktemp -d)"
     mkdir -p "$tmp/正文/第2卷"
     printf '{\n  "chapterLayout": "volume",\n  "preferredVolume": "第2卷",\n  "allowLegacyFlat": false\n}\n' > "$tmp/.book-state.json"
-    printf '正文\n' > "$tmp/正文/第2卷/第027章_禁闭第一夜.md"
-    printf '正文\n' > "$tmp/正文/第2卷/第028章_禁闭第二夜.md"
-    printf '正文\n' > "$tmp/正文/第2卷/第029章_禁闭第三夜.md"
+    printf '正文\n' > "$tmp/正文/第2卷/第027章_试炼第一日.md"
+    printf '正文\n' > "$tmp/正文/第2卷/第028章_试炼第二日.md"
+    printf '正文\n' > "$tmp/正文/第2卷/第029章_试炼第三日.md"
 
     output="$(node "$REPO/scripts/chapter-draft-resolve.js" "$tmp" 29 --volume 第2卷 --json || true)"
 

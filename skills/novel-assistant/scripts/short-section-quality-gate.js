@@ -14,6 +14,7 @@ const { renderPendingActionText } = require('./lib/workflow-action-renderer');
 const { ensureCurrentShortMemoryStage } = require('./lib/short-memory-stage-recovery');
 const { readShortProjectState } = require('./lib/short-project-state');
 const { resolveShortReaderMilestone } = require('./lib/short-reader-milestone-policy');
+const { runStoryGate } = require('./lib/short-production/section-loop');
 const {
   LEGACY_CHECK_GROUPS,
   QUALITY_CHECKS: CHECKS,
@@ -33,6 +34,7 @@ function main() {
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 2, args.json);
   let task = authority.task;
+  if (Number(task.engine_version) === 3) return finish({ status: 'v3_engine_apply_required', workflow_id: workflowId, instruction: 'V3 任务必须直接调用共享 service，并通过 V3 Engine 应用 StageResult。' }, 2, args.json);
   if (!['short_write', 'private_short_startup', 'short_startup'].includes(String(task.workflow_type || ''))) {
     return finish({ status: 'blocked_not_short_write', workflow_id: workflowId }, 2, args.json);
   }
@@ -86,12 +88,48 @@ function main() {
     outlineContract,
   });
   if (evidenceRead.repaired) atomicWriteJson(evidenceFile, evidenceRead.value);
-  const evidenceIssue = validateQualityEvidence(review, { workflowId, sectionIndex, draft, outlineContract, readerMilestone });
-  if (evidenceIssue) {
+  const canonicalEvidenceRel = `${task.task_dir}/artifacts/section-${String(sectionIndex).padStart(3, '0')}-story-review-normalized.json`;
+  const canonicalEvidenceFile = safeProjectFile(root, canonicalEvidenceRel);
+  if (!canonicalEvidenceFile) return finish({ status: 'blocked_quality_evidence_path_unsafe', path: canonicalEvidenceRel }, 2, args.json);
+  atomicWriteJson(canonicalEvidenceFile, review);
+  const draftRel = relative(root, draft);
+  const shared = runStoryGate({
+    projectRoot: root,
+    task: {
+      ...task,
+      current_stage: 'story_gate',
+      retry_state: null,
+      stage_execution: { ...execution, stage_id: 'story_gate', section_index: sectionIndex },
+    },
+    draft: draftRel,
+    evidenceFile: canonicalEvidenceRel,
+  });
+  if (shared.kind === 'blocked') {
+    return finish(recoverableStageResult(task, shared.code, shared.instruction, {
+      section_index: sectionIndex,
+      evidence_file: evidenceRel,
+      findings: shared.findings,
+      evidence_schema: buildQualityEvidenceSchema({
+        workflowId,
+        sectionIndex,
+        draft,
+        outlineContract,
+        readerMilestone,
+      }),
+    }), 0, args.json);
+  }
+  const sharedFindings = Array.isArray(shared.findings) ? shared.findings : [];
+  const revisionOnly = new Set([
+    'evidence_check_revise',
+    'draft_outline_obligation_revise',
+    'evidence_reader_milestone_revise',
+  ]);
+  const schemaFindings = sharedFindings.filter((finding) => !revisionOnly.has(String((finding || {}).code || '')));
+  if (shared.kind !== 'completed' && schemaFindings.length) {
     return finish(recoverableStageResult(task, 'quality_evidence_required', '按 evidence_schema 补当前质量证据卡后重跑同一命令；不要改正文或读取工作流源码。', {
       section_index: sectionIndex,
       evidence_file: evidenceRel,
-      findings: evidenceIssue,
+      findings: schemaFindings,
       evidence_schema: buildQualityEvidenceSchema({
         workflowId,
         sectionIndex,
@@ -109,14 +147,13 @@ function main() {
   if (readerMilestone.required && String(((review || {}).reader_milestone || {}).status || '') === 'revise') {
     failed.add('professional_reader_milestone');
   }
-  const decision = failed.size ? 'revise' : 'pass';
+  const decision = shared.kind === 'completed' ? 'pass' : 'revise';
   if (args.decision && args.decision !== decision) return finish({ status: 'quality_decision_conflict', decision: args.decision, evidence_decision: decision, failed: [...failed] }, 0, args.json);
   const passed = decision === 'pass';
   const packetRel = String(execution.expected_result_packet || `追踪/workflow/tasks/${workflowId}/result-packets/${stageId}.result.json`);
   const packetFile = safeProjectFile(root, packetRel);
   if (!packetFile) return finish({ status: 'blocked_result_packet_path_unsafe', path: packetRel }, 2, args.json);
-  const draftRel = relative(root, draft);
-  const draftDigest = `sha256:${crypto.createHash('sha256').update(fs.readFileSync(draft)).digest('hex')}`;
+  const draftDigest = digestFile(draft);
   const briefRel = relative(root, brief);
   const checks = review.checks.map((item) => ({ id: item.id, status: item.status, evidence: item.evidence, evidence_quote: item.evidence_quote }));
   const summary = String(review.summary || args.summary || (passed
@@ -126,7 +163,7 @@ function main() {
   const repairAction = nextStage === 'feedback_impact_sync'
     ? '进入反馈影响链并生成当前节修订授权'
     : '重建当前节 Brief 后修订';
-  const blockingFindings = [...failed].map((id) => ({ code: id, message: `${id} 需要修订` }));
+  const blockingFindings = buildQualityRevisionFindings({ review, outlineContract, outlineFindings, readerMilestone });
   atomicWriteJson(packetFile, {
     workflow_id: workflowId,
     workflow_type: String(task.workflow_type || 'short_write'),
@@ -143,7 +180,8 @@ function main() {
       brief: briefRel,
       checks,
       reviewer_summary: summary,
-      evidence_file: evidenceRel,
+      evidence_file: canonicalEvidenceRel,
+      story_gate_receipt: String(shared.receipt || ''),
       outline_contract_digest: outlineContract.contract_digest,
       outline_coverage: review.outline_coverage,
       reader_milestone: readerMilestone.required ? review.reader_milestone : null,
@@ -307,6 +345,50 @@ function normalizeQualityEvidence(value, { workflowId, sectionIndex, draft, outl
       || ''
     ).trim(),
   };
+}
+
+function buildQualityRevisionFindings({ review, outlineContract, outlineFindings, readerMilestone }) {
+  const labels = {
+    causal_progression: '因果推进',
+    protagonist_agency: '主角行动',
+    emotional_tension: '情绪张力',
+    reader_pull: '继续阅读动力',
+  };
+  const findings = (Array.isArray(review.checks) ? review.checks : [])
+    .filter(item => String((item || {}).status || '') === 'revise')
+    .map(item => ({
+      code: String(item.id || ''),
+      label: labels[String(item.id || '')] || '故事质量',
+      message: String(item.evidence || '').trim() || '当前内容尚未完成这一项。',
+    }));
+  const obligationById = new Map((Array.isArray(outlineContract.obligations) ? outlineContract.obligations : [])
+    .map(item => [String((item || {}).id || ''), item || {}]));
+  for (const finding of (Array.isArray(outlineFindings) ? outlineFindings : [])) {
+    if (String((finding || {}).code || '') !== 'draft_outline_obligation_revise') continue;
+    const id = String((finding || {}).obligation_id || '');
+    const obligation = obligationById.get(id) || {};
+    findings.push({
+      code: `outline_${id}`,
+      label: '大纲兑现',
+      message: String(obligation.source_text || '').trim() || '当前节尚未兑现已确认的大纲要求。',
+    });
+  }
+  if (readerMilestone && readerMilestone.required && String((((review || {}).reader_milestone || {}).status) || '') === 'revise') {
+    const reader = review.reader_milestone || {};
+    findings.push({
+      code: 'professional_reader_milestone',
+      label: '读者体验',
+      message: [String(reader.biggest_resistance || '').trim(), String(reader.repair_direction || '').trim()]
+        .filter(Boolean).join('；') || '当前高潮兑现不足，需要按读者阻力做局部修订。',
+    });
+  }
+  const seen = new Set();
+  return findings.filter(item => {
+    const key = `${item.label}\0${item.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function normalizeQualityChecks(source) {
@@ -547,6 +629,7 @@ function uniqueText(values) {
 if (require.main === module) process.exitCode = main();
 
 module.exports = {
+  buildQualityRevisionFindings,
   buildQualityEvidenceSchema,
   normalizeQualityChecks,
   validateQualityEvidence,

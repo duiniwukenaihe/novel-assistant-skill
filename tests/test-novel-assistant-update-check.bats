@@ -84,6 +84,117 @@ NODE
     rm -rf "$tmp"
 }
 
+@test "update choice durably preserves the original intent and never turns 2 into story feedback" {
+    tmp="$(mktemp -d)"
+    project="$tmp/project"
+    manifest="$tmp/manifest.json"
+    mkdir -p "$project/追踪/workflow"
+    cat > "$manifest" <<'JSON'
+{
+  "bundleName": "novel-assistant",
+  "bundleId": "new123",
+  "sourceCommit": "abc1234",
+  "agentsVersion": 17,
+  "setupSkillVersion": "1.4.1"
+}
+JSON
+    cat > "$project/.story-deployed" <<'SENTINEL'
+agents_version: 16
+setup_skill_version: 1.4.0
+novel_assistant_bundle_id: old999
+novel_assistant_source_commit: old0000
+SENTINEL
+
+    node "$REPO/scripts/novel-assistant-update-check.js" "$project" "$manifest" \
+      --user-intent "继续" --write --json > "$tmp/first.json"
+    node - "$tmp/first.json" "$project/追踪/workflow/update-environment-choice.json" <<'NODE'
+const assert = require('assert');
+const fs = require('fs');
+const [resultFile, stateFile] = process.argv.slice(2);
+const result = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+assert.equal(result.status, 'update_available');
+assert.equal(result.selection_contract, 'resolve_update_environment');
+assert.equal(result.pending_action.type, 'update_environment');
+assert.equal(result.pending_action.original_intent, '继续');
+const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+assert.equal(state.status, 'pending');
+assert.equal(state.original_intent, '继续');
+NODE
+
+    node "$REPO/scripts/novel-assistant-update-check.js" "$project" "$manifest" \
+      --user-intent "2" --write --json > "$tmp/second.json"
+    node - "$tmp/second.json" "$project/追踪/workflow/update-environment-choice.json" <<'NODE'
+const assert = require('assert');
+const fs = require('fs');
+const [resultFile, stateFile] = process.argv.slice(2);
+const result = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+assert.equal(result.status, 'update_declined');
+assert.equal(result.shouldPrompt, false);
+assert.equal(result.original_intent, '继续');
+assert.equal(result.resume_original_intent, true);
+assert.equal(result.selection.action_id, 'continue_without_update');
+assert.match(result.entry_guard_command, /--user-intent\s+['"]继续['"]/u);
+const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+assert.equal(state.status, 'resolved');
+assert.equal(state.selection.action_id, 'continue_without_update');
+assert.equal(state.original_intent, '继续');
+NODE
+
+    rm -rf "$tmp"
+}
+
+@test "update choice is rejected when the bundle changed after the menu was shown" {
+    tmp="$(mktemp -d)"
+    project="$tmp/project"
+    manifest="$tmp/manifest.json"
+    mkdir -p "$project/追踪/workflow"
+    cat > "$manifest" <<'JSON'
+{
+  "bundleName": "novel-assistant",
+  "bundleId": "new123",
+  "sourceCommit": "abc1234",
+  "agentsVersion": 17,
+  "setupSkillVersion": "1.4.1"
+}
+JSON
+    cat > "$project/.story-deployed" <<'SENTINEL'
+agents_version: 16
+setup_skill_version: 1.4.0
+novel_assistant_bundle_id: old999
+SENTINEL
+
+    node "$REPO/scripts/novel-assistant-update-check.js" "$project" "$manifest" \
+      --user-intent "继续" --write --json > "$tmp/first.json"
+
+    node - "$manifest" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+manifest.bundleId = 'newer456';
+fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+NODE
+
+    node "$REPO/scripts/novel-assistant-update-check.js" "$project" "$manifest" \
+      --user-intent "2" --write --json > "$tmp/second.json"
+    node - "$tmp/second.json" "$project/追踪/workflow/update-environment-choice.json" <<'NODE'
+const assert = require('assert');
+const fs = require('fs');
+const [resultFile, stateFile] = process.argv.slice(2);
+const result = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+assert.equal(result.status, 'update_available');
+assert.equal(result.selection_contract, 'resolve_update_environment');
+assert.equal(result.pending_action.status, 'pending');
+assert.equal(result.pending_action.current_bundle_id, 'newer456');
+assert.equal(result.pending_action.original_intent, '继续');
+const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+assert.equal(state.status, 'pending');
+assert.equal(state.current_bundle_id, 'newer456');
+assert.equal(state.original_intent, '继续');
+NODE
+
+    rm -rf "$tmp"
+}
+
 @test "novel assistant update check uses collaboration-environment wording for non-json output" {
     tmp="$(mktemp -d)"
     project="$tmp/project"

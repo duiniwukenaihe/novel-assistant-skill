@@ -120,7 +120,7 @@ if (!packet.stage_instruction || !packet.stage_instruction.user_goal || !packet.
 NODE
 }
 
-@test "managed runner rejects a result that did not use its memory contract" {
+@test "managed runner replaces an untrusted receipt echo with its frozen memory contract" {
     node "$STATE" create --workflow-type long_write --project-root "$PROJECT" --user-goal "继续写第一章" --scope "第1章" --json >/dev/null
     start_current_stage
     cat > "$TMP_DIR/stale-memory-host.js" <<'NODE'
@@ -135,7 +135,15 @@ NODE
 
     node "$RUNNER" once --project-root "$PROJECT" --adapter fake --fake-executable "$TMP_DIR/stale-memory-host.js" --json > "$TMP_DIR/stale-memory-out.json"
 
-    grep -q 'blocked_managed_memory_receipt_invalid' "$TMP_DIR/stale-memory-out.json"
+    grep -q '"status": "stage_applied"' "$TMP_DIR/stale-memory-out.json"
+    result="$(find "$PROJECT/追踪/workflow/tasks" -path '*result-history*' -name '*.result.json' | head -1)"
+    node - "$result" <<'NODE'
+const fs=require('fs');
+const packet=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const receipt=packet.memory_read_receipt||{};
+if(receipt.memory_revision==='sha256:stale') throw new Error(JSON.stringify(receipt));
+if(!receipt.stage_attempt_id||!receipt.work_unit_id) throw new Error(JSON.stringify(receipt));
+NODE
 }
 
 @test "setup workflow records an explicit no-fiction-memory decision" {
@@ -176,8 +184,8 @@ NODE
     grep -q 'accepted_memory_updates' "$PROJECT/追踪/workflow/tasks"/*/runner-events/memory-projection.jsonl
 }
 
-@test "private short routing metadata is quarantined instead of becoming story canon" {
-    node "$STATE" create --workflow-type short_write --project-root "$PROJECT" --user-goal "开始私有短篇写作" --json >/dev/null
+@test "managed writing runner quarantines routing metadata instead of making it story canon" {
+    node "$STATE" create --workflow-type long_write --project-root "$PROJECT" --user-goal "继续当前写作" --json >/dev/null
     start_current_stage
     cat > "$TMP_DIR/private-short-memory-host.js" <<'NODE'
 #!/usr/bin/env node

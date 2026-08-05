@@ -53,6 +53,25 @@ NODE
   [[ "$output" != *'poisoned-legacy'* ]]
 }
 
+@test "short project title resolver ignores polluted section labels and keeps valid fallbacks" {
+  run node - "$REPO/scripts/lib/short-project-state.js" "$BOOK" <<'NODE'
+const state = require(process.argv[2]);
+const root = process.argv[3];
+const results = {
+  working: state.resolveShortProjectTitle({ working_title: '测试短篇', project_title: '第7节' }, '目录回退'),
+  project: state.resolveShortProjectTitle({ project_title: '有效书名' }, '目录回退'),
+  fallback: state.resolveShortProjectTitle({ project_title: '第12节' }, '目录回退'),
+};
+const healed = state.ensureShortProjectState(root, { workflowId: 'wf-short', title: '第1节' });
+console.log(JSON.stringify({ results, healed: healed.project_title }));
+NODE
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"working":"测试短篇"'* ]]
+  [[ "$output" == *'"project":"有效书名"'* ]]
+  [[ "$output" == *'"fallback":"目录回退"'* ]]
+  [[ "$output" == *'"healed":"book"'* ]]
+}
+
 @test "short state migration command is part of the installable runtime bundle" {
   run node - "$REPO/config/novel-assistant-bundle-files.json" <<'NODE'
 const manifest = require(process.argv[2]);

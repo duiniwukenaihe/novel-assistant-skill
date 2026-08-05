@@ -10,6 +10,7 @@ setup() {
     output="$(node "$SCRIPT" --help)"
     echo "$output" | grep -q "Maintainer command facade"
     echo "$output" | grep -q "verify"
+    echo "$output" | grep -q "verify-v3-short"
     echo "$output" | grep -q "smoke"
     echo "$output" | grep -q "audit"
     echo "$output" | grep -q "bundle"
@@ -19,6 +20,13 @@ setup() {
     echo "$output" | grep -q "host-discovery"
     echo "$output" | grep -q "test-triage-evidence"
     echo "$output" | grep -q "zcode-test-triage"
+}
+
+@test "na-dev verify-v3-short covers every deterministic V3 suite through the selected Bats runner" {
+    grep -q "scripts/run-bats-tests.sh" "$SCRIPT"
+    for suite in contracts interaction engine new-project planning section-loop closure new-short-e2e; do
+        grep -q "test-workflow-v3-${suite}.bats" "$SCRIPT"
+    done
 }
 
 @test "na-dev local private install command forces private bundle and verifies overlay" {

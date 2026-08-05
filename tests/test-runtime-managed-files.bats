@@ -395,8 +395,32 @@ try {
 } catch (error) {
   rejected = /snapshot.*byte cap/i.test(error.message);
 }
+
 if (!rejected) process.exit(1);
 if (!fs.readFileSync(path.join(projectRoot, '.claude/hooks/managed.sh')).equals(initial)) process.exit(2);
 if (fs.existsSync(path.join(projectRoot, '追踪/runtime-snapshots'))) process.exit(3);
+NODE
+}
+
+@test "managed sync prunes older retained snapshots when cumulative bytes would block a safe upgrade" {
+    node - "$MANAGED" "$PROJECT" "$SOURCE" <<'NODE'
+const fs=require('fs'),path=require('path'),runtime=require(process.argv[2]);
+const projectRoot=process.argv[3],sourceRoot=process.argv[4],file=path.join(sourceRoot,'.claude/hooks/managed.sh');
+const payload=(char)=>Buffer.alloc(2*1024*1024,char);
+fs.writeFileSync(file,payload('a'));
+let plan=runtime.planManagedSync({projectRoot,sourceRoot,previousManifest:null,bundleId:'bytes-v1'});runtime.applyManagedSync(plan);
+let previous=JSON.parse(fs.readFileSync(path.join(projectRoot,'.story-runtime-managed.json'),'utf8'));
+const ids=[];
+for(const [version,char] of [[2,'b'],[3,'c'],[4,'d']]){
+  fs.writeFileSync(file,payload(char));
+  plan=runtime.planManagedSync({projectRoot,sourceRoot,previousManifest:previous,bundleId:`bytes-v${version}`});
+  const out=runtime.applyManagedSync(plan);if(out.status!=='synced'||!out.snapshotId)throw new Error(JSON.stringify(out));ids.push(out.snapshotId);
+  previous=JSON.parse(fs.readFileSync(path.join(projectRoot,'.story-runtime-managed.json'),'utf8'));
+}
+const snapshotRoot=path.join(projectRoot,'追踪/runtime-snapshots');
+const retained=fs.readdirSync(snapshotRoot).filter(name=>fs.existsSync(path.join(snapshotRoot,name,'manifest.json'))).sort();
+if(retained.length!==2||retained.includes(ids[0])||!retained.includes(ids[2]))throw new Error(JSON.stringify({ids,retained}));
+const rollback=runtime.rollbackManagedSync({projectRoot,snapshotId:ids[2]});if(rollback.status!=='rolled_back')throw new Error(JSON.stringify(rollback));
+if(!fs.readFileSync(path.join(projectRoot,'.claude/hooks/managed.sh')).equals(payload('c')))throw new Error('rollback did not restore previous managed bytes');
 NODE
 }

@@ -6,7 +6,7 @@
 
 - 只以当前工作目录为书籍根；不得向上查找父目录、书库目录或相邻书籍，不得把父目录或书库目录的 `.story-deployed` 当作当前书状态。`.story-deployed`、`.book-state.json`，或 `正文/`、`大纲/`、`设定/`、`追踪/` 中任意两个目录，均识别为写作项目；含 `CLAUDE.md` 的 legacy 目录同样成立。
 - 项目缺少 `.story-deployed` 时按 `status=not_deployed` 处理，不能因为未部署而跳过启动自检或读取章节状态。
-- 可执行环境允许时直接运行一条命令：`node <当前 skill 包>/scripts/novel-assistant-update-check.js <project-root> --json`。脚本从自身安装目录发现相邻 manifest；不得先 `cd` 到 skill 目录，不得追加 `&&`、管道、重定向、命令替换或 `|| true`。优先使用当前 skill 包中的脚本，项目脚本仅为 fallback。
+- 可执行环境允许时直接运行一条命令：`node <当前 skill 包>/scripts/novel-assistant-update-check.js <project-root> --user-intent "<本轮用户输入>" --write --json`。脚本从自身安装目录发现相邻 manifest，并把更新确认与原始意图写入当前书的 `追踪/workflow/update-environment-choice.json`；不得先 `cd` 到 skill 目录，不得追加 `&&`、管道、重定向、命令替换或 `|| true`。优先使用当前 skill 包中的脚本，项目脚本仅为 fallback。
 - 无法运行 `novel-assistant-update-check.js` 时，直接读取 `.story-deployed` 与 `novel-assistant-manifest.json` 比较 bundleId；不一致即为 `update_available`。启动自检不得把 Bash 权限确认作为第一屏：优先用 Read/LS，不得先用 Bash cat。
 
 ## 更新确认响应
@@ -31,6 +31,8 @@
 ```
 
 `确认/是/yes/y` 等同于 1，`不/否/no/n/later` 等同于 2；不得只输出“回复确认”。
+
+下一轮仍先调用同一更新检查命令，并只把当前回复放进 `--user-intent`。返回 `update_declined` 时，脚本必须从 durable `original_intent` 生成唯一 `entry_guard_command`；宿主逐字执行该命令，不得把当前数字 `2` 交给 workflow。返回 `update_confirmed` 时只执行脚本给出的 `execution_command`。更新确认没有 durable 绑定时不得显示菜单，避免跨轮数字被误记成章节反馈。
 
 ## 宿主选择器适配协议
 

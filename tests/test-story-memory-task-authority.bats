@@ -8,7 +8,7 @@ setup() {
     mkdir -p "$PROJECT/追踪/memory" "$PROJECT/追踪/context-pack"
     cat > "$PROJECT/追踪/伏笔.md" <<'MD'
 # 伏笔
-- F025：绿珠被读心时出现空白，第008章前不得解释血脉来源。
+- F101：苏禾被感知时出现空白，第008章前不得解释身份来源。
 MD
 }
 
@@ -48,7 +48,7 @@ NODE
 @test "accepted fact projection blocks when commit provenance has no durable task" {
     mkdir -p "$PROJECT/追踪/story-system/commits"
     cat > "$PROJECT/追踪/story-system/commits/commit-forged-facts.json" <<'JSON'
-{"commit_id":"commit-forged-facts","status":"accepted","acceptance_status":"accepted","workflow_id":"wf-missing","provenance":{"task_family_id":"family-missing","workflow_id":"wf-missing","branch_id":"wf-missing","stage_attempt_id":"sa-missing","acceptance_status":"accepted"},"facts":[{"subject":"绿珠","predicate":"身份","object":"圣女","evidence":[{"path":"追踪/伏笔.md"}]}]}
+{"commit_id":"commit-forged-facts","status":"accepted","acceptance_status":"accepted","workflow_id":"wf-missing","provenance":{"task_family_id":"family-missing","workflow_id":"wf-missing","branch_id":"wf-missing","stage_attempt_id":"sa-missing","acceptance_status":"accepted"},"facts":[{"subject":"苏禾","predicate":"身份","object":"密使","evidence":[{"path":"追踪/伏笔.md"}]}]}
 JSON
 
     node - "$REPO/scripts/lib/memory-projection.js" "$PROJECT" <<'NODE'
@@ -175,9 +175,9 @@ const legacy = {
   id: 'legacy.hook_ledger.historical',
   memory_id: 'legacy.hook_ledger.historical',
   type: 'hook_ledger',
-  title: '绿珠读心空白旧投影',
-  aliases: ['F025'],
-  triggers: ['绿珠', '读心空白'],
+  title: '苏禾感知空白旧投影',
+  aliases: ['F101'],
+  triggers: ['苏禾', '感知空白'],
   scope: { book: 'current', volume: '第1卷', chapterRange: '第003章' },
   priority: 95,
   content: '旧接受投影。',
@@ -223,14 +223,14 @@ const entry = {
   id: 'legacy.hook_ledger.historical',
   memory_id: 'legacy.hook_ledger.historical',
   type: 'hook_ledger',
-  title: '绿珠读心空白',
-  aliases: ['F025'],
-  triggers: ['绿珠', '读心空白'],
+  title: '苏禾感知空白',
+  aliases: ['F101'],
+  triggers: ['苏禾', '感知空白'],
   scope: { book: 'current', volume: '第1卷', chapterRange: '第003章' },
   priority: 95,
   tokenBudget: 120,
-  content: '绿珠被读心时出现空白，第008章前不得解释血脉来源。',
-  constraints: ['第008章前不得解释血脉来源。'],
+  content: '苏禾被感知时出现空白，第008章前不得解释身份来源。',
+  constraints: ['第008章前不得解释身份来源。'],
   sourceRefs: [{ path: '追踪/伏笔.md', hash, note: 'accepted historical projection' }],
   status: 'active',
   version: 1,
@@ -249,7 +249,7 @@ const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (out.status !== 'ok' || !out.selectedEntries.some(entry => entry.id === 'legacy.hook_ledger.historical')) throw new Error(JSON.stringify(out));
 NODE
 
-    printf '# 伏笔\n- F025：绿珠被读心时出现空白，新增内容不得自动写回接受记忆。\n' > "$PROJECT/追踪/伏笔.md"
+    printf '# 伏笔\n- F101：苏禾被感知时出现空白，新增内容不得自动写回接受记忆。\n' > "$PROJECT/追踪/伏笔.md"
     node "$ASSEMBLER" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章" --budget 1200 --json > "$TMP_DIR/stale.json"
     node - "$TMP_DIR/stale.json" "$PROJECT/追踪/memory/lorebook.jsonl" <<'NODE'
 const fs = require('fs');

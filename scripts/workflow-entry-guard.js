@@ -3,6 +3,7 @@
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { acquireProjectLock, atomicWriteJson } = require('./lib/workflow-state-store');
 const { mutateTaskAuthority, readFocusedTask } = require('./lib/workflow-task-authority');
@@ -16,16 +17,10 @@ const { resolveAuthoritativeStatus } = require('./workflow-state-validate');
 const { buildInbox, writeInbox } = require('./workflow-task-inbox');
 const { resolveSessionId: resolveSessionIdFromModule } = require('./workflow-session-id');
 const { previewMigration } = require('./task-family-migrate');
+const { normalizeLegacyTaskAuthority } = require('./legacy-task-authority-recover');
+const workflowV3Compatibility = require('./lib/workflow-v3/compatibility-gateway');
 
 const SCHEMA_VERSION = '1.0.0';
-const SHORT_WORKFLOW_CONTRACT_VERSION = 3;
-const SHORT_WHOLE_STORY_STAGES = new Set([
-  'startup_scan', 'startup_menu', 'freshness_window', 'info_source_pool', 'short_review',
-  'info_source_selection', 'material_learning', 'project_seed', 'short_setting', 'platform_genre_lock',
-  'rhythm_pattern_selection', 'section_outline', 'section_plan_lock',
-  'short_structure_impact_audit', 'hook_retention_gate',
-  'full_story_assembly', 'full_story_review', 'short_deslop', 'final_check',
-]);
 const USAGE = `Usage: node workflow-entry-guard.js --project-root <book-dir> [--visible-draft FILE] [--user-intent TEXT] [--session-id ID] [--takeover-session --confirm] [--write] [--compact] [--json]
 
 Runs the mandatory startup guard for novel-assistant runners:
@@ -226,6 +221,408 @@ function runTaskInbox(projectRoot, write) {
   }
 }
 
+function isV3ShortTask(task) {
+  return String((task || {}).workflow_type || '') === 'short_write'
+    && Number((task || {}).engine_version) === 3
+    && Number((task || {}).task_schema_version) === 3
+    && Number((task || {}).workflow_contract_version) === 3;
+}
+
+function runV3Show(projectRoot, workflowId) {
+  const child = runNode('workflow-v3.js', [
+    'show',
+    '--project-root', projectRoot,
+    '--workflow-id', workflowId,
+    '--json',
+  ]);
+  const output = parseJson(child.stdout, {
+    ok: false,
+    error: child.error || child.stderr || 'workflow-v3 show returned invalid JSON',
+  });
+  return { exit_code: child.status, result: output };
+}
+
+function runV3DescribeStage(projectRoot, workflowId) {
+  const child = runNode('workflow-v3.js', [
+    'describe-stage',
+    '--project-root', projectRoot,
+    '--workflow-id', workflowId,
+    '--json',
+  ]);
+  const output = parseJson(child.stdout, {
+    ok: false,
+    error: child.error || child.stderr || 'workflow-v3 describe-stage returned invalid JSON',
+  });
+  return { exit_code: child.status, result: output };
+}
+
+function readPreviouslyDisplayedV3Binding(projectRoot, workflowId, sessionId) {
+  const reportFile = path.join(projectRoot, '追踪', 'workflow', 'entry-guard.json');
+  try {
+    const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+    const binding = ((report.visible_response || {}).binding) || null;
+    if (!['v3_task_ready', 'blocked_v3_binding_resolution'].includes(String(report.status || ''))
+        || String(((report.session || {}).session_id) || '') !== String(sessionId || '')
+        || !binding
+        || String(binding.workflow_id || '') !== String(workflowId || '')) return null;
+    const keys = Object.keys(binding).sort();
+    const expected = ['pending_action_id', 'state_version', 'visible_choice_hash', 'workflow_id'];
+    if (JSON.stringify(keys) !== JSON.stringify(expected)) return null;
+    return binding;
+  } catch (_) {
+    return null;
+  }
+}
+
+function runV3Resolve(projectRoot, workflowId, binding, choice) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-assistant-v3-resolve-'));
+  const inputFile = path.join(tempDir, 'input.json');
+  try {
+    fs.writeFileSync(inputFile, `${JSON.stringify({ ...binding, choice })}\n`);
+    const child = runNode('workflow-v3.js', [
+      'resolve',
+      '--project-root', projectRoot,
+      '--workflow-id', workflowId,
+      '--expected-version', String(binding.state_version),
+      '--input-file', inputFile,
+      '--json',
+    ]);
+    const output = parseJson(child.stdout, {
+      ok: false,
+      error: child.error || child.stderr || 'workflow-v3 resolve returned invalid JSON',
+    });
+    return { exit_code: child.status, result: output };
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function runV3SubmitFeedback(projectRoot, workflowId, stateVersion, feedbackText) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-assistant-v3-feedback-'));
+  const inputFile = path.join(tempDir, 'input.json');
+  try {
+    fs.writeFileSync(inputFile, `${JSON.stringify({ text: feedbackText })}\n`);
+    const child = runNode('workflow-v3.js', [
+      'submit-feedback',
+      '--project-root', projectRoot,
+      '--workflow-id', workflowId,
+      '--expected-version', String(stateVersion),
+      '--input-file', inputFile,
+      '--json',
+    ]);
+    const output = parseJson(child.stdout, {
+      ok: false,
+      error: child.error || child.stderr || 'workflow-v3 submit-feedback returned invalid JSON',
+    });
+    return { exit_code: child.status, result: output };
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function isDisplayedV3Choice(task, userIntent) {
+  return Boolean(displayedV3ChoiceNumber(task, userIntent));
+}
+
+function displayedV3ChoiceNumber(task, userIntent) {
+  const value = String(userIntent || '').trim();
+  const options = (((task || {}).pending_action || {}).options) || [];
+  if (/^\d+$/.test(value)) {
+    const number = Number(value);
+    return Number.isInteger(number) && number >= 1 && number <= options.length ? String(number) : '';
+  }
+  const option = options.find((item) => String((item || {}).label || '').trim() === value);
+  return option ? String(option.number || options.indexOf(option) + 1) : '';
+}
+
+function isV3FreeTextFeedback(userIntent) {
+  const value = String(userIntent || '').trim();
+  if (!value || /^\d+$/.test(value)) return false;
+  if (/^(?:继续(?:下一步|当前(?:任务|阶段|子任务))?|下一步|恢复|查看当前进度(?:与依据)?|暂停(?:并保存断点)?|输入其他要求)$/u.test(value)) {
+    return false;
+  }
+  return true;
+}
+
+function isAcceptedV3PlanExecutionIntent(task, userIntent) {
+  if (String((((task || {}).pending_feedback || {}).status) || '') !== 'accepted') return false;
+  const value = String(userIntent || '').trim();
+  if (!value) return false;
+  if (value === 'apply_accepted_v3_feedback_plan') return true;
+  return /(?:执行|应用|落实|落盘|回写|完成|推进|继续|恢复)(?:[^。；;\n]{0,24})(?:已|已经)(?:接受|采用|确认)(?:[^。；;\n]{0,12})(?:方案|计划)/u.test(value);
+}
+
+function isV3StageResumeIntent(userIntent) {
+  return String(userIntent || '').trim() === '查看当前进度';
+}
+
+// V3 tasks bypass the V2 supervisor, reconciliation and menu builders. The
+// compatibility gateway first proves that the focused task is a current V3
+// authority; workflow-v3 show then supplies the only author-visible envelope.
+function buildV3EntryReport(args, rootResolution) {
+  const projectRoot = rootResolution.book_root;
+  const session = resolveSessionId(args);
+  const focused = readFocusedTask(projectRoot);
+  const task = focused.authority.status === 'ok' ? focused.authority.task : null;
+  if (!isV3ShortTask(task)) return null;
+
+  const compatibility = workflowV3Compatibility.inspectCompatibility(projectRoot);
+  if (compatibility.status !== 'current') {
+    return {
+      exitCode: 2,
+      report: {
+        schemaVersion: SCHEMA_VERSION,
+        status: 'blocked_v3_compatibility_check',
+        recommended_next: 'repair_v3_task_authority',
+        project_root: projectRoot,
+        session,
+        workflow_id: String(task.workflow_id || ''),
+        compatibility,
+        visible_response: null,
+      },
+    };
+  }
+
+  const workflowId = String(task.workflow_id || '');
+
+  // A bare entry (no --user-intent) must always land
+  // on the global task inbox, even when the focused V3 task has a pending
+  // author interaction or a pending feedback lifecycle state. This is the
+  // typical author startup view: it never leaks chapter/Brief stage wording
+  // and keeps the global four-item menu as the single startup surface. The V3
+  // interaction stays reachable behind option 1 (查看未完成任务).
+  //
+  // --write only controls durable metadata. It must not change the first screen.
+  if (!String(args.userIntent || '').trim()) {
+    const taskInbox = runTaskInbox(projectRoot, args.write);
+    const outputGate = runVisibleOutputGate(args.visibleDraft ? path.resolve(args.visibleDraft) : '');
+    const outputBlocked = outputGate.result.status === 'blocked_output_pollution';
+    const report = {
+      schemaVersion: SCHEMA_VERSION,
+      status: outputBlocked ? 'blocked_output_pollution' : 'task_inbox_ready',
+      workflow_id: workflowId,
+      recommended_action: outputBlocked ? 'blocked_recovery_template' : 'show_task_inbox_only',
+      next_action: outputBlocked ? 'blocked_recovery_template' : 'show_task_inbox_only',
+      recommended_next: outputBlocked ? 'blocked_recovery_template' : 'show_task_inbox_only',
+      project_root: projectRoot,
+      session,
+      root_resolution: rootResolution,
+      compatibility,
+      state_validation: {
+        status: 'v3_authority_current',
+        workflow_id: workflowId,
+        current_stage: String(task.current_stage || ''),
+      },
+      task_inbox: taskInbox.result,
+      output_gate: outputGate.result,
+      runner_contract: {
+        order: ['compatibility-gateway', 'workflow-task-inbox', 'output-pollution-check'],
+        business_routing_allowed: false,
+        show_task_inbox_only: !outputBlocked,
+        metadata_only: true,
+        v3_visible_authority: 'workflow-v3-show',
+      },
+      // Global four-item entry menu only; the V3 interaction stays behind
+      // option 1 (查看未完成任务) until the author supplies an intent.
+      visible_response: outputBlocked
+        ? null
+        : buildVisibleMenu('task_inbox_ready', taskInbox.result, '', projectRoot),
+    };
+    if (args.write) writeReport(projectRoot, report);
+    return { exitCode: outputBlocked ? 2 : 0, report };
+  }
+
+  let shown = runV3Show(projectRoot, workflowId);
+  if (shown.exit_code !== 0 || shown.result.ok !== true) {
+    return {
+      exitCode: 2,
+      report: {
+        schemaVersion: SCHEMA_VERSION,
+        status: 'blocked_v3_show',
+        recommended_next: 'repair_v3_task_authority',
+        project_root: projectRoot,
+        session,
+        workflow_id: String(task.workflow_id || ''),
+        compatibility,
+        v3_show: shown.result,
+        visible_response: null,
+      },
+    };
+  }
+
+  let v3Resolution = null;
+  let v3FeedbackReceipt = null;
+  if (args.write
+      && isV3FreeTextFeedback(args.userIntent)
+      && !isDisplayedV3Choice(shown.result.task, args.userIntent)
+      && !isAcceptedV3PlanExecutionIntent(shown.result.task, args.userIntent)) {
+    const submitted = runV3SubmitFeedback(
+      projectRoot,
+      workflowId,
+      Number((shown.result.task || {}).state_version),
+      String(args.userIntent),
+    );
+    if (submitted.exit_code !== 0 || submitted.result.ok !== true) {
+      return {
+        exitCode: 2,
+        report: {
+          schemaVersion: SCHEMA_VERSION,
+          status: 'blocked_v3_feedback_submission',
+          recommended_next: 'show_current_v3_checkpoint',
+          project_root: projectRoot,
+          session,
+          workflow_id: workflowId,
+          compatibility,
+          v3_feedback: submitted.result,
+          visible_response: shown.result.interaction,
+        },
+      };
+    }
+    v3FeedbackReceipt = submitted.result.feedback_receipt || null;
+    shown = runV3Show(projectRoot, workflowId);
+    if (shown.exit_code !== 0 || shown.result.ok !== true) {
+      return {
+        exitCode: 2,
+        report: {
+          schemaVersion: SCHEMA_VERSION,
+          status: 'blocked_v3_show_after_feedback',
+          recommended_next: 'repair_v3_task_authority',
+          project_root: projectRoot,
+          session,
+          workflow_id: workflowId,
+          compatibility,
+          feedback_receipt: v3FeedbackReceipt,
+          visible_response: null,
+        },
+      };
+    }
+  } else if (args.write && shown.result.interaction && isDisplayedV3Choice(shown.result.task, args.userIntent)) {
+    const displayedBinding = readPreviouslyDisplayedV3Binding(projectRoot, workflowId, session.session_id);
+    if (displayedBinding) {
+      const resolved = runV3Resolve(
+        projectRoot,
+        workflowId,
+        displayedBinding,
+        displayedV3ChoiceNumber(shown.result.task, args.userIntent),
+      );
+      if (resolved.exit_code !== 0 || resolved.result.ok !== true) {
+        const refreshed = runV3Show(projectRoot, workflowId);
+        const currentInteraction = refreshed.exit_code === 0 && refreshed.result.ok === true
+          ? refreshed.result.interaction
+          : shown.result.interaction;
+        const blockedReport = {
+          schemaVersion: SCHEMA_VERSION,
+          status: 'blocked_v3_binding_resolution',
+          recommended_next: 'show_current_v3_interaction',
+          project_root: projectRoot,
+          session,
+          workflow_id: workflowId,
+          compatibility,
+          v3_resolution: resolved.result,
+          // Refresh the durable displayed binding so the author's next reply
+          // targets this current menu instead of retrying the stale one.
+          visible_response: currentInteraction,
+        };
+        writeReport(projectRoot, blockedReport);
+        return {
+          exitCode: 2,
+          report: blockedReport,
+        };
+      }
+      v3Resolution = resolved.result.selection || null;
+      shown = runV3Show(projectRoot, workflowId);
+      if (shown.exit_code !== 0 || shown.result.ok !== true) {
+        return {
+          exitCode: 2,
+          report: {
+            schemaVersion: SCHEMA_VERSION,
+            status: 'blocked_v3_show_after_resolution',
+            recommended_next: 'repair_v3_task_authority',
+            project_root: projectRoot,
+            session,
+            workflow_id: workflowId,
+            compatibility,
+            v3_show: shown.result,
+            visible_response: null,
+          },
+        };
+      }
+    }
+  }
+
+  const taskInbox = runTaskInbox(projectRoot, args.write);
+  const outputGate = runVisibleOutputGate(args.visibleDraft ? path.resolve(args.visibleDraft) : '');
+  const outputBlocked = outputGate.result.status === 'blocked_output_pollution';
+  const durableFeedback = (shown.result.task || {}).pending_feedback || null;
+  const feedbackStatus = String((durableFeedback || {}).status || '');
+  const feedbackState = v3FeedbackReceipt
+    ? { status: 'v3_feedback_recorded', next: 'analyze_v3_feedback' }
+    : !shown.result.interaction && feedbackStatus === 'pending_analysis'
+      ? { status: 'v3_feedback_pending_analysis', next: 'analyze_v3_feedback' }
+      : !shown.result.interaction && feedbackStatus === 'evidence_requested'
+        ? { status: 'v3_feedback_evidence_requested', next: 'show_v3_feedback_evidence' }
+        : !shown.result.interaction && feedbackStatus === 'accepted'
+          ? { status: 'v3_feedback_plan_accepted', next: 'apply_accepted_v3_feedback_plan' }
+          : !shown.result.interaction && feedbackStatus === 'paused'
+            ? { status: 'v3_feedback_paused', next: 'keep_v3_feedback_checkpoint' }
+            : null;
+  const acceptedStage = feedbackState && feedbackState.status === 'v3_feedback_plan_accepted'
+    ? runV3DescribeStage(projectRoot, workflowId)
+    : null;
+  const acceptedStageExecution = acceptedStage
+    && acceptedStage.exit_code === 0
+    && acceptedStage.result.ok === true
+    ? acceptedStage.result.stage_execution
+    : null;
+  const resumedStage = !shown.result.interaction && !feedbackState && isV3StageResumeIntent(args.userIntent)
+    ? runV3DescribeStage(projectRoot, workflowId)
+    : null;
+  const resumedStageExecution = resumedStage
+    && resumedStage.exit_code === 0
+    && resumedStage.result.ok === true
+    ? resumedStage.result.stage_execution
+    : null;
+  const stageExecution = acceptedStageExecution || resumedStageExecution;
+  const report = {
+    schemaVersion: SCHEMA_VERSION,
+    status: outputBlocked ? 'blocked_output_pollution' : feedbackState ? feedbackState.status : 'v3_task_ready',
+    workflow_id: String(task.workflow_id || ''),
+    recommended_action: feedbackState ? feedbackState.next : shown.result.interaction ? 'consume_v3_committed_binding' : stageExecution ? 'resume_current_v3_stage' : 'resume_unique_v3_checkpoint',
+    next_action: feedbackState ? feedbackState.next : shown.result.interaction ? 'consume_v3_committed_binding' : stageExecution ? 'resume_current_v3_stage' : 'resume_unique_v3_checkpoint',
+    recommended_next: feedbackState ? feedbackState.next : shown.result.interaction ? 'consume_v3_committed_binding' : stageExecution ? 'resume_current_v3_stage' : 'resume_unique_v3_checkpoint',
+    project_root: projectRoot,
+    session,
+    root_resolution: rootResolution,
+    compatibility,
+    state_validation: {
+      status: 'v3_authority_current',
+      workflow_id: String(task.workflow_id || ''),
+      current_stage: String(task.current_stage || ''),
+    },
+    task_inbox: taskInbox.result,
+    output_gate: outputGate.result,
+    v3_show: shown.result,
+    v3_resolution: v3Resolution,
+    feedback_receipt: v3FeedbackReceipt,
+    ...(stageExecution ? {
+      presentation_allowed: false,
+      stage_execution: stageExecution,
+    } : {}),
+    runner_contract: {
+      order: ['compatibility-gateway', 'workflow-v3-show', 'workflow-task-inbox', 'output-pollution-check'],
+      business_routing_allowed: !outputBlocked && !shown.result.interaction && !feedbackState && !stageExecution,
+      show_task_inbox_only: false,
+      metadata_only: true,
+      v3_visible_authority: 'workflow-v3-show',
+    },
+    // Do not wrap, copy or rebuild this object: it is the exact envelope from
+    // renderCommittedInteraction via workflow-v3 show.
+    visible_response: outputBlocked || feedbackState ? null : shown.result.interaction,
+  };
+  if (args.write) writeReport(projectRoot, report);
+  return { exitCode: outputBlocked ? 2 : 0, report };
+}
+
 function previewTaskFamilyMigration(projectRoot) {
   const deployedFile = path.join(projectRoot, '.story-deployed');
   let raw = '';
@@ -258,33 +655,31 @@ function currentWorkflowId(projectRoot) {
 }
 
 function previewShortWorkflowMigration(projectRoot) {
-  const focused = readFocusedTask(projectRoot);
-  if (focused.authority.status !== 'ok') return { status: 'not_applicable', required: false };
-  const task = focused.authority.task;
-  if (!isShortWorkflowType(task.workflow_type)) {
-    return { status: 'not_applicable', required: false };
+  const compatibility = workflowV3Compatibility.inspectCompatibility(projectRoot);
+  if (compatibility.status === 'current') {
+    return { ...compatibility, required: false, safe_auto_migrate: false };
   }
-  const currentStage = String(task.current_stage || '');
-  const expectedScope = SHORT_WHOLE_STORY_STAGES.has(currentStage) ? '全篇' : String(task.scope || '');
-  const scopeCurrent = !SHORT_WHOLE_STORY_STAGES.has(currentStage) || String(task.scope || '') === '全篇';
-  const executionScopeCurrent = !task.stage_execution
-    || !String((task.stage_execution || {}).work_unit_scope || '')
-    || String((task.stage_execution || {}).work_unit_scope || '') === expectedScope;
-  if (Number(task.workflow_contract_version || 0) >= SHORT_WORKFLOW_CONTRACT_VERSION && scopeCurrent && executionScopeCurrent) {
-    return { status: 'current', required: false, workflow_id: String(task.workflow_id || '') };
+  if (compatibility.status === 'safe_auto_upgrade') {
+    return {
+      ...compatibility,
+      status: 'short_workflow_migration_pending',
+      compatibility_status: 'safe_auto_upgrade',
+      required: true,
+      safe_auto_migrate: true,
+      creative_assets_modified: false,
+    };
   }
-  return {
-    status: 'short_workflow_migration_pending',
-    required: true,
-    safe_auto_migrate: currentStage !== 'section_candidate_compare',
-    workflow_id: String(task.workflow_id || ''),
-    workflow_contract_from: Number(task.workflow_contract_version || 0),
-    workflow_contract_to: SHORT_WORKFLOW_CONTRACT_VERSION,
-    current_stage: currentStage,
-    current_scope: String(task.scope || ''),
-    expected_scope: expectedScope,
-    creative_assets_modified: false,
-  };
+  if (compatibility.status === 'preview_required') {
+    return {
+      ...compatibility,
+      status: 'short_workflow_migration_pending',
+      compatibility_status: 'preview_required',
+      required: true,
+      safe_auto_migrate: false,
+      creative_assets_modified: false,
+    };
+  }
+  return { ...compatibility, status: 'not_applicable', required: false, safe_auto_migrate: false };
 }
 
 function autoMigrateShortWorkflow(projectRoot, migration) {
@@ -307,7 +702,9 @@ function autoMigrateShortWorkflow(projectRoot, migration) {
   });
   return {
     ...parsed,
-    migrated: result.status === 0 && parsed.status === 'short_lean_workflow_migrated',
+    migrated: result.status === 0
+      && parsed.status === 'v3_migration_applied'
+      && parsed.migrated !== false,
   };
 }
 
@@ -676,6 +1073,80 @@ function hasDurableWorkflowTask(projectRoot) {
   }
 }
 
+// Write-policy gate helpers (Task 3): legacy longform projects without a
+// strict write policy must complete the strict write-policy migration before
+// any task-authority or business routing decision is made. The strict_current
+// condition is intentionally aligned with book-write-policy-migrate.js
+// hasTransactionLedgers — policy mode=strict AND all four transaction ledgers
+// on disk — so the gate cannot declare "strict_current" without the same
+// evidence the migrator uses to apply the migration. Drift between these two
+// checks would silently leak legacy routing past the gate.
+function isStrictWritePolicyCurrent(projectRoot) {
+  const policyFile = path.join(projectRoot, '追踪', 'story-system', 'write-policy.json');
+  if (!fs.existsSync(policyFile)) return false;
+  let policy;
+  try {
+    policy = JSON.parse(fs.readFileSync(policyFile, 'utf8'));
+  } catch (_) {
+    return false;
+  }
+  if (!policy || String(policy.mode || '') !== 'strict') return false;
+  const storySystem = path.join(projectRoot, '追踪', 'story-system');
+  return fs.existsSync(path.join(storySystem, 'transactions'))
+    && fs.existsSync(path.join(storySystem, 'commits'))
+    && fs.existsSync(path.join(storySystem, 'projection-log.jsonl'))
+    && fs.existsSync(path.join(storySystem, 'chapter-identities.json'));
+}
+
+// classifyCurrentTaskPointer inspects 追踪/workflow/current-task.json and
+// returns a structured descriptor so Gate 2 can choose the correct
+// downstream shape:
+//   { kind: 'absent' }                      — file is missing; downstream keeps the
+//                                              normal authority path.
+//   { kind: 'current', workflow_id }        — file carries a workflow_id; existing
+//                                              authority owns it, no legacy gate.
+//   { kind: 'recognized_legacy', task_id,
+//     task_type }                           — safe legacy task_id note or the strict
+//                                              type=outline_backfill allowlist shape;
+//                                              primary option must offer the recovery
+//                                              adapter command.
+//   { kind: 'malformed_unrecognized',
+//     reason }                              — file exists, no workflow_id, but the
+//                                              body is unusable (parse error, not an
+//                                              object, missing/unsafe task_id, or
+//                                              unknown shape). Only a read-only /
+//                                              semantic menu is allowed — no mutation
+//                                              command, no repair_runtime_guard, no
+//                                              legacy-task-authority-recover.
+// Anything else (current durable path) is intentionally absent from this
+// classifier so it falls through to the existing authority pipeline.
+function classifyCurrentTaskPointer(projectRoot) {
+  const focusPath = path.join(projectRoot, '追踪', 'workflow', 'current-task.json');
+  if (!fs.existsSync(focusPath)) return { kind: 'absent', focus_path: focusPath };
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(focusPath, 'utf8'));
+  } catch (error) {
+    return { kind: 'malformed_unrecognized', focus_path: focusPath, reason: `current-task.json 不是合法 JSON：${error.message}` };
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { kind: 'malformed_unrecognized', focus_path: focusPath, reason: 'current-task.json 不是 JSON 对象，无法作为任务权威。' };
+  }
+  if (String(raw.workflow_id || '')) {
+    return { kind: 'current', focus_path: focusPath, workflow_id: String(raw.workflow_id) };
+  }
+  const normalized = normalizeLegacyTaskAuthority(raw);
+  if (!normalized.ok) {
+    return { kind: 'malformed_unrecognized', focus_path: focusPath, reason: normalized.reason };
+  }
+  return {
+    kind: 'recognized_legacy',
+    focus_path: focusPath,
+    task_id: normalized.task_id,
+    task_type: normalized.task_type,
+  };
+}
+
 function isInitializedWritingProject(projectRoot) {
   // Runtime metadata is deliberately excluded: the entry guard writes it even
   // for a blank directory, so it cannot be evidence of an existing book.
@@ -748,6 +1219,182 @@ function taskActionResolutionMetadata(taskInbox) {
     })),
   })).filter((item) => item.action_resolution);
   return tasks.length ? { transport: 'structured_metadata', tasks } : null;
+}
+
+function buildWritePolicyMigrationVisibleResponse(projectRoot, intent) {
+  const resumeIntent = String(intent || '').trim();
+  const previewCommand = `node scripts/book-write-policy-migrate.js preview --project-root . --resume-intent ${shellQuote(resumeIntent)} --json`;
+  const previewOption = numberedOption(
+    1,
+    '查看写入策略迁移预览',
+    'preview_write_policy_migration',
+    resumeIntent
+      ? `使用原意图 ${resumeIntent} 生成本次写入策略迁移预览。`
+      : '生成本次写入策略迁移预览，不写入任何内容。',
+    true,
+  );
+  previewOption.interaction_mode = 'execute_command';
+  previewOption.execution_workdir = '.';
+  previewOption.execution_command = previewCommand;
+  const inboxOption = numberedOption(
+    2,
+    '查看当前任务收件箱',
+    'show_task_inbox',
+    '只读查看现有任务与可信断点，不推进、不写入。',
+  );
+  inboxOption.interaction_mode = 'execute_command';
+  inboxOption.execution_workdir = '.';
+  inboxOption.execution_command = 'node scripts/workflow-task-inbox.js --project-root . --action show_unfinished_tasks --json';
+  const pauseOption = numberedOption(3, '暂停并保存断点', 'pause', '保持当前文件状态，稍后再处理写入策略迁移。');
+  const freeTextOption = numberedOption(4, '输入其他要求', 'free_text', '说明要切换的目标、调整原意图或补充偏好。');
+  const options = [previewOption, inboxOption, pauseOption, freeTextOption];
+  const intro = '检测到当前书籍尚未启用严格写入策略：必须先完成写入策略预览/确认/应用，再继续原任务。';
+  return {
+    render_mode: 'text_numbers',
+    status: 'write_policy_migration_required',
+    selection_contract: 'execute_command_or_route_intent',
+    free_text_enabled: true,
+    intro,
+    options,
+    text: `${intro}\n\n${options.map((option) => option.display).join('\n')}\n\n回复数字选择。`,
+  };
+}
+
+// Task 3 / Fixture B: after the strict write policy is current, a legacy
+// `task_id` / `task_type` note with no workflow_id is the next gate. We
+// MUST offer the legacy recovery adapter command (primary option,
+// execute_command). We MUST NOT downgrade this to repair_runtime_guard.
+// The malformed_unrecognized branch intentionally produces a smaller menu
+// with only read-only / semantic options; no mutation command is allowed
+// because we cannot safely target an unknown shape.
+function buildLegacyTaskAuthorityRecoveryVisibleResponse(legacyNote, intent, projectRoot) {
+  const resumeIntent = String(intent || '').trim();
+  if (!legacyNote || legacyNote.kind === 'malformed_unrecognized') {
+    const reason = String((legacyNote || {}).reason || 'current-task.json 无法识别为旧任务权威。');
+    const inboxOption = numberedOption(
+      1,
+      '查看当前任务收件箱',
+      'show_task_inbox',
+      '只读查看现有任务与可信断点，不推进、不写入。',
+    );
+    inboxOption.interaction_mode = 'execute_command';
+    inboxOption.execution_workdir = '.';
+    inboxOption.execution_command = 'node scripts/workflow-task-inbox.js --project-root . --action show_unfinished_tasks --json';
+    const pauseOption = numberedOption(2, '暂停并保存断点', 'pause', '保留当前文件状态，稍后由人工确认后再处理。');
+    const freeTextOption = numberedOption(3, '输入其他要求', 'free_text', '补充上下文、说明要切换的目标或要求人工接管。');
+    const options = [inboxOption, pauseOption, freeTextOption];
+    const intro = `检测到 current-task.json 但无法识别为旧任务权威：${reason}请先人工确认，不在此处继续写入。`;
+    return {
+      render_mode: 'text_numbers',
+      status: 'blocked_task_authority_missing',
+      selection_contract: 'route_intent_or_free_text',
+      free_text_enabled: true,
+      intro,
+      options,
+      text: `${intro}\n\n${options.map((option) => option.display).join('\n')}\n\n回复数字选择或直接说明你的要求。`,
+    };
+  }
+  const previewCommand = `node scripts/legacy-task-authority-recover.js preview --project-root . --resume-intent ${shellQuote(resumeIntent)} --json`;
+  const recoverOption = numberedOption(
+    1,
+    '恢复旧任务权威',
+    'recover_legacy_task_authority',
+    resumeIntent
+      ? `使用原意图 ${resumeIntent} 预览旧任务权威恢复，确认后由状态机接管。`
+      : '预览旧任务权威恢复，确认后由状态机接管。',
+    true,
+  );
+  recoverOption.interaction_mode = 'execute_command';
+  recoverOption.execution_workdir = '.';
+  recoverOption.execution_command = previewCommand;
+  const inboxOption = numberedOption(
+    2,
+    '查看当前任务收件箱',
+    'show_task_inbox',
+    '只读查看现有任务与可信断点，不推进、不写入。',
+  );
+  inboxOption.interaction_mode = 'execute_command';
+  inboxOption.execution_workdir = '.';
+  inboxOption.execution_command = 'node scripts/workflow-task-inbox.js --project-root . --action show_unfinished_tasks --json';
+  const pauseOption = numberedOption(3, '暂停并保存断点', 'pause', '保留旧任务记录与当前目录，稍后再处理任务权威恢复。');
+  const freeTextOption = numberedOption(4, '输入其他要求', 'free_text', '调整原任务的目的、范围或目标，重新生成恢复预览。');
+  const options = [recoverOption, inboxOption, pauseOption, freeTextOption];
+  const intro = `检测到旧任务权威（task_id=${legacyNote.task_id}）。下一步先完成预览/确认/应用，再继续原任务。`;
+  return {
+    render_mode: 'text_numbers',
+    status: 'blocked_task_authority_missing',
+    selection_contract: 'execute_command_or_route_intent',
+    free_text_enabled: true,
+    intro,
+    options,
+    text: `${intro}\n\n${options.map((option) => option.display).join('\n')}\n\n回复数字选择。`,
+  };
+}
+
+function buildWritePolicyMigrationReport(projectRoot, intent, session) {
+  const visible = buildWritePolicyMigrationVisibleResponse(projectRoot, intent);
+  const report = {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'write_policy_migration_required',
+    recommended_action: 'preview_or_confirm_write_policy_migration',
+    next_action: 'preview_or_confirm_write_policy_migration',
+    recommended_next: 'preview_or_confirm_write_policy_migration',
+    project_root: projectRoot,
+    session,
+    supervisor: { status: 'skipped_pre_write_policy_migration' },
+    state_validation: { status: 'skipped_pre_write_policy_migration', reason_code: 'write_policy_migration_required' },
+    task_inbox: { status: 'skipped_pre_write_policy_migration' },
+    task_family_migration: { status: 'skipped_pre_write_policy_migration', pending_task_count: 0 },
+    short_workflow_migration: { status: 'not_applicable', required: false, safe_auto_migrate: false },
+    short_workflow_auto_migration: { status: 'skipped_pre_write_policy_migration', migrated: false },
+    output_gate: { status: 'skipped_no_visible_draft' },
+    auto_repair: { repaired: false },
+    runtime_reconciliation: { status: 'skipped_pre_write_policy_migration' },
+    runner_contract: {
+      order: ['write-policy-migration-preview'],
+      business_routing_allowed: false,
+      show_task_inbox_only: false,
+      metadata_only: true,
+    },
+    visible_response: visible,
+    legacy_status: { status: 'write_policy_migration_required' },
+  };
+  return { exitCode: 0, report };
+}
+
+function buildLegacyTaskAuthorityReport(projectRoot, legacyNote, intent, session) {
+  const visible = buildLegacyTaskAuthorityRecoveryVisibleResponse(legacyNote, intent, projectRoot);
+  const isMalformed = !legacyNote || legacyNote.kind === 'malformed_unrecognized';
+  const recommendedAction = isMalformed ? 'inspect_unrecognized_task_pointer' : 'recover_legacy_task_authority';
+  const report = {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'blocked_task_authority_missing',
+    recommended_action: recommendedAction,
+    next_action: recommendedAction,
+    recommended_next: recommendedAction,
+    project_root: projectRoot,
+    session,
+    supervisor: { status: 'blocked', recommended_action: recommendedAction, reason_code: 'task_authority_missing' },
+    state_validation: { status: 'blocked', recommended_action: recommendedAction, reason_code: 'task_authority_missing' },
+    task_inbox: { status: 'blocked_task_authority_missing' },
+    task_family_migration: { status: 'skipped_pre_authority_recovery', pending_task_count: 0 },
+    short_workflow_migration: { status: 'not_applicable', required: false, safe_auto_migrate: false },
+    short_workflow_auto_migration: { status: 'skipped_pre_authority_recovery', migrated: false },
+    output_gate: { status: 'skipped_no_visible_draft' },
+    auto_repair: { repaired: false },
+    runtime_reconciliation: { status: 'skipped_pre_authority_recovery' },
+    runner_contract: {
+      order: ['legacy-task-authority-recover'],
+      business_routing_allowed: false,
+      show_task_inbox_only: false,
+      metadata_only: true,
+    },
+    visible_response: visible,
+    legacy_status: isMalformed
+      ? { status: 'blocked_task_authority_missing', pointer_kind: 'malformed_unrecognized', reason: String((legacyNote || {}).reason || '') }
+      : { status: 'blocked_task_authority_missing', pointer_kind: 'recognized_legacy', legacy_task_id: String((legacyNote || {}).task_id || '') },
+  };
+  return { exitCode: 0, report };
 }
 
 function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') {
@@ -901,29 +1548,39 @@ function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') 
     }
     const isMissingArtifact = reasonCode === 'trusted_artifact_missing' || status === 'blocked_trusted_artifact_missing';
     const isStateInvariant = reasonCode === 'state_invariant' || status === 'blocked_state_invariant';
+    const isIncompleteCompleted = status === 'blocked_completed_workflow_incomplete';
     const reason = isMissingArtifact
       ? '当前任务断点不完整：上次阶段结果文件缺失。请先恢复断点，再继续当前任务。'
       : isStateInvariant
       ? '当前任务的活动状态与持久副本不一致，已停止自动修复，避免覆盖任一断点。请先归档旧断点并重建任务。'
+      : isIncompleteCompleted
+      ? '当前任务虽然被标记为已完成，但仍缺少必经阶段的可信回执。请先恢复缺失阶段，再继续收束。'
       : status === 'blocked_runtime_guard_missing'
       ? '当前 workflow 缺少运行边界，需要先修复断点账本。'
       : '当前 workflow 被运行守卫暂停，需要先处理阻塞再继续。';
     const options = normalizeFourMenu([
       numberedOption(
         1,
-        isMissingArtifact ? '恢复任务断点' : isStateInvariant ? '查看任务状态修复方案' : '修复当前 workflow 运行边界',
-        isMissingArtifact ? 'recover_missing_result_packet' : isStateInvariant ? 'repair_task_state' : 'repair_runtime_guard',
-        isMissingArtifact ? '根据任务账本恢复上次阶段结果文件，然后回到可继续菜单。' : isStateInvariant ? '保留旧任务证据，归档后重建干净任务；不覆盖正文、大纲或报告。' : '补齐 runtime_guard / heartbeat / checkpoint 后再继续。'
+        isMissingArtifact ? '恢复任务断点' : isStateInvariant ? '查看任务状态修复方案' : isIncompleteCompleted ? '恢复未完整收束的任务' : '修复当前 workflow 运行边界',
+        isMissingArtifact ? 'recover_missing_result_packet' : isStateInvariant ? 'repair_task_state' : isIncompleteCompleted ? 'restore_incomplete_workflow' : 'repair_runtime_guard',
+        isMissingArtifact ? '根据任务账本恢复上次阶段结果文件，然后回到可继续菜单。' : isStateInvariant ? '保留旧任务证据，归档后重建干净任务；不覆盖正文、大纲或报告。' : isIncompleteCompleted ? '只恢复缺失的 workflow 阶段与断点，不修改正文、大纲或审阅报告。' : '补齐 runtime_guard / heartbeat / checkpoint 后再继续。'
       ),
       numberedOption(2, '查看可恢复任务入口', 'show_task_inbox', '只展示任务收件箱，不继续写正文或审阅。'),
       numberedOption(3, '停止并保存断点', 'pause', '保持当前文件状态，稍后再处理。'),
       numberedOption(4, '输入其他要求', 'free_text', '补充意见、纠偏、改范围或说明偏好都从这里进入。'),
     ], 1);
+    if (isIncompleteCompleted) {
+      const workflowId = String(taskInbox.focused_workflow_id || '');
+      options[0].execution_command = `node scripts/workflow-state-machine.js restore-incomplete-workflow --project-root . --workflow-id ${JSON.stringify(workflowId)} --confirm --json`;
+      options[0].execution_workdir = '.';
+      options[0].interaction_mode = 'execute_command';
+    }
     return {
       render_mode: 'text_numbers',
       status,
       intro: reason,
       options,
+      selection_contract: 'execute_command_or_route_intent',
       text: `${reason}\n\n${options.map((option) => option.display).join('\n')}\n\n回复数字选择。`,
     };
   }
@@ -965,6 +1622,34 @@ function buildReport(args) {
   }
 
   const projectRoot = rootResolution.book_root;
+  const v3Entry = buildV3EntryReport(args, rootResolution);
+  if (v3Entry) return v3Entry;
+  const sessionEarly = resolveSessionId(args);
+  // Task 3 / Gate 1: write-policy migration comes before any task-authority
+  // or business routing decision. A project that already carries creative or
+  // planning assets but lacks a strict write policy must complete the policy
+  // migration first; the legacy task note is intentionally NOT inspected here
+  // because it is meaningless until the policy is current.
+  if (isInitializedWritingProject(projectRoot) && !isStrictWritePolicyCurrent(projectRoot)) {
+    const policyReport = buildWritePolicyMigrationReport(projectRoot, args.userIntent || '', sessionEarly);
+    if (args.write) writeReport(projectRoot, policyReport.report);
+    return policyReport;
+  }
+  // Task 3 / Gate 2: after strict policy is current, classify the current-task
+  // pointer. recognized_legacy means we MUST offer the recovery adapter
+  // command — it is the only deterministic next step, and downgrading to
+  // repair_runtime_guard would silently drop the legacy note. malformed /
+  // unrecognized pointers carry no recoverable shape, so we surface a
+  // read-only diagnostic with only semantic and read commands; no mutation
+  // command is exposed until a human inspects the file.
+  if (isStrictWritePolicyCurrent(projectRoot)) {
+    const pointerShape = classifyCurrentTaskPointer(projectRoot);
+    if (pointerShape.kind === 'recognized_legacy' || pointerShape.kind === 'malformed_unrecognized') {
+      const legacyReport = buildLegacyTaskAuthorityReport(projectRoot, pointerShape, args.userIntent || '', sessionEarly);
+      if (args.write) writeReport(projectRoot, legacyReport.report);
+      return legacyReport;
+    }
+  }
   const explicitBusinessIntent = isExplicitBusinessIntent(args.userIntent);
   const projectInitialized = isInitializedWritingProject(projectRoot);
   const session = resolveSessionId(args);
@@ -980,6 +1665,8 @@ function buildReport(args) {
   if (args.write && shortWorkflowMigration.safe_auto_migrate === true) {
     shortWorkflowAutoMigration = autoMigrateShortWorkflow(projectRoot, shortWorkflowMigration);
     if (shortWorkflowAutoMigration.migrated) {
+      const migratedV3Entry = buildV3EntryReport(args, rootResolution);
+      if (migratedV3Entry) return migratedV3Entry;
       supervisor = runSupervisor(projectRoot);
       stateValidation = runStateValidation(projectRoot);
       taskInbox = runTaskInbox(projectRoot, true);
@@ -1042,6 +1729,12 @@ function buildReport(args) {
     status = 'blocked_workflow_session_lease';
     recommendedNext = 'confirm_workflow_session_takeover';
     // A live lease is an expected user-choice state, not a shell failure.
+    exitCode = 0;
+  } else if (String(runtimeReconciliation.result.status || '') === 'blocked_completed_workflow_incomplete') {
+    status = 'blocked_completed_workflow_incomplete';
+    recommendedNext = 'restore_incomplete_workflow';
+    // A damaged terminal marker has one explicit, confirmed recovery path.
+    // Keep it user-visible instead of falling through to an empty task inbox.
     exitCode = 0;
   } else if (migrationTaskCount > 0) {
     status = 'task_inbox_ready';
@@ -1195,11 +1888,14 @@ function compactStageExecution(execution) {
     : {};
   return {
     status: String(execution.status || ''),
+    selection_contract: String(execution.selection_contract || ''),
     stage_attempt_id: String(execution.stage_attempt_id || ''),
     stage_id: String(execution.stage_id || ''),
     step_id: String(execution.step_id || ''),
     owner_module: String(execution.owner_module || ''),
     write_set: Array.isArray(execution.write_set) ? execution.write_set : [],
+    source_files: Array.isArray(execution.source_files) ? execution.source_files : [],
+    section_index: Number(execution.section_index) || 0,
     expected_result_packet: String(execution.expected_result_packet || ''),
     execution_workdir: String(execution.execution_workdir || '.'),
     execution_command: String(execution.execution_command || ''),
@@ -1245,6 +1941,11 @@ function compactDirectIntent(directIntent) {
 
 function compactVisibleResponse(visibleResponse) {
   if (!visibleResponse || typeof visibleResponse !== 'object') return null;
+  if (typeof visibleResponse.text === 'string'
+      && visibleResponse.binding
+      && !Object.prototype.hasOwnProperty.call(visibleResponse, 'stage_execution')) {
+    return visibleResponse;
+  }
   const compact = {
     ...visibleResponse,
     stage_execution: compactStageExecution(visibleResponse.stage_execution),
@@ -1279,6 +1980,8 @@ function compactReport(report) {
       smartRecommendationCount: Number(inbox.smartRecommendationCount) || 0,
     },
     short_workflow_auto_migration: report.short_workflow_auto_migration || null,
+    feedback_receipt: report.feedback_receipt || null,
+    stage_execution: compactStageExecution(report.stage_execution),
     runner_contract: {
       business_routing_allowed: Boolean((report.runner_contract || {}).business_routing_allowed),
       show_task_inbox_only: Boolean((report.runner_contract || {}).show_task_inbox_only),
@@ -1292,7 +1995,10 @@ function main() {
   const args = parseArgs(process.argv);
   const { exitCode, report } = buildReport(args);
   print(args.compact ? compactReport(report) : report, args.json);
-  process.exit(exitCode);
+  // Let Node drain stdout before exiting. Calling process.exit() immediately
+  // after stdout.write() truncates JSON larger than the pipe buffer (64 KiB),
+  // which is common for migrated projects carrying a long task history.
+  process.exitCode = exitCode;
 }
 
 main();

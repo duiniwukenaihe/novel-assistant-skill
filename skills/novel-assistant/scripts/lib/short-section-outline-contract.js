@@ -181,7 +181,15 @@ function validateDraftOutlineCoverage(review, contract, draftText) {
     findings.push({ code: 'outline_contract_digest_mismatch' });
   }
   const rows = Array.isArray(candidate.outline_coverage) ? candidate.outline_coverage : [];
-  const byId = new Map(rows.map((item) => [String((item || {}).id || ''), item || {}]));
+  const byId = new Map();
+  for (const item of rows) {
+    const id = String((item || {}).id || '');
+    if (byId.has(id)) {
+      findings.push({ code: 'draft_outline_obligation_duplicate', obligation_id: id });
+      continue;
+    }
+    byId.set(id, item || {});
+  }
   const usedQuotes = new Map();
   for (const obligation of contract.obligations.filter((item) => item.required_in_draft)) {
     const row = byId.get(obligation.id);

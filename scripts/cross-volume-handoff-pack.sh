@@ -98,7 +98,7 @@ collect_keywords() {
       | trim \
       | while IFS= read -r fragment; do
           case "$fragment" in
-            ""|沈七|绿珠|下一章读者期待) ;;
+            ""|下一章读者期待) ;;
             *)
               if [ "${#fragment}" -ge 4 ]; then
                 add_unique "$fragment" "$keywords_file"

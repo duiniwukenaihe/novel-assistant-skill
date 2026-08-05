@@ -18,6 +18,8 @@ const STRICT_ROOTS = [
   '追踪/交接包',
 ];
 const POLICY_RELATIVE_PATH = path.join('追踪', 'story-system', 'write-policy.json');
+const CHAPTER_IDENTITIES_RELATIVE_PATH = path.join('追踪', 'story-system', 'chapter-identities.json');
+const ACCEPTED_COMMIT_STATUSES = new Set(['accepted', 'accepted_with_projection_debt']);
 
 function ensureCanonicalWritePolicy(projectRoot, options = {}) {
   const root = canonicalProjectRoot(projectRoot);
@@ -85,6 +87,7 @@ function assertCanonicalWriteAllowed(projectRoot, targets, context = {}) {
     error.recovery = 'node scripts/book-write-policy-migrate.js preview --project-root . --json';
     throw error;
   }
+  if (policy.mode === 'strict') assertStrictChapterTargets(projectRoot, normalizedTargets);
   const protectedTargets = canonicalTargets.filter(target => requiresTransaction(policy, target));
   const transactionId = transactionIdFrom(context);
   if (protectedTargets.length) {
@@ -109,6 +112,191 @@ function assertCanonicalWriteAllowed(projectRoot, targets, context = {}) {
       migrate_hint: 'Enable strict mode in 追踪/story-system/write-policy.json to require canonical transactions for story assets.',
     } : {}),
   };
+}
+
+function assertStrictChapterTargets(projectRoot, targets) {
+  const archivedTarget = targets.find(isArchivedChapterTarget);
+  if (archivedTarget) {
+    const error = failure('blocked_archived_chapter_target', `archived chapter prose is read-only: target=${archivedTarget}`);
+    error.target = archivedTarget;
+    error.targets = [archivedTarget];
+    throw error;
+  }
+
+  const chapterTargets = targets.map(target => ({ target, identity: parseChapterProseTarget(target) })).filter(item => item.identity);
+  if (!chapterTargets.length) return;
+  const registry = loadChapterIdentityRegistry(projectRoot);
+  const acceptedTargets = acceptedChapterTargets(projectRoot);
+  for (const item of chapterTargets) {
+    const key = chapterIdentityKey(item.identity.volume, item.identity.chapter);
+    const selected = registry.get(key);
+    if (selected) {
+      if (item.target !== selected.path) throwNoncanonicalChapterTarget(item.target, selected.path);
+      continue;
+    }
+    const priorTargets = acceptedTargets.get(key) || [];
+    if (priorTargets.length > 1) {
+      throwNoncanonicalChapterTarget(item.target, priorTargets.join(','));
+    }
+    if (priorTargets.length && !priorTargets.includes(item.target)) {
+      throwNoncanonicalChapterTarget(item.target, priorTargets[0]);
+    }
+  }
+}
+
+function loadChapterIdentityRegistry(projectRoot) {
+  const root = canonicalProjectRoot(projectRoot);
+  const file = path.join(root, CHAPTER_IDENTITIES_RELATIVE_PATH);
+  if (!fs.existsSync(file)) return new Map();
+  let registry;
+  try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('registry must be a regular file');
+    registry = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw failure('blocked_invalid_chapter_identity_registry', `chapter identity registry is unreadable: ${error.message}`);
+  }
+  if (!registry || registry.schemaVersion !== '1.0.0' || !Array.isArray(registry.chapters)) {
+    throw failure('blocked_invalid_chapter_identity_registry', 'chapter identity registry must use schemaVersion 1.0.0 and a chapters array');
+  }
+  const entries = new Map();
+  for (const value of registry.chapters) {
+    const entry = validateChapterIdentityEntry(root, value);
+    const key = chapterIdentityKey(entry.volume, entry.chapter);
+    const previous = entries.get(key);
+    if (previous && (previous.path !== entry.path || previous.content_hash !== entry.content_hash)) {
+      throw failure('blocked_invalid_chapter_identity_registry', `chapter identity registry has conflicting selected paths for ${entry.volume} chapter ${entry.chapter}`);
+    }
+    if (!previous) entries.set(key, entry);
+  }
+  return entries;
+}
+
+function validateChapterIdentityEntry(root, value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw failure('blocked_invalid_chapter_identity_registry', 'chapter identity entry must be an object');
+  }
+  const volume = String(value.volume || '').trim();
+  const chapter = Number(value.chapter);
+  if (!volume || !Number.isInteger(chapter) || chapter < 1 || !validContentHash(value.content_hash)) {
+    throw failure('blocked_invalid_chapter_identity_registry', 'chapter identity entry has invalid volume, chapter, or content_hash');
+  }
+  const selectedPath = validateRegistryChapterPath(root, value.path, { volume, chapter, allowArchived: false });
+  if (!Array.isArray(value.excluded_candidates)) {
+    throw failure('blocked_invalid_chapter_identity_registry', 'chapter identity entry requires excluded_candidates');
+  }
+  const excluded = value.excluded_candidates.map(candidate => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate) || !validContentHash(candidate.content_hash)) {
+      throw failure('blocked_invalid_chapter_identity_registry', 'excluded chapter candidate has invalid path or content_hash');
+    }
+    const candidatePath = validateRegistryChapterPath(root, candidate.path, { volume, chapter, allowArchived: true });
+    if (candidatePath === selectedPath) {
+      throw failure('blocked_invalid_chapter_identity_registry', 'selected chapter path cannot also be an excluded candidate');
+    }
+    return { ...candidate, path: candidatePath };
+  });
+  return { ...value, volume, chapter, path: selectedPath, excluded_candidates: excluded };
+}
+
+function validateRegistryChapterPath(root, value, expected) {
+  const input = String(value || '').trim();
+  if (!input || input.includes('\\')) {
+    throw failure('blocked_invalid_chapter_identity_registry', 'chapter identity paths must be project-relative POSIX paths');
+  }
+  let normalized;
+  try {
+    normalized = normalizeTarget(root, input);
+  } catch (error) {
+    throw failure('blocked_invalid_chapter_identity_registry', `chapter identity path is unsafe: ${input}`);
+  }
+  if (normalized !== input || (!expected.allowArchived && isArchivedChapterTarget(normalized))) {
+    throw failure('blocked_invalid_chapter_identity_registry', `chapter identity path is not canonical: ${input}`);
+  }
+  const identity = parseChapterProseTarget(normalized, { allowArchived: expected.allowArchived });
+  if (!identity || identity.volume !== expected.volume || identity.chapter !== expected.chapter) {
+    throw failure('blocked_invalid_chapter_identity_registry', `chapter identity path does not match ${expected.volume} chapter ${expected.chapter}: ${input}`);
+  }
+  return normalized;
+}
+
+function acceptedChapterTargets(projectRoot) {
+  const root = canonicalProjectRoot(projectRoot);
+  const commitsDir = path.join(root, '追踪', 'story-system', 'commits');
+  const result = new Map();
+  if (!fs.existsSync(commitsDir) || !fs.statSync(commitsDir).isDirectory()) return result;
+  const entries = fs.readdirSync(commitsDir, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const commit = readValidAcceptedCommit(path.join(commitsDir, entry.name), root);
+    if (!commit) continue;
+    const key = chapterIdentityKey(commit.volume, commit.chapter);
+    const targets = result.get(key) || [];
+    for (const target of commit.targets) if (!targets.includes(target)) targets.push(target);
+    if (targets.length) result.set(key, targets);
+  }
+  return result;
+}
+
+function readValidAcceptedCommit(file, root) {
+  let commit;
+  try {
+    commit = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+  const volume = String((commit || {}).volume || '').trim();
+  const chapter = Number((commit || {}).chapter);
+  if (!commit || commit.schemaVersion !== '1.0.0' || !ACCEPTED_COMMIT_STATUSES.has(commit.status)
+    || !String(commit.commit_id || '').trim() || !volume || !Number.isInteger(chapter) || chapter < 1
+    || !Array.isArray(commit.artifacts)) return null;
+  const chapterArtifacts = commit.artifacts.filter(artifact => artifact && artifact.role === 'chapter_prose');
+  if (!chapterArtifacts.length) return null;
+  const targets = [];
+  for (const artifact of chapterArtifacts) {
+    const hash = artifact.after_hash || artifact.content_hash;
+    if (!validContentHash(hash)) return null;
+    let target;
+    try {
+      target = normalizeTarget(root, artifact.target);
+    } catch (_) {
+      return null;
+    }
+    const identity = parseChapterProseTarget(target);
+    if (!identity || identity.volume !== volume || identity.chapter !== chapter || isArchivedChapterTarget(target)) return null;
+    targets.push(target);
+  }
+  return { volume, chapter, targets };
+}
+
+function parseChapterProseTarget(target, options = {}) {
+  let value = String(target || '').replace(/\\/g, '/');
+  if (options.allowArchived && isArchivedChapterTarget(value)) value = `正文/${value.slice('正文/legacy-flat-layout/'.length)}`;
+  const match = value.match(/^正文\/([^/]+)\/第0*(\d+)章[^/]*\.(?:md|txt)$/iu);
+  if (!match) return null;
+  const chapter = Number(match[2]);
+  if (!Number.isInteger(chapter) || chapter < 1) return null;
+  return { volume: match[1], chapter };
+}
+
+function isArchivedChapterTarget(target) {
+  return String(target || '') === '正文/legacy-flat-layout' || String(target || '').startsWith('正文/legacy-flat-layout/');
+}
+
+function validContentHash(value) {
+  return /^sha256:[a-f0-9]{64}$/i.test(String(value || ''));
+}
+
+function chapterIdentityKey(volume, chapter) {
+  return `${String(volume)}\u0000${Number(chapter)}`;
+}
+
+function throwNoncanonicalChapterTarget(target, selected) {
+  const error = failure('blocked_noncanonical_chapter_target', `chapter prose target is not canonical: selected=${selected}; target=${target}`);
+  error.selected = selected;
+  error.target = target;
+  error.targets = [target];
+  throw error;
 }
 
 function hasExistingStoryEvidence(root) {
@@ -273,11 +461,13 @@ function relativePosix(root, file) {
 function failure(code, message) {
   const error = new Error(message);
   error.code = code;
+  error.status = code;
   return error;
 }
 
 module.exports = {
   POLICY_RELATIVE_PATH,
+  CHAPTER_IDENTITIES_RELATIVE_PATH,
   STRICT_ROOTS,
   assertCanonicalWriteAllowed,
   ensureCanonicalWritePolicy,

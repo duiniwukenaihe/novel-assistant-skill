@@ -12,7 +12,7 @@ teardown() {
 }
 
 @test "static discovery validates every declared host without invoking a model" {
-    for host in claude codex zcode opencode openclaw; do
+    for host in claude codex zcode opencode openclaw qclaw; do
         node "$SCRIPT" --bundle "$BUNDLE" --host "$host" --json > "$TMP/$host.json"
         node - "$TMP/$host.json" "$host" <<'NODE'
 const fs = require('fs');

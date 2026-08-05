@@ -22,6 +22,23 @@ teardown() {
     rm -rf "$TMP_DIR"
 }
 
+@test "conservative host budget reports a structured retry blocker instead of a generic runner error" {
+    node - "$REPO" <<'NODE'
+const assert = require('assert');
+const path = require('path');
+const { reserveBudget, settleBudget } = require(path.join(process.argv[2], 'scripts/lib/workflow-runner-telemetry.js'));
+const options = { adapter: 'claude-code', maxBudgetUsd: 20 };
+const task = { runtime_guard: { token_estimate: {} } };
+const reservation = reserveBudget(options, task);
+settleBudget(options, reservation, { actual_usd: null });
+let error;
+try { reserveBudget(options, task); } catch (caught) { error = caught; }
+assert(error);
+assert.equal(error.code, 'BUDGET_RETRY_BLOCKED');
+assert.equal(error.status, 'blocked_retry_budget_exhausted');
+NODE
+}
+
 @test "token cost ledger initializes project workflow cost files" {
     mkdir -p "$TMP_DIR/book"
 

@@ -7,21 +7,21 @@ setup() {
     PROJECT="$TMP_DIR/book"
     mkdir -p "$PROJECT/追踪/memory" "$PROJECT/追踪/context-pack" "$PROJECT/追踪/交接包" "$PROJECT/追踪/章节契约/第1卷" "$PROJECT/正文/第1卷" "$PROJECT/大纲/第1卷" "$PROJECT/设定/作者风格"
     cat > "$PROJECT/追踪/memory/lorebook.jsonl" <<'JSONL'
-{"id":"char.shen-qi","type":"character","title":"沈七","aliases":["男主","沈七"],"triggers":["沈七","蛋炒饭"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第001-010章"},"priority":90,"tokenBudget":160,"content":"沈七用做饭和读心术破局，当前不能暴露系统真相。","constraints":["系统真相不得在第010章前直说。"],"sourceRefs":[{"path":"设定/人物/沈七.md","hash":"sha256:a","note":"confirmed"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
-{"id":"hook.f025","type":"hook","title":"绿珠读心空白","aliases":["F025"],"triggers":["绿珠","读心空白"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第003-008章"},"priority":80,"tokenBudget":120,"content":"绿珠被读心时出现空白，暗示精神力异常。","constraints":["第003章只能铺垫，不得解释血脉来源。"],"sourceRefs":[{"path":"追踪/伏笔.md","hash":"sha256:b","note":"confirmed"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
+{"id":"char.lu-chuan","type":"character","title":"陆川","aliases":["男主","陆川"],"triggers":["陆川","炒饭"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第001-010章"},"priority":90,"tokenBudget":160,"content":"陆川用做饭和感知术破局，当前须保密密函内容。","constraints":["线索成熟前暂不公开密函内容。"],"sourceRefs":[{"path":"设定/人物/陆川.md","hash":"sha256:a","note":"confirmed"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
+{"id":"hook.f101","type":"hook","title":"苏禾感知空白","aliases":["F101"],"triggers":["苏禾","感知空白"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第003-008章"},"priority":80,"tokenBudget":120,"content":"苏禾被感知时出现空白，暗示精神力异常。","constraints":["第003章只能铺垫，不得解释身份来源。"],"sourceRefs":[{"path":"追踪/伏笔.md","hash":"sha256:b","note":"confirmed"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
 {"id":"loc.unrelated","type":"location","title":"远海仙岛","aliases":["远海仙岛"],"triggers":["海","仙岛"],"scope":{"book":"current","volume":"第9卷","chapterRange":"第701-750章"},"priority":10,"tokenBudget":120,"content":"后期地图，不应在第一卷激活。","constraints":[],"sourceRefs":[{"path":"设定/世界观/远海仙岛.md","hash":"sha256:c","note":"future"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
 JSONL
     cat > "$PROJECT/追踪/memory/active-cast.json" <<'JSON'
-{"range":"第1卷/第003章","presentCharacters":["沈七","绿珠"],"offstageCharacters":["莫青山"],"knowledgeBoundaries":[{"character":"绿珠","knows":["沈七会做饭"],"doesNotKnow":["沈七系统真相"]}],"activeHooks":["F025"],"blockedReveals":["系统真相"]}
+{"range":"第1卷/第003章","presentCharacters":["陆川","苏禾"],"offstageCharacters":["韩岳"],"knowledgeBoundaries":[{"character":"苏禾","knows":["陆川会做饭"],"doesNotKnow":["密函内容"]}],"activeHooks":["F101"],"blockedReveals":["密函内容"]}
 JSON
     cat > "$PROJECT/追踪/章节契约/第1卷/第003章.md" <<'MD'
 # 第003章契约
-- 必须写沈七用蛋炒饭稳住局面。
-- 绿珠出现读心空白。
+- 必须写陆川用炒饭稳住局面。
+- 苏禾出现感知空白。
 MD
     cat > "$PROJECT/追踪/交接包/第002章_to_第003章.md" <<'MD'
 # 交接
-- 沈七刚发现绿珠读心有异常。
+- 陆川刚发现苏禾感知有异常。
 MD
     cat > "$PROJECT/设定/作者风格/禁用表达.md" <<'MD'
 # 禁用表达
@@ -64,8 +64,8 @@ NODE
       if (!out.packetJson || !fs.existsSync(out.packetJson)) process.exit(5);
       if (!out.packetMd || !fs.existsSync(out.packetMd)) process.exit(6);
       const ids = out.selectedEntries.map(x => x.id).sort();
-      if (!ids.includes("char.shen-qi")) process.exit(7);
-      if (!ids.includes("hook.f025")) process.exit(8);
+      if (!ids.includes("char.lu-chuan")) process.exit(7);
+      if (!ids.includes("hook.f101")) process.exit(8);
       if (ids.includes("loc.unrelated")) process.exit(9);
       if (!out.omittedEntries.some(x => x.id === "loc.unrelated")) process.exit(10);
       const packet = JSON.parse(fs.readFileSync(out.packetJson, "utf8"));
@@ -76,8 +76,8 @@ NODE
 
     grep -q "hard_constraints" "$PROJECT/追踪/context-pack/write_chapter-第1卷-第003章.assembled-context.md"
     grep -q "active_cast" "$PROJECT/追踪/context-pack/write_chapter-第1卷-第003章.assembled-context.md"
-    grep -q "沈七" "$PROJECT/追踪/context-pack/write_chapter-第1卷-第003章.assembled-context.md"
-    grep -q "绿珠" "$PROJECT/追踪/context-pack/write_chapter-第1卷-第003章.assembled-context.md"
+    grep -q "陆川" "$PROJECT/追踪/context-pack/write_chapter-第1卷-第003章.assembled-context.md"
+    grep -q "苏禾" "$PROJECT/追踪/context-pack/write_chapter-第1卷-第003章.assembled-context.md"
     ! grep -q "远海仙岛" "$PROJECT/追踪/context-pack/write_chapter-第1卷-第003章.assembled-context.md"
 }
 
@@ -103,7 +103,7 @@ NODE
 
 @test "context assembler blocks contradictory active entries" {
     cat >> "$PROJECT/追踪/memory/lorebook.jsonl" <<'JSONL'
-{"id":"char.shen-qi.conflict","type":"character","title":"沈七冲突","aliases":["沈七"],"triggers":["沈七"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第003章"},"priority":95,"tokenBudget":100,"content":"沈七必须在第003章公开系统真相。","constraints":["第003章必须公开系统真相。"],"sourceRefs":[{"path":"设定/冲突.md","hash":"sha256:d","note":"conflict"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
+{"id":"char.lu-chuan.conflict","type":"character","title":"陆川冲突","aliases":["陆川"],"triggers":["陆川"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第003章"},"priority":95,"tokenBudget":100,"content":"陆川必须在第003章揭示密函内容。","constraints":["第003章必须揭示密函内容。"],"sourceRefs":[{"path":"设定/冲突.md","hash":"sha256:d","note":"conflict"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
 JSONL
 
     node "$SCRIPT" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章" --budget 1200 --json > "$TMP_DIR/out.json"
@@ -119,13 +119,13 @@ JSONL
       if (out.task !== expectedTask) process.exit(3);
       if (out.target !== expectedTarget) process.exit(4);
       if (!out.conflicts || out.conflicts.length === 0) process.exit(5);
-      if (!out.conflicts[0].entryIds.includes("char.shen-qi")) process.exit(6);
+      if (!out.conflicts[0].entryIds.includes("char.lu-chuan")) process.exit(6);
     ' "$TMP_DIR/out.json" "$PROJECT" "write_chapter" "第1卷/第003章"
 }
 
 @test "context assembler quarantines irrelevant polluted lore without blocking relevant packet" {
     cat >> "$PROJECT/追踪/memory/lorebook.jsonl" <<'JSONL'
-{"id":"bad.loop","type":"rule","title":"污染条目","aliases":["污染"],"triggers":["沈七"],"scope":{"book":"current","volume":"第9卷","chapterRange":"第001章"},"priority":99,"tokenBudget":300,"content":"成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则。","constraints":[],"sourceRefs":[{"path":"设定/污染.md","hash":"sha256:z","note":"bad"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
+{"id":"bad.loop","type":"rule","title":"污染条目","aliases":["污染"],"triggers":["陆川"],"scope":{"book":"current","volume":"第9卷","chapterRange":"第001章"},"priority":99,"tokenBudget":300,"content":"成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则。","constraints":[],"sourceRefs":[{"path":"设定/污染.md","hash":"sha256:z","note":"bad"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
 JSONL
 
     node "$SCRIPT" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章" --budget 1200 --json > "$TMP_DIR/out.json"
@@ -143,7 +143,7 @@ JSONL
 
 @test "context assembler blocks relevant polluted lore without injecting it" {
     cat > "$PROJECT/追踪/memory/lorebook.jsonl" <<'JSONL'
-{"id":"bad.loop","type":"rule","title":"污染条目","aliases":["污染"],"triggers":["沈七"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第003章"},"priority":99,"tokenBudget":300,"content":"成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则。","constraints":[],"sourceRefs":[{"path":"设定/污染.md","hash":"sha256:z","note":"bad"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
+{"id":"bad.loop","type":"rule","title":"污染条目","aliases":["污染"],"triggers":["陆川"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第003章"},"priority":99,"tokenBudget":300,"content":"成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则成长规则。","constraints":[],"sourceRefs":[{"path":"设定/污染.md","hash":"sha256:z","note":"bad"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
 JSONL
 
     node "$SCRIPT" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章" --budget 1200 --json > "$TMP_DIR/out.json"
@@ -194,7 +194,7 @@ NODE
 
 @test "context assembler omits entries that only have trigger and priority without qualifying support" {
     cat >> "$PROJECT/追踪/memory/lorebook.jsonl" <<'JSONL'
-{"id":"rule.trigger-only","type":"rule","title":"蛋炒饭押韵规则","aliases":["押韵规则"],"triggers":["蛋炒饭"],"scope":{"book":"current","volume":"第9卷","chapterRange":"第701-750章"},"priority":100,"tokenBudget":100,"content":"只要提到蛋炒饭就必须押韵。","constraints":[],"sourceRefs":[{"path":"设定/不存在/蛋炒饭规则.md","hash":"sha256:missing","note":"missing"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
+{"id":"rule.trigger-only","type":"rule","title":"炒饭押韵规则","aliases":["押韵规则"],"triggers":["炒饭"],"scope":{"book":"current","volume":"第9卷","chapterRange":"第701-750章"},"priority":100,"tokenBudget":100,"content":"只要提到炒饭就必须押韵。","constraints":[],"sourceRefs":[{"path":"设定/不存在/炒饭规则.md","hash":"sha256:missing","note":"missing"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
 JSONL
 
     node "$SCRIPT" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章" --budget 1200 --json > "$TMP_DIR/out.json"
@@ -220,7 +220,7 @@ JSONL
 - 与当前章节人物、钩子、范围都无关。
 MD
     cat >> "$PROJECT/追踪/memory/lorebook.jsonl" <<'JSONL'
-{"id":"rule.unrelated-source","type":"rule","title":"蛋炒饭火候口令","aliases":["火候口令"],"triggers":["蛋炒饭"],"scope":{"book":"current","volume":"第9卷","chapterRange":"第701-750章"},"priority":100,"tokenBudget":100,"content":"提到蛋炒饭时要念出后期口令。","constraints":[],"sourceRefs":[{"path":"设定/杂项/厨房备忘.md","hash":"sha256:exists","note":"unrelated"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
+{"id":"rule.unrelated-source","type":"rule","title":"炒饭火候口令","aliases":["火候口令"],"triggers":["炒饭"],"scope":{"book":"current","volume":"第9卷","chapterRange":"第701-750章"},"priority":100,"tokenBudget":100,"content":"提到炒饭时要念出后期口令。","constraints":[],"sourceRefs":[{"path":"设定/杂项/厨房备忘.md","hash":"sha256:exists","note":"unrelated"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
 JSONL
 
     node "$SCRIPT" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章" --budget 1200 --json > "$TMP_DIR/out.json"
@@ -327,9 +327,9 @@ JSONL
 
 @test "context assembler blocks relevant memory whose source hash is stale" {
     mkdir -p "$PROJECT/设定/人物"
-    printf '# 沈七\n- 当前仍未公开系统。\n' > "$PROJECT/设定/人物/沈七.md"
+    printf '# 陆川\n- 当前仍未公开系统。\n' > "$PROJECT/设定/人物/陆川.md"
     cat > "$PROJECT/追踪/memory/lorebook.jsonl" <<'JSONL'
-{"id":"char.stale","type":"character","title":"沈七","aliases":["沈七"],"triggers":["沈七"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第001-010章"},"priority":99,"tokenBudget":120,"content":"沈七已经公开系统真相。","constraints":[],"sourceRefs":[{"path":"设定/人物/沈七.md","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","note":"old"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
+{"id":"char.stale","type":"character","title":"陆川","aliases":["陆川"],"triggers":["陆川"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第001-010章"},"priority":99,"tokenBudget":120,"content":"陆川已经公开能力秘密。","constraints":[],"sourceRefs":[{"path":"设定/人物/陆川.md","hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","note":"old"}],"status":"active","updatedAt":"2026-07-05T00:00:00Z"}
 JSONL
 
     node "$SCRIPT" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章" --budget 1200 --json > "$TMP_DIR/out.json"
@@ -344,9 +344,9 @@ NODE
 
 @test "context assembler blocks stale migrated memory until the explicit migration command refreshes it" {
     MIGRATE="$REPO/scripts/memory-migrate.js"
-    printf '# 伏笔\n- F025：绿珠读心空白，当前只铺垫。\n' > "$PROJECT/追踪/伏笔.md"
+    printf '# 伏笔\n- F101：苏禾感知空白，当前只铺垫。\n' > "$PROJECT/追踪/伏笔.md"
     node "$MIGRATE" --project-root "$PROJECT" --source '追踪/伏笔.md' --write --json > "$TMP_DIR/migrate.json"
-    printf '# 伏笔\n- F025：绿珠读心空白，仍只铺垫；第008章前不得解释血脉来源。\n' > "$PROJECT/追踪/伏笔.md"
+    printf '# 伏笔\n- F101：苏禾感知空白，仍只铺垫；第008章前不得解释身份来源。\n' > "$PROJECT/追踪/伏笔.md"
 
     node "$SCRIPT" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章" --budget 1200 --json > "$TMP_DIR/out.json"
 
@@ -370,8 +370,8 @@ JSON
 {"task_family_id":"tf-write","head_workflow_id":"wf-head","branches":[{"workflow_id":"wf-old","status":"paused"},{"workflow_id":"wf-head","status":"active","is_head":true}]}
 JSON
     cat >> "$PROJECT/追踪/memory/lorebook.jsonl" <<'JSONL'
-{"id":"hook.branch-old","type":"hook","title":"绿珠旧分支","triggers":["绿珠"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第003章"},"priority":99,"tokenBudget":100,"content":"旧分支要求立即公开血脉来源。","constraints":[],"sourceRefs":[],"status":"active","provenance":{"task_family_id":"tf-write","workflow_id":"wf-old","branch_id":"wf-old","stage_attempt_id":"sa-old","acceptance_status":"accepted"}}
-{"id":"hook.branch-head","type":"hook","title":"绿珠主分支","triggers":["绿珠"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第003章"},"priority":99,"tokenBudget":100,"content":"当前主分支只铺垫读心空白。","constraints":[],"sourceRefs":[],"status":"active","provenance":{"task_family_id":"tf-write","workflow_id":"wf-head","branch_id":"wf-head","stage_attempt_id":"sa-head","acceptance_status":"accepted"}}
+{"id":"hook.branch-old","type":"hook","title":"苏禾旧分支","triggers":["苏禾"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第003章"},"priority":99,"tokenBudget":100,"content":"旧分支要求立即公开身份来源。","constraints":[],"sourceRefs":[],"status":"active","provenance":{"task_family_id":"tf-write","workflow_id":"wf-old","branch_id":"wf-old","stage_attempt_id":"sa-old","acceptance_status":"accepted"}}
+{"id":"hook.branch-head","type":"hook","title":"苏禾主分支","triggers":["苏禾"],"scope":{"book":"current","volume":"第1卷","chapterRange":"第003章"},"priority":99,"tokenBudget":100,"content":"当前主分支只铺垫感知空白。","constraints":[],"sourceRefs":[],"status":"active","provenance":{"task_family_id":"tf-write","workflow_id":"wf-head","branch_id":"wf-head","stage_attempt_id":"sa-head","acceptance_status":"accepted"}}
 JSONL
 
     node "$SCRIPT" --project-root "$PROJECT" --task write_chapter --target "第1卷/第003章" --budget 1400 --json > "$TMP_DIR/out.json"

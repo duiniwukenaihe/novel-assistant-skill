@@ -10,8 +10,19 @@ const runnerPacketRel = process.env.NOVEL_ASSISTANT_RUNNER_PACKET;
 const resultPacketRel = process.env.NOVEL_ASSISTANT_RESULT_PACKET;
 if (!root || !runnerPacketRel || !resultPacketRel) process.exit(20);
 
-const marker = path.join(root, 'fake-host-invocations.log');
+const marker = process.env.NOVEL_ASSISTANT_FAKE_HOST_LOG
+  ? path.resolve(process.env.NOVEL_ASSISTANT_FAKE_HOST_LOG)
+  : path.join(root, 'fake-host-invocations.log');
+fs.mkdirSync(path.dirname(marker), { recursive: true });
 fs.appendFileSync(marker, `${mode}\n`);
+
+if (mode === 'max-turns-once') {
+  const attempts = fs.readFileSync(marker, 'utf8').trim().split(/\r?\n/).filter(Boolean).length;
+  if (attempts === 1) {
+    process.stdout.write('{"type":"result","subtype":"error_max_turns","terminal_reason":"max_turns"}\n');
+    process.exit(1);
+  }
+}
 
 if (mode === 'repeat-term') {
   process.stdout.write(`${'修真'.repeat(40)}\n`);

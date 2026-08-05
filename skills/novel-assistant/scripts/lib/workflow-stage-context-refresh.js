@@ -14,6 +14,26 @@ function refreshCurrentStageContext(projectRoot, workflowId) {
   }
   const packet = buildStageContextPacket({ projectRoot, task, stage: stageId });
   if (packet.status !== 'assembled') return { status: packet.status, stage_id: stageId, packet };
+  const currentPacket = execution.stage_context_packet && typeof execution.stage_context_packet === 'object'
+    ? execution.stage_context_packet
+    : {};
+  const currentMemory = execution.memory_context && typeof execution.memory_context === 'object'
+    ? execution.memory_context
+    : {};
+  if (String(currentPacket.digest || '') === String(packet.digest || '')
+      && String(currentPacket.packet_md || '') === String(packet.packet_md || '')
+      && String(((currentMemory.memory_read_receipt || {}).memory_revision) || '')
+        === String(((packet.memory_read_receipt || {}).memory_revision) || '')) {
+    return {
+      status: 'stage_context_current',
+      workflow_id: workflowId,
+      stage_id: stageId,
+      section_index: packet.section_index,
+      context_refresh_count: Number(execution.context_refresh_count || 0),
+      state_version: Number(task.state_version || 0),
+      execution_command: String(execution.execution_command || ''),
+    };
+  }
   try {
     const next = mutateTaskAuthority(projectRoot, workflowId, Number(task.state_version || 0), (draft) => {
       const current = draft.stage_execution && typeof draft.stage_execution === 'object' ? draft.stage_execution : {};
@@ -26,11 +46,15 @@ function refreshCurrentStageContext(projectRoot, workflowId) {
       current.context_read_command = `node scripts/workflow-stage-context.js read-current --project-root . --workflow-id ${JSON.stringify(workflowId)}`;
       current.stage_context_packet = {
         status: packet.status,
+        stage_id: packet.stage_id,
         packet_md: packet.packet_md,
         packet_json: packet.packet_json,
         section_index: packet.section_index,
         estimated_tokens: packet.estimated_tokens,
         token_budget: packet.token_budget,
+        digest: packet.digest,
+        included_assets: packet.included_assets,
+        omitted_assets: packet.omitted_assets,
         source_files: packet.source_files,
         memory_contract: packet.memory_contract || null,
         memory_read_receipt: packet.memory_read_receipt || null,
@@ -42,6 +66,7 @@ function refreshCurrentStageContext(projectRoot, workflowId) {
         packet_md: String(packet.packet_md || ''),
         packet_json: String(packet.packet_json || ''),
         estimated_tokens: Number(packet.estimated_tokens || 0),
+        digest: String(packet.digest || ''),
         memory_contract: packet.memory_contract || null,
         memory_read_receipt: packet.memory_read_receipt || null,
       };

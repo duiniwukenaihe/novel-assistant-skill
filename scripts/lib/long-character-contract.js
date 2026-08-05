@@ -12,8 +12,10 @@ const OPPOSITION = /(?:主要对手|核心对手|反派|阻力角色|宿敌)/u;
 function checkLongCharacterContract(projectRoot, options = {}) {
   const source = collectCharacterSources(projectRoot, options.files);
   const characters = parseCharacters(source.text);
-  const protagonist = characters.find(item => PROTAGONIST.test(item.role)) || null;
-  const opponent = characters.find(item => OPPOSITION.test(item.role)) || null;
+  const protagonist = characters.find(item => /^(?:主角|第一视角)$/u.test(item.role))
+    || characters.find(item => PROTAGONIST.test(item.role)) || null;
+  const opponent = characters.find(item => /^(?:主要对手|核心对手|宿敌)$/u.test(item.role))
+    || characters.find(item => OPPOSITION.test(item.role)) || null;
   const findings = [];
   const advisories = [];
 
@@ -30,8 +32,8 @@ function checkLongCharacterContract(projectRoot, options = {}) {
     const missing = [];
     if (!has(protagonist.body, /(?:年龄|岁|身份|职业|出身|弟子|学生|职员|修士|第一人称|第三人称)/u)) missing.push('identity');
     if (!has(protagonist.body, /(?:外部目标|目标|想要|要查清|要保住|为了|脱离|争取)/u)) missing.push('external_goal');
-    if (!has(protagonist.body, /(?:内在渴望|内在需求|最怕|恐惧|害怕|软肋|失去)/u)) missing.push('fear_or_inner_need');
-    if (!has(protagonist.body, /(?:缺陷|误区|误信|盲信|弱点|习惯|自我欺骗)/u)) missing.push('flaw_or_misbelief');
+    if (!has(protagonist.body, /(?:内在渴望|内在需求|核心执念|身份认同|最怕|恐惧|害怕失去|不愿失去|软肋)/u)) missing.push('fear_or_inner_need');
+    if (!has(protagonist.body, /(?:缺陷|误区|误信|盲信|弱点|习惯|自我欺骗|性格烙印|人格缺口|心理阴影|内在矛盾|核心矛盾)/u)) missing.push('flaw_or_misbelief');
     if (!has(protagonist.body, /(?:能力边界|行动边界|不会|不能|不懂|代价|限制)/u)) missing.push('capability_boundary');
     if (missing.length) {
       findings.push({
@@ -39,6 +41,17 @@ function checkLongCharacterContract(projectRoot, options = {}) {
         character: protagonist.name,
         missing_fields: missing,
         message: `主角 ${protagonist.name} 尚未形成可持续的目标、软肋、缺陷与能力边界。`,
+      });
+    }
+    const projected = characterMemoryFields(protagonist);
+    const unavailable = ['identity', 'goal', 'fear_or_stake', 'flaw_or_misbelief', 'capability_boundary']
+      .filter(field => !projected[field]);
+    if (!missing.length && unavailable.length) {
+      findings.push({
+        code: 'unprojectable_character_memory_fields',
+        character: protagonist.name,
+        missing_fields: unavailable,
+        message: `主角 ${protagonist.name} 的核心档案只存在于标题、表格碎片或无法安全截取的长句中；请改为完整、独立的语义句后再生成人物记忆。`,
       });
     }
   }
@@ -70,7 +83,8 @@ function checkLongCharacterContract(projectRoot, options = {}) {
     });
   }
 
-  if (!has(source.text, /(?:人物关系与责任债|关系压力|关系债|利益冲突|互相.+(?:欠|需要|利用)|关系从.+(?:到|走向))/u)) {
+  const hasCurrentRelationshipEngine = has(source.text, /(?:人物关系与责任债|关系压力|关系债|利益冲突|互相.+(?:欠|需要|利用)|关系从.+(?:到|走向))/u);
+  if (!hasCurrentRelationshipEngine && !hasLegacyRelationshipEngine(source.text)) {
     findings.push({ code: 'missing_relationship_engine', message: '未锁定人物之间持续生效的关系压力、利益冲突或责任债。' });
   }
 
@@ -106,12 +120,7 @@ function projectLongCharacterMemory(projectRoot, options = {}) {
     characters[character.name] = {
       ...(((existing.characters || {})[character.name]) || {}),
       role: character.role,
-      identity: sentence(character.body, /(?:年龄|岁|身份|职业|出身|弟子|学生|职员|修士)/u),
-      goal: sentence(character.body, /(?:外部目标|目标|想要|要查清|要保住|为了|脱离|争取)/u),
-      fear_or_stake: sentence(character.body, /(?:内在渴望|内在需求|最怕|恐惧|害怕|软肋|失去)/u),
-      flaw_or_misbelief: sentence(character.body, /(?:缺陷|误区|误信|盲信|弱点|习惯|自我欺骗)/u),
-      capability_boundary: sentence(character.body, /(?:能力边界|行动边界|不会|不能|不懂|代价|限制)/u),
-      change_arc: sentence(character.body, /(?:第一卷|第二卷|第三卷|终局|成长|从.+到|主动选择)/u),
+      ...characterMemoryFields(character),
       source_paths: analysis.source_files,
     };
   }
@@ -157,31 +166,128 @@ function collectCharacterSources(projectRoot, declaredFiles) {
 
 function parseCharacters(text) {
   const source = String(text || '');
-  const headings = Array.from(source.matchAll(/^#{1,4}\s+([^\n]+)$/gmu));
-  const characters = [];
+  const headings = Array.from(source.matchAll(/^(#{1,4})\s+([^\n]+)$/gmu));
+  const explicitCharacters = new Map();
+  const heuristicCharacters = new Map();
   for (let index = 0; index < headings.length; index += 1) {
-    const title = String(headings[index][1] || '').trim();
+    const title = String(headings[index][2] || '').trim();
     const roleMatch = title.match(/^(主角|男主|女主|第一视角|主要对手|核心对手|反派|阻力角色|宿敌|关键配角|主要配角)\s*[：:]\s*([\p{Script=Han}A-Za-z·]{2,20})/u);
-    if (!roleMatch) continue;
+    const bracketedHeading = title.match(/^【([^】]+)】\s*([\p{Script=Han}A-Za-z·]{2,20})$/u);
+    const bracketedRole = bracketedHeading && !isConceptualCharacterHeading(bracketedHeading[1], bracketedHeading[2])
+      ? roleFromDescriptor(bracketedHeading[1]) : '';
     const bodyStart = headings[index].index + headings[index][0].length;
-    const bodyEnd = headings[index + 1] ? headings[index + 1].index : source.length;
-    characters.push({ name: roleMatch[2], role: roleMatch[1], body: source.slice(bodyStart, bodyEnd).trim() });
+    const currentLevel = String(headings[index][1] || '').length;
+    const nextPeer = headings.slice(index + 1).find(item => String(item[1] || '').length <= currentLevel);
+    const bodyEnd = nextPeer ? nextPeer.index : source.length;
+    const body = source.slice(bodyStart, bodyEnd).trim();
+    const legacyHeading = title.match(/^([\p{Script=Han}A-Za-z·]{2,20})\s*[（(]([^）)]+)[）)]$/u);
+    const legacyRole = legacyHeading ? roleFromDescriptor(legacyHeading[2]) : '';
+    const trustedProfileSource = isMatchingCharacterProfileSource(source, headings[index].index, legacyHeading ? legacyHeading[1] : '');
+    if (!roleMatch && !bracketedRole && (!legacyRole || (!trustedProfileSource && !hasPersonProfileEvidence(body)))) continue;
+    const name = roleMatch ? roleMatch[2] : bracketedRole ? bracketedHeading[2] : legacyHeading[1];
+    const role = roleMatch ? roleMatch[1] : bracketedRole || legacyRole;
+    const target = roleMatch || bracketedRole ? explicitCharacters : heuristicCharacters;
+    mergeCharacterRecord(target, { name, role, body });
   }
   for (const match of source.matchAll(/^\s*[-*]\s*(主角|男主|女主|主要对手|核心对手|反派|关键配角)\s*[：:]\s*([\p{Script=Han}A-Za-z·]{2,20})\s*[，,：:]?([^\n]*)$/gmu)) {
-    if (!characters.some(item => item.name === match[2])) characters.push({ name: match[2], role: match[1], body: match[3] });
+    mergeCharacterRecord(explicitCharacters, { name: match[2], role: match[1], body: match[3] });
   }
   for (const sourceBlock of source.split(/\n(?=# 来源：)/u)) {
-    const block = sourceBlock.match(/^# 来源：([^\n]+)\n([\s\S]*)$/u);
+    const block = sourceBlock.trimStart().match(/^# 来源：([^\n]+)\n([\s\S]*)$/u);
     if (!block) continue;
     const relative = String(block[1] || '').trim();
     if (!/(?:^|\/)设定\/角色\//u.test(relative)) continue;
     const body = String(block[2] || '');
     const name = path.basename(relative, path.extname(relative));
-    const roleMatch = body.match(/角色定位\s*[：:]\s*(主角|男主|女主|第一视角|主要对手|核心对手|反派|阻力角色|宿敌|关键配角|主要配角)/u);
-    if (!roleMatch || characters.some(item => item.name === name)) continue;
-    characters.push({ name, role: roleMatch[1], body });
+    const profileRole = roleFromProfileBody(body);
+    const explicit = explicitCharacters.get(name);
+    const heuristic = heuristicCharacters.get(name);
+    if (explicit) {
+      mergeCharacterRecord(explicitCharacters, { name, role: explicit.role, body });
+      continue;
+    }
+    if (heuristic) {
+      if (profileRole) {
+        heuristicCharacters.delete(name);
+        mergeCharacterRecord(explicitCharacters, { name, role: profileRole, body: mergeCharacterBodies(heuristic.body, body) });
+      } else {
+        mergeCharacterRecord(heuristicCharacters, { name, role: heuristic.role, body });
+      }
+      continue;
+    }
+    if (profileRole) mergeCharacterRecord(explicitCharacters, { name, role: profileRole, body });
   }
-  return characters;
+  const merged = new Map();
+  for (const character of explicitCharacters.values()) mergeCharacterRecord(merged, character);
+  for (const character of heuristicCharacters.values()) mergeCharacterRecord(merged, character);
+  return [...merged.values()];
+}
+
+function mergeCharacterRecord(records, character) {
+  const existing = records.get(character.name);
+  if (!existing) {
+    records.set(character.name, { ...character, body: String(character.body || '').trim() });
+    return;
+  }
+  existing.body = mergeCharacterBodies(existing.body, character.body);
+}
+
+function mergeCharacterBodies(current, incoming) {
+  const blocks = String(current || '').trim() ? [String(current).trim()] : [];
+  for (const block of String(incoming || '').split(/\n{2,}/u).map(item => item.trim()).filter(Boolean)) {
+    if (!blocks.some(existing => existing === block || existing.includes(block))) blocks.push(block);
+  }
+  return blocks.join('\n\n');
+}
+
+function roleFromProfileBody(body) {
+  const match = String(body || '').match(/(?:角色定位|身份定位|人物定位)\*{0,2}\s*[：:]\s*([^\n]+)/u);
+  return match ? roleFromDescriptor(match[1]) : '';
+}
+
+function hasPersonProfileEvidence(body) {
+  const value = String(body || '');
+  if (/(?:身份|职业|出身|年龄|\d+\s*岁|性格|人格|角色定位|人物定位|外貌|容貌|长相|衣着)/u.test(value)) return true;
+  return /(?:外部目标|内在目标|人物目标|角色目标|想要)/u.test(value)
+    && /(?:行动边界|能力边界)/u.test(value);
+}
+
+function isMatchingCharacterProfileSource(source, headingIndex, characterName) {
+  const markers = Array.from(String(source || '').slice(0, headingIndex).matchAll(/^# 来源：([^\n]+)$/gmu));
+  const relative = markers.length ? String(markers[markers.length - 1][1] || '').trim() : '';
+  if (!/(?:^|\/)设定\/角色\//u.test(relative)) return false;
+  return path.basename(relative, path.extname(relative)) === String(characterName || '').trim();
+}
+
+function hasLegacyRelationshipEngine(text) {
+  const source = String(text || '');
+  const headings = Array.from(source.matchAll(/^(#{1,4})\s+([^\n]+)$/gmu));
+  for (let index = 0; index < headings.length; index += 1) {
+    const title = String(headings[index][2] || '').trim();
+    if (!/(?:关系类型|关系矩阵|关系演变|关系变化关键节点)/u.test(title)) continue;
+    const level = String(headings[index][1] || '').length;
+    const bodyStart = headings[index].index + headings[index][0].length;
+    const nextPeer = headings.slice(index + 1).find(item => String(item[1] || '').length <= level);
+    const body = source.slice(bodyStart, nextPeer ? nextPeer.index : source.length);
+    if (/(?:压迫|打压|敌对|控制|利用|背叛|争夺|追捕|围捕|围杀|契约|施压|胁迫|威胁|断供|监视|对抗)/u.test(body)) return true;
+  }
+  return false;
+}
+
+function roleFromDescriptor(descriptor) {
+  const value = String(descriptor || '');
+  if (/(?:主反派|主要对手|核心对手|宿敌)/u.test(value)) return '主要对手';
+  if (/反派/u.test(value)) return '反派';
+  if (/主角/u.test(value)) return '主角';
+  if (/男主/u.test(value)) return '男主';
+  if (/女主/u.test(value)) return '女主';
+  if (/(?:关键配角|主要配角)/u.test(value)) return '关键配角';
+  return '';
+}
+
+function isConceptualCharacterHeading(descriptor, name) {
+  return /(?:成长|弧线|弧光|阶段|里程碑|变化|轨迹|规划|路线|分析|说明)/u.test(String(descriptor || ''))
+    || /^(?:第[一二三四五六七八九十\d]+阶段|成长阶段|人物弧线)$/u.test(String(name || '').trim());
 }
 
 function walkMarkdown(directory, root, add, depth) {
@@ -194,8 +300,50 @@ function walkMarkdown(directory, root, add, depth) {
 }
 
 function sentence(text, pattern, limit = 260) {
-  const value = String(text || '').split(/(?<=[。！？；\n])/u).map(item => item.replace(/\s+/g, ' ').trim()).find(item => pattern.test(item)) || '';
-  return value.length > limit ? `${value.slice(0, limit)}…` : value;
+  const candidates = String(text || '').split(/(?<=[。！？；\n])/u);
+  for (const candidate of candidates) {
+    const value = cleanProfileSentence(candidate);
+    if (!value || value.length > limit || !pattern.test(value) || !hasBalancedPunctuation(value)) continue;
+    return value;
+  }
+  return '';
+}
+
+function characterMemoryFields(character) {
+  const body = String((character || {}).body || '');
+  return {
+    identity: sentence(body, /(?:年龄|岁|身份|职业|出身|弟子|学生|职员|修士)/u),
+    goal: sentence(body, /(?:外部目标|目标|想要|要查清|要保住|为了|脱离|争取)/u),
+    fear_or_stake: sentence(body, /(?:内在渴望|内在需求|核心执念|身份认同|最怕|恐惧|害怕失去|不愿失去|软肋)/u),
+    flaw_or_misbelief: sentence(body, /(?:缺陷|误区|误信|盲信|弱点|习惯|自我欺骗|性格烙印|人格缺口|心理阴影|内在矛盾|核心矛盾)/u),
+    capability_boundary: sentence(body, /(?:能力边界|行动边界|不会|不能|不懂|代价|限制)/u),
+    change_arc: sentence(body, /(?:第一卷|第二卷|第三卷|终局|成长|从.+到|主动选择)/u),
+  };
+}
+
+function cleanProfileSentence(text) {
+  let value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!value || /^#{1,6}\s+/u.test(value) || /^\|.*\|$/u.test(value) || /^\s*:?-{3,}:?\s*$/u.test(value)) return '';
+  value = value
+    .replace(/^(?:>\s*)+/u, '')
+    .replace(/^(?:[-*+]\s+|\d+[.)）]\s*)/u, '')
+    .replace(/\*\*([^*]+)\*\*/gu, '$1')
+    .replace(/__([^_]+)__/gu, '$1')
+    .trim();
+  return /^#{1,6}\s+/u.test(value) || /^\|.*\|$/u.test(value) ? '' : value;
+}
+
+function hasBalancedPunctuation(text) {
+  const pairs = new Map([
+    ['（', '）'], ['(', ')'], ['【', '】'], ['《', '》'], ['“', '”'], ['「', '」'], ['『', '』'],
+  ]);
+  const closing = new Set(pairs.values());
+  const stack = [];
+  for (const character of String(text || '')) {
+    if (pairs.has(character)) stack.push(pairs.get(character));
+    else if (closing.has(character) && stack.pop() !== character) return false;
+  }
+  return stack.length === 0 && (String(text || '').match(/"/g) || []).length % 2 === 0;
 }
 
 function has(text, pattern) {

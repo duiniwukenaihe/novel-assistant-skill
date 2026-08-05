@@ -11,7 +11,7 @@ const { recordSessionHeartbeat } = require('../workflow-session-heartbeat');
 
 const SCRIPT_DIR = path.resolve(__dirname, '..');
 
-function refreshRunnerLease(root, workflowId, taskDir, stageId, runId) {
+function refreshRunnerLease(root, workflowId, taskDir, stageId, runId, binding = {}) {
   let release = null;
   try {
     release = acquireProjectLock(root, `workflow-runner:${runId}`, 2 * 60 * 1000);
@@ -38,7 +38,11 @@ function refreshRunnerLease(root, workflowId, taskDir, stageId, runId) {
     current.runtime_guard.runner_lease = {
       workflow_id: workflowId,
       stage_id: stageId,
+      stage_attempt_id: String(((current.stage_execution || {}).stage_attempt_id) || ''),
+      work_unit_id: String(((current.stage_execution || {}).work_unit_id) || ''),
       run_id: runId,
+      runner_packet_path: String(binding.runner_packet_path || ''),
+      expected_result_packet: String(binding.expected_result_packet || ''),
       process_heartbeat_at: now,
       expires_at: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
     };
@@ -88,7 +92,7 @@ function refreshRunnerLease(root, workflowId, taskDir, stageId, runId) {
   }
 }
 
-function releaseRunnerLease(root, workflowId, taskDir, stageId, runId) {
+function releaseRunnerLease(root, workflowId, taskDir, stageId, runId, binding = {}) {
   let release = null;
   try {
     release = acquireProjectLock(root, `workflow-runner:${runId}`, 2 * 60 * 1000);
@@ -98,6 +102,16 @@ function releaseRunnerLease(root, workflowId, taskDir, stageId, runId) {
     if (String(current.current_stage || '') !== String(stageId || '')) return;
     const lease = ((current.runtime_guard || {}).runner_lease) || {};
     if (String(lease.run_id || '') !== String(runId || '')) return;
+    current.runtime_guard.last_runner_attempt = {
+      workflow_id: workflowId,
+      stage_id: stageId,
+      stage_attempt_id: String(lease.stage_attempt_id || ((current.stage_execution || {}).stage_attempt_id) || ''),
+      work_unit_id: String(lease.work_unit_id || ((current.stage_execution || {}).work_unit_id) || ''),
+      run_id: runId,
+      runner_packet_path: String(binding.runner_packet_path || lease.runner_packet_path || ''),
+      expected_result_packet: String(binding.expected_result_packet || lease.expected_result_packet || ''),
+      released_at: new Date().toISOString(),
+    };
     delete current.runtime_guard.runner_lease;
     mutateTaskAuthority(root, workflowId, Number(current.state_version || 0), () => current, { projectLockHeld: true });
     return { status: 'ok', workflow_id: workflowId, task_dir: taskDir };
@@ -222,8 +236,13 @@ function reserveBudget(options, task) {
   // instead of making every first real run impossible.
   const estimate = Number.isFinite(declaredEstimate) && declaredEstimate > 0 ? declaredEstimate : cap;
   options.budgetState = options.budgetState || { reserved: 0, actual: 0, max: cap };
-  if (options.budgetState.max !== cap || options.budgetState.reserved + options.budgetState.actual + estimate > cap) {
-    throw new Error('budget_estimate_exceeds_max');
+  if (options.budgetState.max !== cap) throw new Error('budget_configuration_changed');
+  if (options.budgetState.reserved + options.budgetState.actual + estimate > cap) {
+    const error = new Error('conservative budget is already consumed; automatic retry is not authorized');
+    error.code = 'BUDGET_RETRY_BLOCKED';
+    error.status = 'blocked_retry_budget_exhausted';
+    error.budget = { max_usd: cap, reserved_usd: options.budgetState.reserved, settled_usd: options.budgetState.actual, next_estimate_usd: estimate };
+    throw error;
   }
   options.budgetState.reserved += estimate;
   return estimate;

@@ -9,7 +9,7 @@ setup() {
     mkdir -p "$PROJECT/正文/第1卷" "$PROJECT/追踪/story-system/commits"
     cat > "$PROJECT/正文/第1卷/第001章_开场.md" <<'MD'
 # 第001章
-绿珠记住了铁锅缺口。
+苏禾记住了铁锅缺口。
 MD
     CHAPTER_HASH="sha256:$(shasum -a 256 "$PROJECT/正文/第1卷/第001章_开场.md" | awk '{print $1}')"
     COMMIT_ID="chapter-vtest-001-concurrency"

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const {
@@ -8,9 +9,20 @@ const {
   sourceCommit,
 } = require('./lib/bundle-version');
 const { resolveProjectRoot } = require('./lib/project-root-resolver');
+const { atomicWriteJson } = require('./lib/workflow-state-store');
 
 const args = process.argv.slice(2);
-const positional = args.filter(arg => !arg.startsWith('--'));
+const userIntent = optionValue(args, '--user-intent');
+const writeChoice = args.includes('--write');
+const optionValueIndexes = new Set();
+for (const name of ['--user-intent']) {
+  const index = args.indexOf(name);
+  if (index >= 0) {
+    optionValueIndexes.add(index);
+    optionValueIndexes.add(index + 1);
+  }
+}
+const positional = args.filter((arg, index) => !arg.startsWith('--') && !optionValueIndexes.has(index));
 const projectRoot = positional[0];
 const manifestPath = positional[1] || discoverManifestPath();
 const jsonOutput = args.includes('--json');
@@ -46,12 +58,23 @@ const computedSourceInputDigest = repositoryRoot && manifest.sourceInputDigest
   ? computeManifestSourceInputDigest(repositoryRoot, manifest.bundleName || 'novel-assistant', manifest.sourceLayout)
   : null;
 const currentCommit = repositoryRoot ? sourceCommit(repositoryRoot) : '';
-const result = {
+const checked = {
   ...buildResult(projectAbs, manifest, sentinel, { computedSourceTreeId, computedSourceInputDigest, currentCommit }),
   root_resolution: rootResolution,
 };
+const result = resolveUpdateChoice({
+  projectRoot: projectAbs,
+  checked,
+  userIntent,
+  writeChoice,
+});
 
 writeResult(result);
+
+function optionValue(argv, name) {
+  const index = argv.indexOf(name);
+  return index >= 0 ? String(argv[index + 1] || '') : '';
+}
 
 function discoverManifestPath() {
   const candidates = [
@@ -66,6 +89,132 @@ function writeResult(result) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } else {
     process.stdout.write(`${result.message}\n`);
+  }
+}
+
+function resolveUpdateChoice({ projectRoot: root, checked: current, userIntent: intent, writeChoice: persist }) {
+  const stateFile = path.join(root, '追踪', 'workflow', 'update-environment-choice.json');
+  const prior = readOptionalJson(stateFile);
+  const pending = prior && prior.type === 'update_environment' && prior.status === 'pending' ? prior : null;
+
+  if (current.status === 'current') {
+    if (!pending) return current;
+    const resolved = {
+      ...pending,
+      status: 'resolved',
+      selection: { action_id: 'environment_now_current', label: '写作协作环境已是当前版本', number: 1 },
+      resolved_at: new Date().toISOString(),
+    };
+    if (persist) atomicWriteJson(stateFile, resolved);
+    return {
+      ...current,
+      status: 'current_after_update',
+      original_intent: String(pending.original_intent || ''),
+      resume_original_intent: true,
+      entry_guard_command: buildEntryGuardCommand(pending.original_intent),
+      pending_action: resolved,
+    };
+  }
+
+  if (!current.shouldPrompt) return current;
+  const activePending = pending && updateChoiceMatchesCheck(pending, current) ? pending : null;
+  const selection = activePending ? parseUpdateChoice(intent) : null;
+  if (activePending && selection) {
+    const resolved = {
+      ...activePending,
+      status: 'resolved',
+      selection,
+      resolved_at: new Date().toISOString(),
+    };
+    if (persist) atomicWriteJson(stateFile, resolved);
+    if (selection.action_id === 'continue_without_update') {
+      return {
+        ...current,
+        status: 'update_declined',
+        shouldPrompt: false,
+        recommendedPrompt: '',
+        original_intent: String(activePending.original_intent || ''),
+        resume_original_intent: true,
+        selection,
+        pending_action: resolved,
+        entry_guard_command: buildEntryGuardCommand(activePending.original_intent),
+      };
+    }
+    return {
+      ...current,
+      status: 'update_confirmed',
+      shouldPrompt: false,
+      recommendedPrompt: '',
+      original_intent: String(activePending.original_intent || ''),
+      resume_original_intent: true,
+      selection,
+      pending_action: resolved,
+      execution_command: `node ${shellQuote(path.join(__dirname, 'novel-assistant-sync-runtime.js'))} --project-root . --json`,
+    };
+  }
+
+  const originalIntent = String((pending || {}).original_intent || intent || '');
+  const action = buildPendingUpdateAction(current, originalIntent);
+  if (persist) atomicWriteJson(stateFile, action);
+  return {
+    ...current,
+    selection_contract: 'resolve_update_environment',
+    pending_action: action,
+  };
+}
+
+function updateChoiceMatchesCheck(pending, current) {
+  return String(pending.current_bundle_id || '') === String(current.currentBundleId || '')
+    && String(pending.deployed_bundle_id || '') === String(current.deployedBundleId || '');
+}
+
+function buildPendingUpdateAction(result, originalIntent) {
+  const stable = [
+    String(result.currentBundleId || ''),
+    String(result.deployedBundleId || ''),
+    String(originalIntent || ''),
+  ].join('\n');
+  return {
+    schemaVersion: '1.0.0',
+    id: `update-environment-${crypto.createHash('sha256').update(stable).digest('hex').slice(0, 16)}`,
+    type: 'update_environment',
+    status: 'pending',
+    original_intent: String(originalIntent || ''),
+    current_bundle_id: String(result.currentBundleId || ''),
+    deployed_bundle_id: String(result.deployedBundleId || ''),
+    options: [
+      { action_id: 'update_environment_now', label: '现在更新写作协作环境', number: 1 },
+      { action_id: 'continue_without_update', label: '暂不更新，继续原意图', number: 2 },
+    ],
+    expected_reply_set: ['1', '2', '确认', '是', 'yes', 'y', '不', '否', 'no', 'n', 'later'],
+    created_at: new Date().toISOString(),
+  };
+}
+
+function parseUpdateChoice(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['1', '确认', '是', 'yes', 'y'].includes(normalized)) {
+    return { action_id: 'update_environment_now', label: '现在更新写作协作环境', number: 1 };
+  }
+  if (['2', '不', '否', 'no', 'n', 'later'].includes(normalized)) {
+    return { action_id: 'continue_without_update', label: '暂不更新，继续原意图', number: 2 };
+  }
+  return null;
+}
+
+function buildEntryGuardCommand(originalIntent) {
+  return `node ${shellQuote(path.join(__dirname, 'workflow-entry-guard.js'))} --project-root . --user-intent ${shellQuote(String(originalIntent || ''))} --write --compact --json`;
+}
+
+function shellQuote(value) {
+  return `'${String(value || '').replace(/'/g, `'"'"'`)}'`;
+}
+
+function readOptionalJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {
+    return null;
   }
 }
 

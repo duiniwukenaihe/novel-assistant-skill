@@ -56,8 +56,8 @@ teardown() {
     node "$REPO/scripts/publish-export.js" "$TMP_DIR" --write --json > "$TMP_DIR/export.json"
 
     [ -f "$TMP_DIR/导出/发布版/第001章_穿越觉醒.md" ]
-    [ -f "$TMP_DIR/导出/发布版/第002章_巴掌大黑狗崽.md" ]
-    [ -f "$TMP_DIR/导出/发布版/第003章_御兽宗来人.md" ]
+    [ -f "$TMP_DIR/导出/发布版/第002章_门槛边的幼兽.md" ]
+    [ -f "$TMP_DIR/导出/发布版/第003章_外来使者.md" ]
     ! find "$TMP_DIR/导出/发布版" -name '*某章*' | grep -q .
     ! find "$TMP_DIR/导出/发布版" -name '*-1章*' | grep -q .
 }
@@ -145,10 +145,10 @@ teardown() {
     mixed="$(mktemp -d)"
     mkdir -p "$mixed/正文/第1卷" "$mixed/正文/第2卷" "$mixed/大纲/第2卷" "$mixed/追踪/交接包/第2卷"
     printf '# 第001章 开局\n正文。\n' > "$mixed/正文/第1卷/第001章_开局.md"
-    printf '# 第027章 禁闭第一夜\n正文。\n' > "$mixed/正文/第2卷/第027章_禁闭第一夜.md"
-    printf '# 第028章 禁闭第二夜\n正文。\n' > "$mixed/正文/第2卷/第028章_禁闭第二夜.md"
+    printf '# 第027章 试炼第一日\n正文。\n' > "$mixed/正文/第2卷/第027章_试炼第一日.md"
+    printf '# 第028章 试炼第二日\n正文。\n' > "$mixed/正文/第2卷/第028章_试炼第二日.md"
     printf '# 交接\n第027章_to_第028章\n' > "$mixed/追踪/交接包/第2卷/第027章_to_第028章.md"
-    printf '# 卷纲\n第027章 禁闭第一夜\n' > "$mixed/大纲/第2卷/卷纲.md"
+    printf '# 卷纲\n第027章 试炼第一日\n' > "$mixed/大纲/第2卷/卷纲.md"
     mkdir -p "$mixed/追踪"
     printf 'F001 | 第027章 | 禁闭伏笔\n' > "$mixed/追踪/伏笔.md"
     printf '{"chapterLayout":"volume","preferredVolume":"第2卷","currentVolume":"第2卷","currentChapter":28}\n' > "$mixed/.book-state.json"
@@ -159,8 +159,8 @@ teardown() {
     [ "$status" -eq 2 ]
     grep -q '"status": "blocked_mixed_chapter_layout"' "$mixed/progress.json"
     grep -q '"volume": "第2卷"' "$mixed/progress.json"
-    grep -q '"source": "正文/第2卷/第027章_禁闭第一夜.md"' "$mixed/progress.json"
-    grep -q '"target": "正文/第2卷/第001章_禁闭第一夜.md"' "$mixed/progress.json"
+    grep -q '"source": "正文/第2卷/第027章_试炼第一日.md"' "$mixed/progress.json"
+    grep -q '"target": "正文/第2卷/第001章_试炼第一日.md"' "$mixed/progress.json"
     grep -q '"source": "追踪/交接包/第2卷/第027章_to_第028章.md"' "$mixed/progress.json"
     grep -q '"target": "追踪/交接包/第2卷/第001章_to_第002章.md"' "$mixed/progress.json"
     grep -q '"path": "大纲/第2卷/卷纲.md"' "$mixed/progress.json"
@@ -214,8 +214,8 @@ teardown() {
 @test "setup migration detects and plans global-numbered files inside later volume folders" {
     mixed="$(mktemp -d)"
     mkdir -p "$mixed/正文/第2卷" "$mixed/大纲/第2卷" "$mixed/追踪/章节契约/第2卷" "$mixed/追踪/交接包/第2卷"
-    printf '# 第027章 禁闭第一夜\n' > "$mixed/正文/第2卷/第027章_禁闭第一夜.md"
-    printf '# 第028章 禁闭第二夜\n' > "$mixed/正文/第2卷/第028章_禁闭第二夜.md"
+    printf '# 第027章 试炼第一日\n' > "$mixed/正文/第2卷/第027章_试炼第一日.md"
+    printf '# 第028章 试炼第二日\n' > "$mixed/正文/第2卷/第028章_试炼第二日.md"
     printf '# 第027章细纲\n' > "$mixed/大纲/第2卷/细纲_第027章.md"
     printf '# 第027章契约\n' > "$mixed/追踪/章节契约/第2卷/第027章.md"
     printf '# 第027章_to_第028章\n' > "$mixed/追踪/交接包/第2卷/第027章_to_第028章.md"
@@ -223,21 +223,21 @@ teardown() {
     node "$REPO/scripts/story-project-migrate.js" "$mixed" --json > "$mixed/dry.json"
 
     grep -q '"reason": "volume_global_numbering"' "$mixed/dry.json"
-    grep -q '"source": "正文/第2卷/第027章_禁闭第一夜.md"' "$mixed/dry.json"
-    grep -q '"target": "正文/第2卷/第001章_禁闭第一夜.md"' "$mixed/dry.json"
+    grep -q '"source": "正文/第2卷/第027章_试炼第一日.md"' "$mixed/dry.json"
+    grep -q '"target": "正文/第2卷/第001章_试炼第一日.md"' "$mixed/dry.json"
     grep -q '"target": "大纲/第2卷/细纲_第001章.md"' "$mixed/dry.json"
     grep -q '"target": "追踪/章节契约/第2卷/第001章.md"' "$mixed/dry.json"
     grep -q '"target": "追踪/交接包/第2卷/第001章_to_第002章.md"' "$mixed/dry.json"
 
     node "$REPO/scripts/story-project-migrate.js" "$mixed" --write --json > "$mixed/write.json"
 
-    [ -f "$mixed/正文/第2卷/第001章_禁闭第一夜.md" ]
-    [ -f "$mixed/正文/第2卷/第002章_禁闭第二夜.md" ]
+    [ -f "$mixed/正文/第2卷/第001章_试炼第一日.md" ]
+    [ -f "$mixed/正文/第2卷/第002章_试炼第二日.md" ]
     [ -f "$mixed/大纲/第2卷/细纲_第001章.md" ]
     [ -f "$mixed/追踪/章节契约/第2卷/第001章.md" ]
     [ -f "$mixed/追踪/交接包/第2卷/第001章_to_第002章.md" ]
-    [ ! -f "$mixed/正文/第2卷/第027章_禁闭第一夜.md" ]
-    find "$mixed/追踪/版本" -path '*/legacy-flat-layout/正文/第2卷/第027章_禁闭第一夜.md' | grep -q .
+    [ ! -f "$mixed/正文/第2卷/第027章_试炼第一日.md" ]
+    find "$mixed/追踪/版本" -path '*/legacy-flat-layout/正文/第2卷/第027章_试炼第一日.md' | grep -q .
 
     rm -rf "$mixed"
 }
@@ -245,11 +245,11 @@ teardown() {
 @test "setup migration dry-run reports reference updates before writing" {
     mixed="$(mktemp -d)"
     mkdir -p "$mixed/正文/第2卷" "$mixed/大纲/第2卷" "$mixed/追踪"
-    printf '# 第027章 禁闭第一夜\n正文。\n' > "$mixed/正文/第2卷/第027章_禁闭第一夜.md"
-    printf '# 第028章 禁闭第二夜\n正文。\n' > "$mixed/正文/第2卷/第028章_禁闭第二夜.md"
-    printf '# 卷纲\n第027章 禁闭第一夜\n第028章 禁闭第二夜\n' > "$mixed/大纲/第2卷/卷纲.md"
+    printf '# 第027章 试炼第一日\n正文。\n' > "$mixed/正文/第2卷/第027章_试炼第一日.md"
+    printf '# 第028章 试炼第二日\n正文。\n' > "$mixed/正文/第2卷/第028章_试炼第二日.md"
+    printf '# 卷纲\n第027章 试炼第一日\n第028章 试炼第二日\n' > "$mixed/大纲/第2卷/卷纲.md"
     printf 'F001 | 第027章 | 禁闭伏笔\n' > "$mixed/追踪/伏笔.md"
-    printf '第028章：禁闭第二夜\n' > "$mixed/追踪/时间线.md"
+    printf '第028章：试炼第二日\n' > "$mixed/追踪/时间线.md"
 
     node "$REPO/scripts/story-project-migrate.js" "$mixed" --json > "$mixed/dry.json"
 
@@ -335,7 +335,7 @@ JSONL
 @test "setup migration reports needs_action for dry-run plans" {
     mixed="$(mktemp -d)"
     mkdir -p "$mixed/正文/第2卷"
-    printf '# 第027章 禁闭第一夜\n' > "$mixed/正文/第2卷/第027章_禁闭第一夜.md"
+    printf '# 第027章 试炼第一日\n' > "$mixed/正文/第2卷/第027章_试炼第一日.md"
 
     node "$REPO/scripts/story-project-migrate.js" "$mixed" --json > "$mixed/dry.json"
 
@@ -348,18 +348,18 @@ JSONL
 @test "volume renumber migration uses one shared map across chapter artifacts" {
     mixed="$(mktemp -d)"
     mkdir -p "$mixed/正文/第2卷" "$mixed/大纲/第2卷" "$mixed/追踪/章节契约/第2卷" "$mixed/追踪/交接包/第2卷"
-    printf '# 第027章 禁闭第一夜\n正文。\n' > "$mixed/正文/第2卷/第027章_禁闭第一夜.md"
-    printf '# 第028章 禁闭第二夜\n正文。\n' > "$mixed/正文/第2卷/第028章_禁闭第二夜.md"
-    printf '# 第029章 禁闭第三夜\n正文。\n' > "$mixed/正文/第2卷/第029章_禁闭第三夜.md"
+    printf '# 第027章 试炼第一日\n正文。\n' > "$mixed/正文/第2卷/第027章_试炼第一日.md"
+    printf '# 第028章 试炼第二日\n正文。\n' > "$mixed/正文/第2卷/第028章_试炼第二日.md"
+    printf '# 第029章 试炼第三日\n正文。\n' > "$mixed/正文/第2卷/第029章_试炼第三日.md"
     printf '# 第028章细纲\n' > "$mixed/大纲/第2卷/细纲_第028章.md"
     printf '# 第029章契约\n' > "$mixed/追踪/章节契约/第2卷/第029章.md"
     printf '# 第028章_to_第029章\n' > "$mixed/追踪/交接包/第2卷/第028章_to_第029章.md"
 
     node "$REPO/scripts/story-project-migrate.js" "$mixed" --write --json > "$mixed/write.json"
 
-    [ -f "$mixed/正文/第2卷/第001章_禁闭第一夜.md" ]
-    [ -f "$mixed/正文/第2卷/第002章_禁闭第二夜.md" ]
-    [ -f "$mixed/正文/第2卷/第003章_禁闭第三夜.md" ]
+    [ -f "$mixed/正文/第2卷/第001章_试炼第一日.md" ]
+    [ -f "$mixed/正文/第2卷/第002章_试炼第二日.md" ]
+    [ -f "$mixed/正文/第2卷/第003章_试炼第三日.md" ]
     [ -f "$mixed/大纲/第2卷/细纲_第002章.md" ]
     [ -f "$mixed/追踪/章节契约/第2卷/第003章.md" ]
     [ -f "$mixed/追踪/交接包/第2卷/第002章_to_第003章.md" ]
@@ -380,7 +380,7 @@ JSONL
   "chapterLayout": "volume"
 }
 JSON
-    printf '# 第029章 禁闭第三夜\n参见第028章。\n' > "$mixed/正文/第2卷/第029章_禁闭第三夜.md"
+    printf '# 第029章 试炼第三日\n参见第028章。\n' > "$mixed/正文/第2卷/第029章_试炼第三日.md"
     printf '# 第029章细纲\n承接第028章。\n' > "$mixed/大纲/第2卷/细纲_第029章.md"
     printf '# 第029章契约\n' > "$mixed/追踪/章节契约/第2卷/第029章.md"
     printf '# 第2卷卷纲\n第029章解除禁闭，承接第028章。\n' > "$mixed/大纲/第2卷/卷纲.md"
@@ -391,8 +391,8 @@ JSON
 
     node "$REPO/scripts/story-project-migrate.js" "$mixed" --write --json > "$mixed/write.json"
 
-    [ -f "$mixed/正文/第2卷/第001章_禁闭第三夜.md" ]
-    grep -q "# 第001章 禁闭第三夜" "$mixed/正文/第2卷/第001章_禁闭第三夜.md"
+    [ -f "$mixed/正文/第2卷/第001章_试炼第三日.md" ]
+    grep -q "# 第001章 试炼第三日" "$mixed/正文/第2卷/第001章_试炼第三日.md"
     grep -q "# 第001章细纲" "$mixed/大纲/第2卷/细纲_第001章.md"
     grep -q "第001章解除禁闭" "$mixed/大纲/第2卷/卷纲.md"
     grep -q "第2卷第001章" "$mixed/大纲/大纲.md"
@@ -403,7 +403,7 @@ JSON
     grep -q '"currentVolume": "第2卷"' "$mixed/.book-state.json"
     grep -q '"currentVolumeChapter": 1' "$mixed/.book-state.json"
     grep -q '"globalDraftOrder": 29' "$mixed/.book-state.json"
-    grep -q '"currentDraftPath": "正文/第2卷/第001章_禁闭第三夜.md"' "$mixed/.book-state.json"
+    grep -q '"currentDraftPath": "正文/第2卷/第001章_试炼第三日.md"' "$mixed/.book-state.json"
     grep -q '"currentOutline": "大纲/第2卷/细纲_第001章.md"' "$mixed/.book-state.json"
 
     rm -rf "$mixed"

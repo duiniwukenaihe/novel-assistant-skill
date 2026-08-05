@@ -133,7 +133,7 @@ function scanFile(file) {
   for (let i = 0; i < lines.length; i += 1) {
     const lineNo = i + 1;
     const line = lines[i];
-    if (shouldScanEngineeringLeaks(options.proseProfile)) {
+    if (shouldScanEngineeringLeaks(options.proseProfile) && !isChapterEndMarker(line)) {
       scanPhraseList(findings, line, lineNo, ENGINEERING_LEAKS, 'engineering-leak', 'blocking', '正文混入工程/流程词，需改成角色可感知的动作、物件或对话。');
     }
     if (options.proseProfile === 'fiction') {
@@ -173,6 +173,11 @@ function scanFile(file) {
     qualityScore: qualityScore(findings),
     findings,
   };
+}
+
+function isChapterEndMarker(line) {
+  const normalized = String(line || '').trim().replace(/^[*_~]+|[*_~]+$/g, '').trim();
+  return /^(?:【\s*)?本章完(?:\s*】)?[。.!！]?$/.test(normalized);
 }
 
 function scanAsciiQuoteStyle(findings, text) {

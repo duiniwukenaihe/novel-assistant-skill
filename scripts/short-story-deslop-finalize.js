@@ -13,7 +13,12 @@ const { resolvePlannedSectionCount } = require('./lib/short-workflow-state');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
-const { readShortProjectState, resolveShortStateRelative, shortStateFile } = require('./lib/short-project-state');
+const {
+  readShortProjectState,
+  resolveShortProjectTitle,
+  resolveShortStateRelative,
+  shortStateFile,
+} = require('./lib/short-project-state');
 
 const VOLUME = '短篇发布稿';
 
@@ -25,6 +30,7 @@ function main() {
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 0, args.json);
   const task = authority.task;
+  if (Number(task.engine_version) === 3) return finish({ status: 'v3_engine_apply_required', workflow_id: workflowId, instruction: 'V3 任务必须调用全篇收束共享 service，并通过 V3 Engine 应用 StageResult。' }, 2, args.json);
   const execution = task.stage_execution || {};
   const stageId = String(task.current_stage || '');
   if (!['short_deslop', 'deslop'].includes(stageId) || String(execution.status || '') !== 'running' || String(execution.stage_id || '') !== stageId) {
@@ -102,7 +108,7 @@ function main() {
         title: section.title,
         text: section.body,
         metadata: {},
-        projectTitle: String(projectState.project_title || projectState.working_title || projectState.title || ''),
+        projectTitle: resolveShortProjectTitle(projectState, path.basename(root)),
       });
     } catch (error) {
       return finish({ status: String(error.status || 'short_deslop_section_commit_blocked'), section_index: section.section_index, detail: String(error.message || error), instruction: '已完成的逐节提交可安全复用；修复当前提交条件后重跑 execution_command，不要重新去 AI。' }, 0, args.json);
@@ -192,7 +198,7 @@ function plannedSections(root) {
     outlineText: readText(path.join(root, '小节大纲.md')),
   });
 }
-function sectionIndexes(text) { return [...String(text || '').matchAll(/^##\s+第\s*0*(\d+)\s*节\b/gmu)].map((match) => Number(match[1])); }
+function sectionIndexes(text) { return [...String(text || '').matchAll(/^##\s+第\s*0*(\d+)\s*节(?:\s+[^\n]*)?$/gmu)].map((match) => Number(match[1])); }
 function splitSections(text) {
   const source = String(text || '');
   const matches = [...source.matchAll(/^##\s+第\s*0*(\d+)\s*节(?:\s+([^\n]+))?\s*$/gmu)];

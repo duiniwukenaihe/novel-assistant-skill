@@ -197,11 +197,19 @@ function buildChapter(projectDir, sourceKey, sources, updatedAt, globalDraftOrde
     outlinePath: sources.outline ? sources.outline.relPath : '',
     contractPath: sources.contract ? sources.contract.relPath : '',
     draftPath: sources.draft ? sources.draft.relPath : '',
+    plannedDraftPath: sources.draft ? sources.draft.relPath : plannedDraftPath(sources.outline, volume, volumeChapterNo),
     handoffPath: sources.handoff ? sources.handoff.relPath : '',
     auditStatus: missing.length ? 'warn' : 'pass',
     wordCount: sources.draft ? estimateWordCount(sources.draft.text) : 0,
     updatedAt,
   };
+}
+
+function plannedDraftPath(outline, volume, volumeChapterNo) {
+  const filename = `第${padChapter(volumeChapterNo)}章.md`;
+  const outlinePath = slash(String((outline || {}).relPath || ''));
+  const hasVolumeDirectory = outlinePath.split('/').some((part) => part === volume);
+  return hasVolumeDirectory ? slash(path.join('正文', volume, filename)) : slash(path.join('正文', filename));
 }
 
 function inferChapterTitle(chapterNo, sources) {

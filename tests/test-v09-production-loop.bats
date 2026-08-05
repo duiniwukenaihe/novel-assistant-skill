@@ -28,6 +28,33 @@ setup() {
     node -e 'const fs=require("fs"); const p=process.argv[1]; const x=JSON.parse(fs.readFileSync(p,"utf8")); if (x.status !== "pass") process.exit(1)' "$WORKDIR/book/追踪/doctor-report.json"
 }
 
+@test "oh-story-doctor finds volume-nested chapter assets and ignores archived layouts" {
+    mkdir -p \
+      "$WORKDIR/book/大纲/第1卷" \
+      "$WORKDIR/book/正文/第1卷" \
+      "$WORKDIR/book/正文/legacy-flat-layout" \
+      "$WORKDIR/book/追踪/章节契约/第1卷" \
+      "$WORKDIR/book/追踪/交接包/第1卷"
+    printf '# 第002章\n' > "$WORKDIR/book/大纲/第1卷/细纲_第002章.md"
+    printf '# 第002章\n' > "$WORKDIR/book/正文/第1卷/第002章_新路.md"
+    printf '# 第099章\n' > "$WORKDIR/book/正文/legacy-flat-layout/第099章_旧副本.md"
+    printf '# 第002章契约\n' > "$WORKDIR/book/追踪/章节契约/第1卷/第002章.md"
+    printf '# 第002章交接\n' > "$WORKDIR/book/追踪/交接包/第1卷/第002章_to_第003章.md"
+
+    node "$REPO_ROOT/scripts/oh-story-doctor.js" "$WORKDIR/book" --json > "$WORKDIR/report.json"
+
+    node - "$WORKDIR/report.json" <<'NODE'
+const fs = require('fs');
+const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const byId = new Map(report.checks.map((check) => [check.id, check]));
+if (byId.get('contract:2')?.status !== 'pass') throw new Error(JSON.stringify(report.checks));
+if (byId.get('handoff:2')?.status !== 'pass') throw new Error(JSON.stringify(report.checks));
+if (byId.has('contract:99') || byId.has('handoff:99')) throw new Error('archived legacy layout must be ignored');
+if (!byId.get('draft:outline-present')?.message.includes('1 outline')) throw new Error(JSON.stringify(report.checks));
+if (!byId.get('draft:body-present')?.message.includes('1 draft')) throw new Error(JSON.stringify(report.checks));
+NODE
+}
+
 @test "story-schema-build creates valid schema files" {
     cp -R "$FIXTURE/valid-book" "$WORKDIR/book"
 
@@ -246,7 +273,7 @@ EOF_HANDOFF
   "source_kind": "canonical_story_bible",
   "characters": {
     "江临": {"role":"主角","goal":"查清异常水印","capability_boundary":"不能直接调取导师账户"},
-    "莫青山": {"role":"主要对手","goal":"控制宗门资源","capability_boundary":"不能公开违背门规"}
+    "韩岳": {"role":"主要对手","goal":"控制宗门资源","capability_boundary":"不能公开违背门规"}
   }
 }
 EOF_CAST
@@ -258,7 +285,7 @@ const fs = require('fs');
 const pack = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const state = pack.summary.characterState.join('\n');
 if (!state.includes('江临')) throw new Error(JSON.stringify(pack.summary.characterState));
-if (state.includes('莫青山')) throw new Error(JSON.stringify(pack.summary.characterState));
+if (state.includes('韩岳')) throw new Error(JSON.stringify(pack.summary.characterState));
 if (pack.sourceFiles.activeCast !== '追踪/memory/active-cast.json') throw new Error(JSON.stringify(pack.sourceFiles));
 NODE
 }

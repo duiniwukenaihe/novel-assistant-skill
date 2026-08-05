@@ -7,7 +7,8 @@ setup() {
     STORE="$REPO/scripts/lib/workflow-state-store.js"
     TMP_DIR="$(mktemp -d)"
     PROJECT="$TMP_DIR/book"
-    mkdir -p "$PROJECT/追踪/staging" "$PROJECT/正文/第1卷" "$PROJECT/追踪"
+    mkdir -p "$PROJECT/追踪/staging" "$PROJECT/正文/第1卷" "$PROJECT/追踪/story-system"
+    printf '%s\n' '{"schemaVersion":"1.0.0","mode":"strict"}' > "$PROJECT/追踪/story-system/write-policy.json"
     printf '# 旧正文\n' > "$PROJECT/正文/第1卷/第001章_起点.md"
     printf '# 旧伏笔\n' > "$PROJECT/追踪/伏笔.md"
     printf '# 新正文\n人物行动推进。\n' > "$PROJECT/追踪/staging/正文.md"
@@ -274,8 +275,8 @@ NODE
     make_manifest_canonical
     mkdir -p "$PROJECT/追踪/staging/交接包" "$PROJECT/追踪/staging/卷交接" "$PROJECT/追踪/staging/memory"
     printf '# 卷内交接\n- 下一章必须回应铁锅缺口。\n' > "$PROJECT/追踪/staging/交接包/第001章_to_第002章.md"
-    printf '# 跨卷交接\n- 绿珠的读心空白带入下一卷。\n' > "$PROJECT/追踪/staging/卷交接/第1卷_to_第2卷.md"
-    printf '{"active_cast":[{"name":"绿珠","state":"读心异常"}]}' > "$PROJECT/追踪/staging/memory/active-cast.json"
+    printf '# 跨卷交接\n- 苏禾的感知空白带入下一卷。\n' > "$PROJECT/追踪/staging/卷交接/第1卷_to_第2卷.md"
+    printf '{"active_cast":[{"name":"苏禾","state":"感知异常"}]}' > "$PROJECT/追踪/staging/memory/active-cast.json"
     printf '{"suggestionId":"sg-accepted","entryId":"hook.iron-wok","status":"applied","proposedContent":"铁锅缺口需要兑现。"}\n' > "$PROJECT/追踪/staging/memory/memory-suggestions.jsonl"
     node - "$PROJECT/追踪/staging/manifest.json" <<'NODE'
 const fs=require('fs');
@@ -308,17 +309,17 @@ NODE
 @test "accepted chapter commit projects explicit facts from manifest" {
     write_canonical_task
     make_manifest_canonical
-    printf '# 事实证据\n绿珠身份为圣女。\n' > "$PROJECT/追踪/staging/伏笔.md"
+    printf '# 事实证据\n苏禾身份为密使。\n' > "$PROJECT/追踪/staging/伏笔.md"
     node - "$PROJECT/追踪/staging/manifest.json" <<'NODE'
 const fs=require('fs');
 const file=process.argv[2];
 const manifest=JSON.parse(fs.readFileSync(file,'utf8'));
 manifest.facts=[{
-  subject:'绿珠',
+  subject:'苏禾',
   predicate:'身份',
-  object:'圣女',
-  aliases:['圣女'],
-  dependencies:['血脉觉醒'],
+  object:'密使',
+  aliases:['密使'],
+  dependencies:['身份线索'],
   scope:{book:'current'},
   evidence:[{path:'追踪/伏笔.md'}],
   confidence:1
@@ -336,7 +337,7 @@ const projection=fs.readFileSync(process.argv[3],'utf8').trim().split(/\n/).map(
 const facts=fs.readFileSync(process.argv[4],'utf8').trim().split(/\n/).map(JSON.parse);
 if(out.status!=='accepted'||projection.status!=='projection_current') throw new Error(JSON.stringify({out,projection}));
 if(!projection.fact_result||projection.fact_result.factIds.length!==1) throw new Error(JSON.stringify(projection));
-if(facts.length!==1||facts[0].object!=='圣女'||facts[0].provenance.commit_id!==out.commit_id) throw new Error(JSON.stringify(facts));
+if(facts.length!==1||facts[0].object!=='密使'||facts[0].provenance.commit_id!==out.commit_id) throw new Error(JSON.stringify(facts));
 NODE
 }
 
@@ -389,13 +390,13 @@ NODE
 @test "a superseding accepted chapter commit clears a relevant stale fact evidence debt" {
     write_canonical_task sa-fact-001
     make_manifest_canonical
-    printf '# 事实证据\n绿珠身份为圣女。\n' > "$PROJECT/追踪/staging/伏笔.md"
+    printf '# 事实证据\n苏禾身份为密使。\n' > "$PROJECT/追踪/staging/伏笔.md"
     node - "$PROJECT/追踪/staging/manifest.json" <<'NODE'
 const fs = require('fs');
 const file = process.argv[2];
 const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
 manifest.facts = [{
-  subject: '绿珠', predicate: '身份', object: '圣女', aliases: ['圣女'], dependencies: [],
+  subject: '苏禾', predicate: '身份', object: '密使', aliases: ['密使'], dependencies: [],
   scope: { book: 'current' }, evidence: [{ path: '追踪/伏笔.md' }], confidence: 1,
 }];
 fs.writeFileSync(file, JSON.stringify(manifest));
@@ -410,13 +411,13 @@ NODE
     [[ "$output" == *'"status": "hash_mismatch"'* ]]
 
     write_canonical_task sa-fact-002
-    printf '# 新事实证据\n绿珠身份已确认是圣女。\n' > "$PROJECT/追踪/staging/伏笔.md"
+    printf '# 新事实证据\n苏禾身份已确认是密使。\n' > "$PROJECT/追踪/staging/伏笔.md"
     node - "$PROJECT/追踪/staging/manifest.json" <<'NODE'
 const fs = require('fs');
 const file = process.argv[2];
 const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
-manifest.facts[0].object = '圣女（已确认）';
-manifest.facts[0].aliases = ['圣女', '身份已确认'];
+manifest.facts[0].object = '密使（已确认）';
+manifest.facts[0].aliases = ['密使', '身份已确认'];
 fs.writeFileSync(file, JSON.stringify(manifest));
 NODE
     second_tx="$(prepare_transaction)"
@@ -431,9 +432,9 @@ if (out.status !== 'ok') throw new Error(JSON.stringify(out));
 if ((out.memory_debts || []).some(item => item.fact_id && item.status === 'hash_mismatch')) throw new Error(JSON.stringify(out.memory_debts));
 const latest = new Map();
 for (const row of rows) latest.set(row.fact_id, row);
-const active = [...latest.values()].filter(item => item.status === 'active' && item.subject === '绿珠' && item.predicate === '身份');
-if (active.length !== 1 || active[0].object !== '圣女（已确认）') throw new Error(JSON.stringify(rows));
-const superseded = [...latest.values()].filter(item => item.status === 'superseded' && item.subject === '绿珠' && item.predicate === '身份');
+const active = [...latest.values()].filter(item => item.status === 'active' && item.subject === '苏禾' && item.predicate === '身份');
+if (active.length !== 1 || active[0].object !== '密使（已确认）') throw new Error(JSON.stringify(rows));
+const superseded = [...latest.values()].filter(item => item.status === 'superseded' && item.subject === '苏禾' && item.predicate === '身份');
 if (!superseded.length || !superseded.some(item => item.valid_to === active[0].provenance.commit_id)) throw new Error(JSON.stringify(rows));
 NODE
 }
@@ -529,4 +530,155 @@ NODE
     node -e 'const x=require(process.argv[1]); if(x.status!=="ok" || !x.latest_commit) process.exit(1)' "$TMP_DIR/inspect.json"
     node -e 'const x=require(process.argv[1]); if(!["projection_current","projection_repaired"].includes(x.status)) process.exit(1)' "$TMP_DIR/replay1.json"
     node -e 'const x=require(process.argv[1]); if(x.status!=="projection_current") process.exit(1)' "$TMP_DIR/replay2.json"
+}
+
+@test "strict chapter identity registry accepts its selected prose target" {
+    selected_hash="sha256:$(shasum -a 256 "$PROJECT/正文/第1卷/第001章_起点.md" | awk '{print $1}')"
+    cat > "$PROJECT/追踪/story-system/chapter-identities.json" <<JSON
+{"schemaVersion":"1.0.0","chapters":[{"volume":"第1卷","chapter":1,"path":"正文/第1卷/第001章_起点.md","content_hash":"$selected_hash","excluded_candidates":[]}]}
+JSON
+    tx="$(prepare_transaction)"
+
+    run node "$SCRIPT" accept --project-root "$PROJECT" --transaction "$tx" --json
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status": "accepted"'* ]]
+    grep -q '人物行动推进' "$PROJECT/正文/第1卷/第001章_起点.md"
+}
+
+@test "strict chapter identity registry also guards txt prose" {
+    selected="正文/第1卷/第001章_起点.txt"
+    alternate="正文/第1卷/第001章_备选.txt"
+    printf '# 旧文本正文\n' > "$PROJECT/$selected"
+    printf '# 备选文本正文\n不得覆盖。\n' > "$PROJECT/$alternate"
+    selected_hash="sha256:$(shasum -a 256 "$PROJECT/$selected" | awk '{print $1}')"
+    cat > "$PROJECT/追踪/story-system/chapter-identities.json" <<JSON
+{"schemaVersion":"1.0.0","chapters":[{"volume":"第1卷","chapter":1,"path":"$selected","content_hash":"$selected_hash","excluded_candidates":[]}]}
+JSON
+    node - "$PROJECT/追踪/staging/manifest.json" "$alternate" <<'NODE'
+const fs=require('fs');const file=process.argv[2];const target=process.argv[3];const manifest=JSON.parse(fs.readFileSync(file,'utf8'));
+manifest.artifacts[0].target=target;fs.writeFileSync(file,JSON.stringify(manifest));
+NODE
+    before="$(shasum -a 256 "$PROJECT/$alternate" | awk '{print $1}')"
+    tx="$(prepare_transaction)"
+
+    run node "$SCRIPT" accept --project-root "$PROJECT" --transaction "$tx" --json
+
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_noncanonical_chapter_target'* ]]
+    [[ "$output" == *"$selected"* ]]
+    [[ "$output" == *"$alternate"* ]]
+    [ "$before" = "$(shasum -a 256 "$PROJECT/$alternate" | awk '{print $1}')" ]
+}
+
+@test "strict chapter identity registry rejects an excluded alternate without changing prose" {
+    alternate="正文/第1卷/第001章_备选.md"
+    printf '# 备选旧正文\n不得覆盖。\n' > "$PROJECT/$alternate"
+    selected_hash="sha256:$(shasum -a 256 "$PROJECT/正文/第1卷/第001章_起点.md" | awk '{print $1}')"
+    alternate_hash="sha256:$(shasum -a 256 "$PROJECT/$alternate" | awk '{print $1}')"
+    cat > "$PROJECT/追踪/story-system/chapter-identities.json" <<JSON
+{"schemaVersion":"1.0.0","chapters":[{"volume":"第1卷","chapter":1,"path":"正文/第1卷/第001章_起点.md","content_hash":"$selected_hash","excluded_candidates":[{"path":"$alternate","content_hash":"$alternate_hash","reason":"not_selected"}]}]}
+JSON
+    node - "$PROJECT/追踪/staging/manifest.json" "$alternate" <<'NODE'
+const fs=require('fs');const file=process.argv[2];const target=process.argv[3];const manifest=JSON.parse(fs.readFileSync(file,'utf8'));
+manifest.artifacts[0].target=target;fs.writeFileSync(file,JSON.stringify(manifest));
+NODE
+    before="$(shasum -a 256 "$PROJECT/$alternate" | awk '{print $1}')"
+    tx="$(prepare_transaction)"
+
+    run node "$SCRIPT" accept --project-root "$PROJECT" --transaction "$tx" --json
+
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_noncanonical_chapter_target'* ]]
+    [[ "$output" == *'正文/第1卷/第001章_起点.md'* ]]
+    [[ "$output" == *'正文/第1卷/第001章_备选.md'* ]]
+    [ "$before" = "$(shasum -a 256 "$PROJECT/$alternate" | awk '{print $1}')" ]
+    grep -q '不得覆盖' "$PROJECT/$alternate"
+}
+
+@test "strict policy rejects legacy flat layout before publishing prepared prose" {
+    archived="正文/legacy-flat-layout/第1卷/第001章_归档.md"
+    mkdir -p "$PROJECT/正文/legacy-flat-layout/第1卷"
+    printf '# 归档正文\n不得覆盖。\n' > "$PROJECT/$archived"
+    node - "$PROJECT/追踪/staging/manifest.json" "$archived" <<'NODE'
+const fs=require('fs');const file=process.argv[2];const target=process.argv[3];const manifest=JSON.parse(fs.readFileSync(file,'utf8'));
+manifest.artifacts[0].target=target;fs.writeFileSync(file,JSON.stringify(manifest));
+NODE
+    before="$(shasum -a 256 "$PROJECT/$archived" | awk '{print $1}')"
+    tx="$(prepare_transaction)"
+
+    run node "$SCRIPT" accept --project-root "$PROJECT" --transaction "$tx" --json
+
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_archived_chapter_target'* ]]
+    [ "$before" = "$(shasum -a 256 "$PROJECT/$archived" | awk '{print $1}')" ]
+    grep -q '不得覆盖' "$PROJECT/$archived"
+}
+
+@test "strict policy pins a new chapter identity to its first accepted target" {
+    first="正文/第1卷/第002章_正稿.md"
+    alternate="正文/第1卷/第002章_另稿.md"
+    node - "$PROJECT/追踪/staging/manifest.json" "$first" <<'NODE'
+const fs=require('fs');const file=process.argv[2];const target=process.argv[3];const manifest=JSON.parse(fs.readFileSync(file,'utf8'));
+manifest.chapter=2;manifest.artifacts[0].target=target;fs.writeFileSync(file,JSON.stringify(manifest));
+NODE
+    first_tx="$(prepare_transaction)"
+    node "$SCRIPT" accept --project-root "$PROJECT" --transaction "$first_tx" --json > "$TMP_DIR/first-accept.json"
+    grep -q '人物行动推进' "$PROJECT/$first"
+
+    write_canonical_task sa-prose-002
+    printf '# 第二版候选\n不得采用。\n' > "$PROJECT/追踪/staging/正文.md"
+    node - "$PROJECT/追踪/staging/manifest.json" "$alternate" <<'NODE'
+const fs=require('fs');const file=process.argv[2];const target=process.argv[3];const manifest=JSON.parse(fs.readFileSync(file,'utf8'));
+manifest.artifacts[0].target=target;fs.writeFileSync(file,JSON.stringify(manifest));
+NODE
+    alternate_tx="$(prepare_transaction)"
+
+    run node "$SCRIPT" accept --project-root "$PROJECT" --transaction "$alternate_tx" --json
+
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_noncanonical_chapter_target'* ]]
+    [[ "$output" == *"$first"* ]]
+    [[ "$output" == *"$alternate"* ]]
+    [ ! -e "$PROJECT/$alternate" ]
+    grep -q '人物行动推进' "$PROJECT/$first"
+}
+
+@test "strict policy blocks an ambiguous accepted target history" {
+    mkdir -p "$PROJECT/追踪/story-system/commits"
+    hash="sha256:$(printf 'accepted' | shasum -a 256 | awk '{print $1}')"
+    cat > "$PROJECT/追踪/story-system/commits/chapter-a.json" <<JSON
+{"schemaVersion":"1.0.0","commit_id":"chapter-a","status":"accepted","volume":"第1卷","chapter":1,"artifacts":[{"role":"chapter_prose","target":"正文/第1卷/第001章_A.md","after_hash":"$hash"}]}
+JSON
+    cat > "$PROJECT/追踪/story-system/commits/chapter-b.json" <<JSON
+{"schemaVersion":"1.0.0","commit_id":"chapter-b","status":"accepted_with_projection_debt","volume":"第1卷","chapter":1,"artifacts":[{"role":"chapter_prose","target":"正文/第1卷/第001章_B.md","after_hash":"$hash"}]}
+JSON
+
+    run node "$POLICY" check --project-root "$PROJECT" --target "正文/第1卷/第001章_A.md" --json
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'blocked_noncanonical_chapter_target'* ]]
+    [[ "$output" == *'第001章_A.md'* ]]
+    [[ "$output" == *'第001章_B.md'* ]]
+}
+
+@test "strict policy blocks a malformed or conflicting chapter identity registry" {
+    printf '%s\n' '{"schemaVersion":"2.0.0","chapters":[]}' > "$PROJECT/追踪/story-system/chapter-identities.json"
+    tx="$(prepare_transaction)"
+
+    run node "$SCRIPT" accept --project-root "$PROJECT" --transaction "$tx" --json
+
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'blocked_invalid_chapter_identity_registry'* ]]
+    grep -q '旧正文' "$PROJECT/正文/第1卷/第001章_起点.md"
+
+    selected_hash="sha256:$(shasum -a 256 "$PROJECT/正文/第1卷/第001章_起点.md" | awk '{print $1}')"
+    cat > "$PROJECT/追踪/story-system/chapter-identities.json" <<JSON
+{"schemaVersion":"1.0.0","chapters":[{"volume":"第1卷","chapter":1,"path":"正文/第1卷/第001章_起点.md","content_hash":"$selected_hash","excluded_candidates":[]},{"volume":"第1卷","chapter":1,"path":"正文/第1卷/第001章_冲突.md","content_hash":"$selected_hash","excluded_candidates":[]}]}
+JSON
+
+    run node "$POLICY" check --project-root "$PROJECT" --target "正文/第1卷/第001章_起点.md" --transaction-id "$tx" --json
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'blocked_invalid_chapter_identity_registry'* ]]
 }

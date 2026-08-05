@@ -89,9 +89,33 @@ function validateShortSectionAcceptanceProof({ projectRoot, workflowId, proof, r
   if (!acceptedGateStatus(quality.story_value_gate || quality.quality_gate)) return invalid('short_section_story_value_gate_missing');
   if (!acceptedGateStatus(quality.repetition_gate)) return invalid('short_section_repetition_gate_missing');
   const lengthPolicy = quality.length_policy && typeof quality.length_policy === 'object' ? quality.length_policy : {};
-  const allowedLengthVerdicts = new Set(['baseline_not_established', 'within_story_band', 'explicit_story_exception', 'outside_story_band_deferred']);
+  const allowedLengthVerdicts = new Set([
+    'baseline_not_established',
+    'within_story_band',
+    'within_target_band',
+    'explicit_story_exception',
+    'outside_story_band_deferred',
+    'observed_length_variance_advisory',
+    'under_target_review_completeness',
+    'over_target_review_pacing',
+    'under_hard_floor',
+  ]);
+  if (lengthPolicy.blocking === true
+      || String(lengthPolicy.verdict || '') === 'under_target_repair_required') {
+    return invalid('short_section_length_repair_required');
+  }
   if (lengthPolicy.blocking !== false || !allowedLengthVerdicts.has(String(lengthPolicy.verdict || ''))) {
     return invalid('short_section_length_policy_missing');
+  }
+  if (String(lengthPolicy.verdict || '') === 'under_hard_floor') {
+    const decision = lengthPolicy.author_decision && typeof lengthPolicy.author_decision === 'object'
+      ? lengthPolicy.author_decision
+      : {};
+    if (lengthPolicy.author_decision_required !== false
+        || String(decision.action_id || '') !== 'accept_section_length_variance'
+        || !String(decision.draft_digest || '').trim()) {
+      return invalid('short_section_length_author_decision_missing');
+    }
   }
   return {
     status: 'accepted',

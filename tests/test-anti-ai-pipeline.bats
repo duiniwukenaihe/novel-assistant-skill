@@ -30,6 +30,25 @@ EOF
     grep -q '"strong"' "$TMP_DIR/out.json"
 }
 
+@test "anti-ai diagnosis does not treat a normal chapter-end marker as an engineering leak" {
+    cat > "$TMP_DIR/chapter-end.md" <<'EOF'
+# 第一章
+
+门终于关上了。
+
+**【本章完】**
+EOF
+
+    node "$SCRIPT" --json --work-type=longform --prose-profile=fiction "$TMP_DIR/chapter-end.md" > "$TMP_DIR/chapter-end.json"
+
+    node - "$TMP_DIR/chapter-end.json" <<'NODE'
+const fs = require('fs');
+const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const leaks = report.files[0].findings.filter((item) => item.type === 'engineering-leak');
+if (leaks.length !== 0) throw new Error(JSON.stringify(leaks));
+NODE
+}
+
 @test "anti-ai diagnosis keeps a few functional Chinese em dashes advisory" {
     cat > "$TMP_DIR/functional-dashes.md" <<'EOF'
 门外传来一声——很轻。

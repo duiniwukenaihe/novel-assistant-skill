@@ -2,12 +2,12 @@
 'use strict';
 
 const path = require('path');
-const { migrateShortStateStorage } = require('./lib/short-project-state');
+const compatibility = require('./lib/workflow-v3/compatibility-gateway');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const projectRoot = path.resolve(args.projectRoot || process.cwd());
-  const result = migrateShortStateStorage(projectRoot);
+  const result = compatibility.migrateShortStateStorage(projectRoot);
   process.stdout.write(`${JSON.stringify({ schemaVersion: '1.0.0', ...result }, null, args.json ? 2 : 0)}\n`);
 }
 

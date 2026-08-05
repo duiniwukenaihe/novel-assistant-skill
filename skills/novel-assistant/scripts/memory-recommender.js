@@ -68,7 +68,7 @@ const LOW_RISK_GUARD_PATTERNS = [
 
 const USAGE = `Usage:
   node scripts/memory-recommender.js --project-root <dir> --input <suggestions.json> --write --json
-  node scripts/memory-recommender.js --project-root <dir> --apply-low-risk --json
+  node scripts/memory-recommender.js --project-root <dir> --apply-low-risk [--suggestion-id <id> ...] --json
   node scripts/memory-recommender.js --project-root <dir> --confirm <suggestion-id-or-entry-id> --decision apply|reject --json
   node scripts/memory-recommender.js --project-root <dir> --status --json`;
 
@@ -80,7 +80,7 @@ try {
   let result;
   if (args.status) result = runStatus(memoryDir);
   else if (args.input && args.write) result = runRecordSuggestions(projectRoot, path.resolve(args.input));
-  else if (args.applyLowRisk) result = runApplyLowRisk(projectRoot);
+  else if (args.applyLowRisk) result = runApplyLowRisk(projectRoot, args.suggestionIds);
   else if (args.confirm) result = runConfirm(projectRoot, args.confirm, args.decision);
   else throw failure('blocked_invalid_argument', 'expected --input <file> --write, --apply-low-risk, --confirm, or --status');
   printJson(result);
@@ -93,13 +93,14 @@ try {
 }
 
 function parseArgs(argv) {
-  const out = { projectRoot: '', input: '', write: false, applyLowRisk: false, status: false, confirm: '', decision: '', json: false };
+  const out = { projectRoot: '', input: '', write: false, applyLowRisk: false, suggestionIds: [], status: false, confirm: '', decision: '', json: false };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--project-root') out.projectRoot = argv[++i] || '';
     else if (arg === '--input') out.input = argv[++i] || '';
     else if (arg === '--write') out.write = true;
     else if (arg === '--apply-low-risk') out.applyLowRisk = true;
+    else if (arg === '--suggestion-id') out.suggestionIds.push(argv[++i] || '');
     else if (arg === '--confirm') out.confirm = argv[++i] || '';
     else if (arg === '--decision') out.decision = argv[++i] || '';
     else if (arg === '--status') out.status = true;
@@ -197,6 +198,14 @@ function runRecordSuggestions(projectRoot, inputPath) {
   const suggestions = JSON.parse(raw);
   if (!Array.isArray(suggestions)) throw failure('blocked_invalid_memory_suggestions', 'suggestions input must be a JSON array');
 
+  const invalidContent = suggestions
+    .filter(item => typeof ((item || {}).proposedContent) !== 'string' || !item.proposedContent.trim())
+    .map(item => String((item || {}).entryId || ''))
+    .filter(Boolean);
+  if (invalidContent.length > 0) {
+    return { status: 'blocked_invalid_memory_suggestions', blockedEntryIds: unique(invalidContent), reason: 'proposedContent_must_be_nonempty_string' };
+  }
+
   const polluted = suggestions.filter(item => detectPollution(item && item.proposedContent)).map(item => item.entryId).filter(Boolean);
   if (polluted.length > 0) {
     return { status: 'blocked_output_pollution', blockedEntryIds: unique(polluted) };
@@ -219,6 +228,7 @@ function runRecordSuggestions(projectRoot, inputPath) {
       result: {
         status: normalized.length ? 'suggestions_recorded' : 'current',
         recorded: normalized.length,
+        recordedSuggestionIds: normalized.map(suggestionKey),
         skippedDuplicates: suggestions.length - normalized.length,
         file: state.files.suggestionsFile,
       },
@@ -227,16 +237,34 @@ function runRecordSuggestions(projectRoot, inputPath) {
   });
 }
 
-function runApplyLowRisk(projectRoot) {
+function runApplyLowRisk(projectRoot, requestedSuggestionIds = []) {
   return mutateMemory(projectRoot, 'memory-recommender:apply-low-risk', state => {
-    const suggestions = latestBy(state.suggestions, suggestionKey).filter(item => item.status === 'pending');
+    const allPending = latestBy(state.suggestions, suggestionKey).filter(item => item.status === 'pending');
+    const requested = new Set((Array.isArray(requestedSuggestionIds) ? requestedSuggestionIds : [])
+      .map(item => String(item || '').trim()).filter(Boolean));
+    const suggestions = requested.size > 0
+      ? allPending.filter(item => requested.has(suggestionKey(item)))
+      : allPending;
+    if (requested.size > 0 && suggestions.length !== requested.size) {
+      const found = new Set(suggestions.map(suggestionKey));
+      return {
+        result: {
+          status: 'blocked_suggestion_scope_missing',
+          missingSuggestionIds: Array.from(requested).filter(id => !found.has(id)),
+          applied: 0,
+          confirmationRequired: 0,
+          pendingConfirmationTotal: countPendingConfirmations(allPending, state.lorebook),
+        },
+        write: {},
+      };
+    }
     const lorebook = latestBy(state.lorebook, item => item.id);
     const existingIds = new Set(lorebook.map(entry => entry.id).filter(Boolean));
     const now = new Date().toISOString();
     const polluted = suggestions.filter(suggestion => detectPollution(suggestion && suggestion.proposedContent)).map(suggestion => suggestion.entryId).filter(Boolean);
     if (polluted.length > 0) {
       return {
-        result: { status: 'blocked_output_pollution', blockedEntryIds: unique(polluted), applied: 0, confirmationRequired: 0, lorebookFile: state.files.lorebookFile, auditFile: state.files.auditFile },
+        result: { status: 'blocked_output_pollution', blockedEntryIds: unique(polluted), applied: 0, confirmationRequired: 0, pendingConfirmationTotal: countPendingConfirmations(allPending, state.lorebook), lorebookFile: state.files.lorebookFile, auditFile: state.files.auditFile },
         write: {},
       };
     }
@@ -260,11 +288,21 @@ function runApplyLowRisk(projectRoot) {
       }
     }
     const status = applied > 0 || confirmationRequired === 0 ? 'applied_low_risk' : 'blocked_confirmation_required';
+    const pendingAfter = latestBy(state.suggestions, suggestionKey).filter(item => item.status === 'pending');
     return {
-      result: { status, applied, confirmationRequired, lorebookFile: state.files.lorebookFile, auditFile: state.files.auditFile },
+      result: { status, applied, confirmationRequired, pendingConfirmationTotal: countPendingConfirmations(pendingAfter, state.lorebook), lorebookFile: state.files.lorebookFile, auditFile: state.files.auditFile },
       write: { suggestions: applied > 0, lorebook: applied > 0, audit: applied > 0 || confirmationRequired > 0 },
     };
   });
+}
+
+function countPendingConfirmations(suggestions, lorebookRows) {
+  const existingIds = new Set(latestBy(lorebookRows, item => item.id).map(entry => entry.id).filter(Boolean));
+  return (Array.isArray(suggestions) ? suggestions : []).filter((suggestion) => {
+    const lowRisk = classifyLowRiskSuggestion(suggestion);
+    return !(lowRisk.ok && suggestion.risk === 'low' && suggestion.action === 'create'
+      && suggestion.entryId && !existingIds.has(suggestion.entryId));
+  }).length;
 }
 
 function runConfirm(projectRoot, identifier, decision) {
@@ -300,6 +338,9 @@ function runConfirm(projectRoot, identifier, decision) {
 }
 
 function buildLorebookEntry(suggestion, now, previous = null, provenance = {}) {
+  if (typeof suggestion.proposedContent !== 'string' || !suggestion.proposedContent.trim()) {
+    throw failure('blocked_invalid_memory_suggestions', `memory suggestion proposedContent must be a non-empty string: ${suggestion.entryId || 'unknown'}`);
+  }
   const content = String(suggestion.proposedContent || '');
   return {
     id: suggestion.entryId,
@@ -568,6 +609,10 @@ function classifyLowRiskSuggestion(suggestion) {
 
   if (suggestion.risk !== 'low') {
     return { ok: false, reason: 'risk_not_low' };
+  }
+
+  if (typeof suggestion.proposedContent !== 'string' || !suggestion.proposedContent.trim()) {
+    return { ok: false, reason: 'proposed_content_not_string' };
   }
 
   const text = [

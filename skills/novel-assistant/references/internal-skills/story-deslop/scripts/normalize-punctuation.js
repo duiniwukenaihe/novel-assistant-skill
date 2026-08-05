@@ -159,9 +159,11 @@ function normalizeDocument(input, quoteMode) {
 
     if (!trimmed.startsWith('#')) {
       proseCharCount += line.replace(/\s/g, '').length;
-      preservedDashCount += (line.match(/——/g) || []).length;
-      preservedDashCount += (line.match(/--+/g) || []).length;
-      preservedDashCount += countSingleEmDashes(line);
+      if (trimmed !== '——') {
+        preservedDashCount += (line.match(/——/g) || []).length;
+        preservedDashCount += (line.match(/--+/g) || []).length;
+        preservedDashCount += countSingleEmDashes(line);
+      }
     }
 
     const punctuationResult = normalizePausePunctuation(line, lineNo);
@@ -273,6 +275,7 @@ function getPauseType(token) {
 }
 
 function choosePauseReplacement(text, start, length, token) {
+  if (/^…{2,}$/.test(token)) return null;
   const before = previousNonSpace(text, start - 1);
   const after = nextNonSpace(text, start + length);
   const rest = text.slice(start + length).trimStart();
@@ -345,6 +348,12 @@ function normalizeQuotes(line, quoteMode, quoteOpen, lineNo) {
   }
 
   const findings = [];
+  if (quoteMode === 'mainland') {
+    line = line.replace(/'([^'\n]*[\u3400-\u9fff][^'\n]*)'/gu, (match, content, offset) => {
+      findings.push({ line: lineNo, column: Number(offset) + 1, type: 'quote-style', message: '按显式 quote-mode 转为大陆中文单引号。' });
+      return `‘${content}’`;
+    });
+  }
   let output = '';
 
   for (let i = 0; i < line.length; i += 1) {

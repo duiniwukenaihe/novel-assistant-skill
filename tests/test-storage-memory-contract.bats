@@ -4,8 +4,8 @@ setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   BOOK="$BATS_TEST_TMPDIR/book"
   mkdir -p "$BOOK/追踪/private-short-extension" "$BOOK/追踪/memory" "$BOOK/追踪/schema" "$BOOK/追踪/workflow"
-  printf '%s\n' '{"project_id":"project-fruit","project_title":"果汁事件"}' > "$BOOK/追踪/private-short-extension/project-state.json"
-  printf '%s\n' '{"fact_id":"fact-1","subject":"林照","predicate":"第1节状态","object":"决定查账","scope":{"section":1},"status":"active"}' > "$BOOK/追踪/memory/facts.jsonl"
+  printf '%s\n' '{"project_id":"project-archive","project_title":"档案复核"}' > "$BOOK/追踪/private-short-extension/project-state.json"
+  printf '%s\n' '{"fact_id":"fact-1","subject":"阿岚","predicate":"第1节状态","object":"决定复核编号","scope":{"section":1},"status":"active"}' > "$BOOK/追踪/memory/facts.jsonl"
   printf '%s\n' '{"promise_id":"promise-1","summary":"第二节核对签名","source_section":1,"target_section":2,"status":"active"}' > "$BOOK/追踪/schema/promises.jsonl"
   printf '%s\n' '{"rule_id":"rule-1","content":"使用第一人称","status":"confirmed","scope":"short_write"}' > "$BOOK/追踪/schema/user-style-rules.jsonl"
   printf '%s\n' '{"rule_id":"pollution-1","content":"禁止领域词循环填充","status":"active"}' > "$BOOK/追踪/schema/output-pollution-rules.jsonl"
@@ -19,7 +19,7 @@ const {LocalStorageBackend}=require(process.argv[2]);
 const root=process.argv[3];
 const backend=new LocalStorageBackend(root);
 const first=backend.ensureProjectIdentity({write:true});
-if(first.project_id!=='project-fruit'||!first.project_instance_id) throw new Error(JSON.stringify(first));
+if(first.project_id!=='project-archive'||!first.project_instance_id) throw new Error(JSON.stringify(first));
 const file=path.join(root,'追踪/storage/project-identity.json');
 const stored=JSON.parse(fs.readFileSync(file,'utf8'));
 if('project_root' in stored||JSON.stringify(stored).includes(root)) throw new Error('identity leaked absolute project path');
@@ -37,7 +37,7 @@ const root=process.argv[3];
 const backend=new LocalStorageBackend(root);
 const first=backend.projectIdentity();
 const second=backend.projectIdentity();
-if(first.status!=='uninitialized'||first.project_id!=='project-fruit'||first.project_instance_id!=='') throw new Error(JSON.stringify(first));
+if(first.status!=='uninitialized'||first.project_id!=='project-archive'||first.project_instance_id!=='') throw new Error(JSON.stringify(first));
 if(JSON.stringify(first)!==JSON.stringify(second)) throw new Error('read-only identity changed between calls');
 if(fs.existsSync(path.join(root,'追踪/storage/project-identity.json'))) throw new Error('read-only lookup wrote identity');
 NODE
@@ -48,7 +48,7 @@ NODE
   run node - "$REPO/scripts/lib/story-memory-repository.js" "$BOOK" <<'NODE'
 const {StoryMemoryRepository}=require(process.argv[2]);
 const repo=new StoryMemoryRepository(process.argv[3]);
-if(repo.projectState().project_id!=='project-fruit') throw new Error('missing project');
+if(repo.projectState().project_id!=='project-archive') throw new Error('missing project');
 if(repo.acceptedFacts().length!==1||repo.promises().length!==1||repo.styleRules().length!==1||repo.pollutionRules().length!==1||repo.domainLearning().length!==1) throw new Error('missing typed records');
 const revisions=repo.sourceRevisions();
 if(!String(revisions['追踪/memory/facts.jsonl']||'').startsWith('sha256:')) throw new Error(JSON.stringify(revisions));
@@ -61,7 +61,7 @@ NODE
 @test "memory contract binds query snapshot and read receipt without exposing backend details" {
   run node - "$REPO/scripts/lib/memory-query-contract.js" <<'NODE'
 const api=require(process.argv[2]);
-const query=api.normalizeMemoryQuery({project_id:'project-fruit',project_instance_id:'instance-1',workflow_id:'wf-1',stage_id:'draft_section',scope:{section_index:2},needs:['accepted_facts','active_promises']});
+const query=api.normalizeMemoryQuery({project_id:'project-archive',project_instance_id:'instance-1',workflow_id:'wf-1',stage_id:'draft_section',scope:{section_index:2},needs:['accepted_facts','active_promises']});
 const contract=api.createMemoryContract({query,provider:'story-memory',memoryRevision:'sha256:abc',packetPath:'追踪/memory-packets/p.json',packetDigest:'sha256:def',tokenBudget:500,usedTokens:120,selectedEntryIds:['fact-1'],omittedCount:3});
 const receipt=api.createMemoryReadReceipt(contract);
 const checked=api.validateMemoryReadReceipt(contract,receipt);
@@ -80,7 +80,7 @@ NODE
   run node "$REPO/scripts/workflow-control-summary.js" --project-root "$BOOK" --write-identity --json
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   printf '%s' "$output" | node -e '
-let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);if(x.task_store.unfinished_count!==1||x.task_store.focused_workflow_id!=="wf-short")throw new Error(s);if(x.user_profile.preference_count!==1||x.story_memory.active_facts!==1)throw new Error(s);if(JSON.stringify(x.story_memory).includes("决定查账"))throw new Error("control summary leaked story facts");});'
+let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);if(x.task_store.unfinished_count!==1||x.task_store.focused_workflow_id!=="wf-short")throw new Error(s);if(x.user_profile.preference_count!==1||x.story_memory.active_facts!==1)throw new Error(s);if(JSON.stringify(x.story_memory).includes("决定复核编号"))throw new Error("control summary leaked story facts");});'
 }
 
 @test "artifact repository uses project-relative identity and deterministic review cache keys" {
@@ -98,6 +98,56 @@ const second=repo.reviewCacheKey(input);
 if(first!==second||!first.startsWith('review-cache:')) throw new Error(JSON.stringify({first,second}));
 const changed=repo.reviewCacheKey({...input,memoryRevision:'sha256:new'});
 if(changed===first) throw new Error('memory revision did not invalidate review cache');
+NODE
+  [ "$status" -eq 0 ]
+}
+
+@test "memory contract and receipt bind stage_attempt_id and work_unit_id to reject attempt impersonation" {
+  run node - "$REPO/scripts/lib/memory-query-contract.js" <<'NODE'
+const api=require(process.argv[2]);
+const baseQuery={project_id:'project-archive',project_instance_id:'instance-1',workflow_id:'wf-1',stage_id:'draft_section',scope:{section_index:2},needs:['accepted_facts']};
+const buildContract=(attempt,workUnit)=>{
+  const query=api.normalizeMemoryQuery({...baseQuery,stage_attempt_id:attempt,work_unit_id:workUnit});
+  return api.createMemoryContract({query,provider:'story-memory',memoryRevision:'sha256:abc',packetPath:'追踪/memory-packets/p.json',packetDigest:'sha256:def',tokenBudget:100,usedTokens:10,selectedEntryIds:['fact-1'],omittedCount:0});
+};
+const contractA=buildContract('attempt-A','wu-1');
+const contractB=buildContract('attempt-B','wu-1');
+const receiptA=api.createMemoryReadReceipt(contractA);
+const receiptB=api.createMemoryReadReceipt(contractB);
+if(!contractA.query.stage_attempt_id||contractA.query.stage_attempt_id!=='attempt-A') throw new Error(JSON.stringify(contractA));
+if(!contractA.query.work_unit_id||contractA.query.work_unit_id!=='wu-1') throw new Error(JSON.stringify(contractA));
+if(!receiptA.stage_attempt_id||!receiptA.work_unit_id) throw new Error(JSON.stringify(receiptA));
+const checkedA=api.validateMemoryReadReceipt(contractA,receiptA);
+if(checkedA.status!=='current') throw new Error('A must validate against itself: '+JSON.stringify(checkedA));
+const impersonate=api.validateMemoryReadReceipt(contractB,receiptA);
+if(impersonate.status!=='stale') throw new Error('A receipt must not impersonate B: '+JSON.stringify(impersonate));
+if(!Array.isArray(impersonate.stale_fields)||!impersonate.stale_fields.includes('stage_attempt_id')) throw new Error('stale_fields must include stage_attempt_id: '+JSON.stringify(impersonate));
+const legacyContract=api.createMemoryContract({query:api.normalizeMemoryQuery(baseQuery),provider:'story-memory',memoryRevision:'sha256:abc',packetPath:'追踪/memory-packets/p.json',packetDigest:'sha256:def',tokenBudget:100,usedTokens:10,selectedEntryIds:['fact-1'],omittedCount:0});
+const legacyReceipt=api.createMemoryReadReceipt(legacyContract);
+const legacyChecked=api.validateMemoryReadReceipt(legacyContract,legacyReceipt);
+if(legacyChecked.status!=='current') throw new Error('legacy contract without binding must still validate by old fields: '+JSON.stringify(legacyChecked));
+NODE
+  [ "$status" -eq 0 ]
+}
+
+@test "memory contract binds a V3 stage attempt even when the engine has no work unit id" {
+  run node - "$REPO/scripts/lib/memory-query-contract.js" <<'NODE'
+const api=require(process.argv[2]);
+const query=api.normalizeMemoryQuery({
+  project_id:'project-archive',
+  project_instance_id:'instance-1',
+  workflow_id:'wf-v3',
+  workflow_type:'short_write',
+  stage_id:'section_brief',
+  stage_attempt_id:'sa-v3-B',
+  scope:{section_index:2},
+  needs:['accepted_facts'],
+});
+const contract=api.createMemoryContract({query,provider:'story-memory',memoryRevision:'sha256:abc',packetDigest:'sha256:def'});
+const receipt=api.createMemoryReadReceipt(contract);
+if(receipt.stage_attempt_id!=='sa-v3-B') throw new Error(JSON.stringify(receipt));
+const stale=api.validateMemoryReadReceipt(contract,{...receipt,stage_attempt_id:'sa-v3-A'});
+if(stale.status!=='stale'||!stale.stale_fields.includes('stage_attempt_id')) throw new Error(JSON.stringify(stale));
 NODE
   [ "$status" -eq 0 ]
 }

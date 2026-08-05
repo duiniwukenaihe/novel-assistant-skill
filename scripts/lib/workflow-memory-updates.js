@@ -44,7 +44,29 @@ function projectAcceptedMemoryUpdatesUnsafe(projectRoot, task, execution, result
   if (policy.mode === 'missing') policy = resolveWorkflowMemoryPolicy(task.workflow_type, execution.stage_id || result.stage_id || '');
   const updates = Array.isArray((result || {}).memory_updates) ? result.memory_updates : [];
   if (!policy.accepts_memory_updates || policy.projection_mode === 'none') return summary('not_applicable');
-  if (!updates.length) return summary('no_updates');
+  if (!updates.length) {
+    const managedReview = String((result || {}).host_execution_mode || '') === 'managed_runner'
+      && Boolean(String((result || {}).runner_packet_path || '').trim())
+      && Boolean(((execution || {}).review_requirement || {}).required);
+    if (!managedReview) return summary('no_updates');
+    const evidence = Array.isArray((result || {}).evidence) ? result.evidence : [];
+    const memoryWorthyEvidence = evidence.some((item) => /(?:planning.*(?:drift|tension)|open.*promise|character.*state|new.*fact)/i
+      .test(String(((item || {}).kind) || ((item || {}).type) || '')));
+    if (memoryWorthyEvidence) {
+      return {
+        ...summary('projection_failed'),
+        detail: 'accepted review identified a durable story-memory change but returned no memory_updates',
+      };
+    }
+    const omissionReason = String((result || {}).memory_update_omission_reason || '').trim();
+    if (!omissionReason) {
+      return {
+        ...summary('projection_failed'),
+        detail: 'managed review returned no memory_updates and no auditable omission reason',
+      };
+    }
+    return summary('no_updates');
+  }
 
   const scopedUpdates = updates.map((item) => ({
     ...item,
@@ -111,7 +133,23 @@ function projectAcceptedMemoryUpdatesUnsafe(projectRoot, task, execution, result
     appendJsonl(eventFile, { type: 'memory_projection_failed', at: new Date().toISOString(), status: record.status || 'error' });
     return { ...summary('projection_failed'), detail: record.status || 'error' };
   }
-  const applied = runMemoryCommand(root, ['--apply-low-risk', '--json']);
+  const recordedSuggestionIds = Array.isArray(record.recordedSuggestionIds)
+    ? record.recordedSuggestionIds.map(item => String(item || '')).filter(Boolean)
+    : [];
+  if (recordedSuggestionIds.length === 0) {
+    const status = runMemoryCommand(root, ['--status', '--json']);
+    const projected = {
+      ...summary('projected'),
+      recorded: Number(record.recorded || 0),
+      pending_confirmation_total: Number(status.confirmationRequired || 0),
+    };
+    appendJsonl(eventFile, { type: 'accepted_memory_updates', at: new Date().toISOString(), ...projected });
+    return projected;
+  }
+  const applyArgs = ['--apply-low-risk'];
+  for (const suggestionId of recordedSuggestionIds) applyArgs.push('--suggestion-id', suggestionId);
+  applyArgs.push('--json');
+  const applied = runMemoryCommand(root, applyArgs);
   if (!['applied_low_risk', 'blocked_confirmation_required'].includes(String(applied.status || ''))) {
     appendJsonl(eventFile, { type: 'memory_projection_failed', at: new Date().toISOString(), status: applied.status || 'error' });
     return {
@@ -119,6 +157,7 @@ function projectAcceptedMemoryUpdatesUnsafe(projectRoot, task, execution, result
       recorded: Number(record.recorded || 0),
       applied: 0,
       confirmation_required: 0,
+      pending_confirmation_total: Number(applied.pendingConfirmationTotal || 0),
       detail: applied.status || 'error',
     };
   }
@@ -129,6 +168,7 @@ function projectAcceptedMemoryUpdatesUnsafe(projectRoot, task, execution, result
     recorded: Number(record.recorded || 0),
     applied: Number(applied.applied || 0),
     confirmation_required: Number(applied.confirmationRequired || 0),
+    pending_confirmation_total: Number(applied.pendingConfirmationTotal || 0),
     quarantined: domainPartition.quarantined.length,
     ...(domainQuarantineRel ? { quarantine: domainQuarantineRel } : {}),
   };

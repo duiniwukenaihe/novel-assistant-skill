@@ -23,6 +23,7 @@ const invocation = adapters.buildAdapterInvocation('claude-code', {
   expectedResultPacket: '追踪/workflow/result.json',
   executableOverrides: { 'claude-code': '/opt/bin/claude' },
   maxBudgetUsd: 1.5,
+  maxTurns: 30,
 });
 if (invocation.command !== '/opt/bin/claude') throw new Error(invocation.command);
 if (invocation.shell !== false) throw new Error('shell must be false');
@@ -30,6 +31,7 @@ if (invocation.cwd !== root) throw new Error(invocation.cwd);
 if (!invocation.args.includes('--output-format') || !invocation.args.includes('stream-json')) throw new Error(invocation.args.join(' '));
 if (!invocation.args.includes('--permission-mode') || !invocation.args.includes('acceptEdits')) throw new Error(invocation.args.join(' '));
 if (!invocation.args.includes('--max-budget-usd') || !invocation.args.includes('1.5')) throw new Error(invocation.args.join(' '));
+if (!invocation.args.includes('--max-turns') || !invocation.args.includes('30')) throw new Error(invocation.args.join(' '));
 if (invocation.env.NOVEL_ASSISTANT_RUN_ID !== 'run-001') throw new Error('missing run id');
 NODE
 }

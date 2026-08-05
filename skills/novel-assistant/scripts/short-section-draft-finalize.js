@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
@@ -10,6 +9,7 @@ const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { ensureCurrentShortMemoryStage } = require('./lib/short-memory-stage-recovery');
+const { finalizeDraft } = require('./lib/short-production/section-loop');
 
 const DRAFT_STAGES = new Set(['draft_first_section', 'draft_section', 'draft_next_section']);
 
@@ -21,6 +21,7 @@ function main() {
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 2, args.json);
   let task = authority.task;
+  if (Number(task.engine_version) === 3) return finish({ status: 'v3_engine_apply_required', workflow_id: workflowId, instruction: 'V3 任务必须直接调用共享 service，并通过 V3 Engine 应用 StageResult。' }, 2, args.json);
   const stageId = String(task.current_stage || '');
   let execution = task.stage_execution || {};
   if (!DRAFT_STAGES.has(stageId)
@@ -29,19 +30,6 @@ function main() {
     return finish({ status: 'stage_action_not_applicable', expected: [...DRAFT_STAGES], actual: stageId, instruction: '重新读取当前任务的 execution_command；不要重试旧阶段命令。' }, 0, args.json);
   }
   const draftRel = String(args.draft || execution.draft_target || '');
-  const draftFile = safeProjectFile(root, draftRel);
-  if (!draftFile || !fs.existsSync(draftFile) || !fs.statSync(draftFile).isFile()) {
-    return finish({ status: 'awaiting_short_draft', workflow_id: workflowId, draft_target: draftRel }, 0, args.json);
-  }
-  const prose = fs.readFileSync(draftFile, 'utf8').trim();
-  if (Array.from(prose).length < 80) {
-    return finish({ status: 'awaiting_short_draft', workflow_id: workflowId, draft_target: draftRel, chars: Array.from(prose).length }, 0, args.json);
-  }
-  const beforeDigest = String(execution.draft_input_digest || '');
-  const afterDigest = digestFile(draftFile);
-  if (beforeDigest && beforeDigest === afterDigest) {
-    return finish({ status: 'awaiting_short_draft_change', workflow_id: workflowId, draft_target: draftRel }, 0, args.json);
-  }
   const memoryGate = ensureCurrentShortMemoryStage({
     projectRoot: root,
     workflowId,
@@ -62,6 +50,23 @@ function main() {
   }
   task = memoryGate.task;
   execution = memoryGate.execution;
+  const shared = finalizeDraft({ projectRoot: root, task, draft: draftRel });
+  if (shared.kind !== 'completed') {
+    return finish({
+      status: shared.code,
+      workflow_id: workflowId,
+      draft_target: draftRel,
+      section_index: shared.section_index,
+      chars: shared.chars,
+      memory_status: shared.memory_status,
+      stale_sources: shared.stale_sources,
+      instruction: shared.instruction,
+    }, shared.kind === 'blocked' && shared.code === 'short_section_identity_missing' ? 2 : 0, args.json);
+  }
+  const draftFile = safeProjectFile(root, draftRel);
+  const prose = fs.readFileSync(draftFile, 'utf8').trim();
+  const beforeDigest = String(execution.draft_input_digest || '');
+  const afterDigest = String(shared.draft_digest || '');
 
   const packetRel = String(execution.expected_result_packet || `${task.task_dir}/result-packets/${stageId}.result.json`);
   const packetFile = safeProjectFile(root, packetRel);
@@ -134,9 +139,6 @@ function printHelp() { process.stdout.write('Usage: node short-section-draft-fin
 
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
 function safeProjectFile(root, relativePath) { const file = path.resolve(root, String(relativePath || '')); return file.startsWith(`${root}${path.sep}`) ? file : ''; }
-function digestFile(file) { return `sha256:${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`; }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
-function parseJson(text) { try { return JSON.parse(String(text || '').trim()); } catch (_) { return null; } }
 function sectionIndexFromScope(scope) {
   const match = String(scope || '').match(/第\s*0*(\d+)\s*节/u);
   return match ? Number(match[1]) : undefined;

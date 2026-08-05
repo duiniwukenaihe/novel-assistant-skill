@@ -16,15 +16,15 @@ teardown() {
     book="$TMP_DIR/book"
     mkdir -p "$book/设定/世界观" "$book/正文/第2卷"
     cat > "$book/.book-state.json" <<'JSON'
-{"chapterLayout":"volume","bookTitle":"穿越后我靠蛋炒饭征服了魔教圣女","targetGenre":"美食经营、魔教武侠"}
+{"chapterLayout":"volume","bookTitle":"异世厨师经营小酒楼","targetGenre":"美食经营、门派武侠"}
 JSON
     cat > "$book/设定/世界观/背景设定.md" <<'EOF'
-主角在魔教后厨用蛋炒饭破局。圣女绿珠被婚约束缚，任千秋执掌魔教。
-能力来自日月心法、读心术、厨艺和经营博弈。当前阶段是内门、禁闭、中央厨房。
+主角在门派后厨用炒饭破局。密使苏禾被婚约束缚，顾远执掌门派。
+能力来自基础心法、感知术、厨艺和经营博弈。当前阶段是内门、试炼、中央厨房。
 EOF
-    cat > "$book/正文/第2卷/第001章_禁闭第一夜.md" <<'EOF'
-# 禁闭第一夜
-沈七端着蛋炒饭走进禁闭室，绿珠的读心术第一次失效。
+    cat > "$book/正文/第2卷/第001章_试炼第一日.md" <<'EOF'
+# 试炼第一日
+陆川端着炒饭走进禁闭室，苏禾的感知术第一次失效。
 EOF
 
     node "$PROFILE_SCRIPT" "$book" --json > "$TMP_DIR/profile.json"
@@ -61,13 +61,13 @@ EOF
     book="$TMP_DIR/progress"
     mkdir -p "$book/设定/世界观" "$book/正文/第2卷"
     cat > "$book/.book-state.json" <<'JSON'
-{"chapterLayout":"volume","bookTitle":"穿越后我靠蛋炒饭征服了魔教圣女","targetGenre":"美食经营、魔教武侠"}
+{"chapterLayout":"volume","bookTitle":"异世厨师经营小酒楼","targetGenre":"美食经营、门派武侠"}
 JSON
     cat > "$book/设定/世界观/背景设定.md" <<'EOF'
-魔教圣女、蛋炒饭、日月心法、内门、后厨经营。
+门派使者、炒饭、基础心法、内门、后厨经营。
 EOF
-    cat > "$book/正文/第2卷/第001章_禁闭第一夜.md" <<'EOF'
-# 禁闭第一夜
+    cat > "$book/正文/第2卷/第001章_试炼第一日.md" <<'EOF'
+# 试炼第一日
 正文。
 EOF
 
@@ -82,14 +82,14 @@ EOF
     book="$TMP_DIR/polluted"
     mkdir -p "$book/设定/世界观" "$book/正文/第1卷" "$book/追踪/审查报告"
     cat > "$book/.book-state.json" <<'JSON'
-{"chapterLayout":"volume","bookTitle":"穿越后我靠蛋炒饭征服了魔教圣女","targetGenre":"美食经营、魔教武侠"}
+{"chapterLayout":"volume","bookTitle":"异世厨师经营小酒楼","targetGenre":"美食经营、门派武侠"}
 JSON
     cat > "$book/设定/世界观/背景设定.md" <<'EOF'
-魔教圣女、蛋炒饭、日月心法、内门、后厨经营。
+门派使者、炒饭、基础心法、内门、后厨经营。
 EOF
     cat > "$book/正文/第1卷/第001章_灶台初醒.md" <<'EOF'
 # 灶台初醒
-沈七在魔教后厨醒来。
+陆川在门派后厨醒来。
 EOF
     python3 - <<PY
 from pathlib import Path

@@ -319,7 +319,13 @@ if(!String(pending.feedback_id||'').startsWith('feedback-batch-')) throw new Err
 if(pending.previous_stage!=='quality_gate'||pending.section_index!==6) throw new Error(JSON.stringify({pending_feedback:pending}));
 const source=(pending.items||[])[0]||{};
 if(source.source_kind!=='quality_gate'||source.section_index!==6) throw new Error(JSON.stringify({source}));
-if(!String(source.text||'').includes('B02')) throw new Error(JSON.stringify({source}));
+const visible=String(source.text||'');
+for(const leaked of ['outline_B02','causal_progression','professional_reader_milestone']) {
+  if(visible.includes(leaked)) throw new Error(`internal quality id leaked: ${visible}`);
+}
+if(!visible.includes('大纲兑现')||!visible.includes('主角用原始邮件证明签名被伪造')) {
+  throw new Error(JSON.stringify({source}));
+}
 const expected=String((task.stage_execution||{}).expected_result_packet||'');
 if(!expected.includes(pending.feedback_id)||expected.includes('feedback-unbound')) throw new Error(JSON.stringify({expected,pending_feedback:pending}));
 if(!String((task.stage_execution||{}).context_read_command||'')) throw new Error(JSON.stringify({stage_execution:task.stage_execution}));

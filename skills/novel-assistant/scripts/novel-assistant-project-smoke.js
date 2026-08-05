@@ -85,8 +85,11 @@ function isBookProject(dir) {
 
 function smokeProject(projectRoot, limit) {
   const domain = runJsonScript('story-domain-profile.js', [projectRoot]);
-  const progress = runJsonScript('story-progress-status.js', [projectRoot]);
-  const proseGate = runProseGateSamples(projectRoot, limit);
+  const shortSections = collectShortSections(projectRoot);
+  const progress = shortSections.length
+    ? { json: buildShortProgress(shortSections), errors: [] }
+    : runJsonScript('story-progress-status.js', [projectRoot]);
+  const proseGate = runProseGateSamples(projectRoot, limit, shortSections);
   const errors = [
     ...domain.errors,
     ...progress.errors,
@@ -105,6 +108,28 @@ function smokeProject(projectRoot, limit) {
     progress: progress.json || null,
     proseGate,
     errors,
+  };
+}
+
+function collectShortSections(projectRoot) {
+  const sections = [];
+  walkFiles(path.join(projectRoot, '正文'), '正文', file => {
+    const match = path.basename(file.relPath).match(/^第\s*0*([1-9]\d*)\s*节.*\.(md|txt)$/i);
+    if (!match) return;
+    sections.push({ ...file, sectionNo: Number(match[1]) });
+  });
+  return sections.sort((a, b) => a.sectionNo - b.sectionNo || a.relPath.localeCompare(b.relPath, 'zh-Hans-CN'));
+}
+
+function buildShortProgress(sections) {
+  const latest = sections.at(-1);
+  return {
+    status: 'ok',
+    contentUnit: 'section',
+    currentSection: latest.sectionNo,
+    completedSections: sections.length,
+    currentDraftPath: latest.relPath,
+    display: `第${latest.sectionNo}节（已落盘 ${sections.length} 节）`,
   };
 }
 
@@ -134,8 +159,8 @@ function runNode(scriptName, scriptArgs) {
   };
 }
 
-function runProseGateSamples(projectRoot, limit) {
-  const samples = collectDraftSamples(projectRoot, limit);
+function runProseGateSamples(projectRoot, limit, shortSections) {
+  const samples = collectDraftSamples(projectRoot, limit, shortSections);
   const reports = [];
   const errors = [];
   let proseIssues = 0;
@@ -166,8 +191,11 @@ function runProseGateSamples(projectRoot, limit) {
   };
 }
 
-function collectDraftSamples(projectRoot, limit) {
+function collectDraftSamples(projectRoot, limit, shortSections = []) {
   if (limit <= 0) return [];
+  if (shortSections.length) {
+    return shortSections.slice(0, limit).map((file) => ({ ...file, chapterNo: file.sectionNo }));
+  }
   const files = [];
   const standalone = path.join(projectRoot, '正文.md');
   if (fs.existsSync(standalone)) files.push({ absPath: standalone, relPath: '正文.md', chapterNo: 1 });

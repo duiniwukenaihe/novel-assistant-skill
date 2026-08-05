@@ -28,9 +28,9 @@ teardown() {
 @test "workflow command registry keeps public and mutating command sets explicit" {
     run node - "$REPO/scripts/lib/workflow-command-registry.js" <<'NODE'
 const registry = require(process.argv[2]);
-const expected = ['templates', 'create', 'inspect', 'resolve-action', 'apply-result', 'next-candidates', 'switch-intent', 'activate', 'migrate-legacy', 'migrate-longform-successor', 'reset-incompatible-review-batches', 'continue-review-with-legacy-evidence', 'restore-incomplete-workflow', 'reset-unmanaged-review-repair', 'reconcile-runtime', 'refresh-short-title-lock', 'resume-pending-short-feedback', 'discard-short-feedback-item', 'reclassify-short-feedback-item', 'migrate-short-lean-workflow'];
+const expected = ['templates', 'create', 'inspect', 'task-overview', 'resolve-action', 'apply-result', 'next-candidates', 'switch-intent', 'activate', 'migrate-legacy', 'migrate-longform-successor', 'reset-incompatible-review-batches', 'continue-review-with-legacy-evidence', 'restore-incomplete-workflow', 'reset-unmanaged-review-repair', 'restart-rejected-stage', 'reconcile-runtime', 'refresh-short-title-lock', 'resume-pending-short-feedback', 'register-short-brief-overload', 'discard-short-feedback-item', 'reclassify-short-feedback-item', 'migrate-short-lean-workflow'];
 if (JSON.stringify(registry.PUBLIC_COMMANDS) !== JSON.stringify(expected)) throw new Error(JSON.stringify(registry.PUBLIC_COMMANDS));
-for (const command of ['create', 'resolve-action', 'apply-result', 'switch-intent', 'activate', 'reconcile-runtime']) {
+for (const command of ['create', 'resolve-action', 'apply-result', 'switch-intent', 'activate', 'restart-rejected-stage', 'reconcile-runtime']) {
   if (!registry.isMutatingCommand(command)) throw new Error(`missing mutating command: ${command}`);
 }
 if (registry.isMutatingCommand('templates') || registry.isMutatingCommand('inspect')) throw new Error('read-only command marked mutating');

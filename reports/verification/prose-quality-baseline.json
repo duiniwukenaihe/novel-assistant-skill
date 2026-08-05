@@ -1,17 +1,17 @@
 {
   "schemaVersion": "2.0.0",
   "corpusVersion": "v1",
-  "detectorVersion": "prose-quality-benchmark@2.0.0;check-ai-patterns@4a229baf6ffe;check-degeneration@ef6803eb668d",
+  "detectorVersion": "prose-quality-benchmark@2.0.0;check-ai-patterns@f41bed2d3d7c;check-degeneration@ef6803eb668d",
   "sourceIdentity": {
     "identityVersion": "prose-quality-inputs-v1",
     "benchmarkSourceHash": "sha256:b335f53916848263b70ed6e5c3aca8015d1ae6802ea5d0652a16aca546f488c6",
     "corpusContentHash": "sha256:2037b41726e31eac56d3558bb292c6018b400488b10dac6fe8bbd0d10ce31b95",
     "detectorSourceHashes": {
-      "check-ai-patterns": "sha256:4a229baf6ffebaf3d192b536f9e4f7d92ebf6a86646002ad62dbbb856227e3b2",
+      "check-ai-patterns": "sha256:f41bed2d3d7cbd9057585b5c4ca18ad874ea40ef40693604de7e058dea3b140f",
       "check-degeneration": "sha256:ef6803eb668d47f2dc7d45a110dd5c440a45a5eaf1c83d0af26729624b61cf7b"
     },
-    "sourceCommit": "812d44e76385b40e6fb8c0d602dc55aa8cc10b65",
-    "sourceTree": "08292d5dc447f9c36de30ce94f8268bca1dfe7ea"
+    "sourceCommit": "6762734f46af886035b455cae88490c558ec671f",
+    "sourceTree": "b2768cd4a6ddebefe8f6106b5397cf37781670de"
   },
   "benchmarkSourceHash": "sha256:b335f53916848263b70ed6e5c3aca8015d1ae6802ea5d0652a16aca546f488c6",
   "corpusContentHash": "sha256:2037b41726e31eac56d3558bb292c6018b400488b10dac6fe8bbd0d10ce31b95",
@@ -194,7 +194,7 @@
   ],
   "corpus": {
     "mode": "fixture_set",
-    "sourcePath": "<local-user-path>/data/skill/novel-assistant-skill/tests/fixtures/prose-quality",
+    "sourcePath": "<local-user-path>/data/skill/novel-assistant-skill/.worktrees/legacy-longform-recovery/tests/fixtures/prose-quality",
     "recordCount": 7,
     "coverage": [
       "author-approved-prose",

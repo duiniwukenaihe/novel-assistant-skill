@@ -156,6 +156,7 @@ function declaredCanonicalWriteSet(projectRoot, task, options = {}) {
   const declared = [
     ...asArray((task || {}).canonical_write_set),
     ...asArray((((task || {}).stage_execution || {}).write_set)),
+    ...asArray((((task || {}).stage_execution || {}).canonical_write_set)),
     ...asArray((task || {}).result_write_set),
     ...asArray((task || {}).write_set),
     ...canonicalRootsForTask(task),

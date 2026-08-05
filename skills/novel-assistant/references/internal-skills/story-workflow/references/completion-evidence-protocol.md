@@ -324,6 +324,9 @@ paused_after_step
 字段规则：
 
 - `long_write` V2 result packet 的 `owner_module`、`lifecycle_node`、`asset_target` 和 `review_requirement` 必须逐项等于当前 running `stage_execution` 持久化的活动生命周期契约；缺失或不匹配返回 `blocked_longform_result_contract_mismatch`，不得投影结果。
+- `detail_outline_review` 必须以 `detail_outline_quality_v2` 精确覆盖 `stage_detail_outline` 已接受回执声明的全部细纲路径与当前 SHA-256；禁止扫描目录补目标、静默过滤残缺项，或把旧版单条审阅冒充整批接纳。
+- `chapter_brief -> brief_review -> prose -> prose_acceptance -> chapter_commit` 必须冻结并回显同一个 `long_chapter_target_v2`。目标同时携带全书章号、卷内章号、卷、细纲路径与哈希、章节契约路径、正式正文路径和当前 workflow 隔离的候选正文路径；任一字段漂移、跨 workflow 候选路径或 schema 映射不唯一都应失败关闭。
+- 旧在途任务若已进入上述逐章阶段却缺少完整目标，`reconcile-runtime` 只能从已接受的 `stage_detail_outline` 回执重建复核清单；无确认只给恢复预览，确认后回退整批细纲复核、归档被替代结果包并保留合法已消费目标，不得修改设定、大纲或正文。
 - `asset_revision` 记录当前 `asset_target` 的已验证版本、接受状态和来源证据；候选稿、未接受事务和未验证报告不得伪装为新 revision。
 - `review_decision` 明确记录 `pass|accepted|approved|revise|blocked|not_applicable` 及依据；`review_requirement.required=true` 时不得使用 `not_applicable`。
 - `downstream_effects` 枚举本步骤导致的下游资产 `unlocked|invalidated|recheck_required|unchanged`，并附受影响范围；不得由 L3 直接修改下游生命周期状态。

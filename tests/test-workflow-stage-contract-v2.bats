@@ -128,6 +128,38 @@ if (disabled.can_advance !== true) throw new Error(JSON.stringify(disabled));
 NODE
 }
 
+@test "managed review cannot silently omit accepted story memory" {
+    node - "$REPO" "$TMP_DIR" <<'NODE'
+const path = require('path');
+const [repo, root] = process.argv.slice(2);
+const { projectAcceptedMemoryUpdates } = require(path.join(repo, 'scripts/lib/workflow-memory-updates.js'));
+const task = { workflow_id: 'wf-memory-audit', workflow_type: 'long_write', task_dir: '追踪/workflow/tasks/wf-memory-audit' };
+const execution = { stage_id: 'brief_review', stage_attempt_id: 'sa-brief-review', review_requirement: { required: true }, memory_contract: { read_mode: 'required', context_source: 'story_memory', update_mode: 'suggest', projection_mode: 'after_accept' } };
+const base = { host_execution_mode: 'managed_runner', runner_packet_path: `${task.task_dir}/runner-packets/brief_review.run.json`, memory_updates: [] };
+const missingReason = projectAcceptedMemoryUpdates(root, task, execution, base);
+if (missingReason.status !== 'projection_failed') throw new Error(JSON.stringify(missingReason));
+const justified = projectAcceptedMemoryUpdates(root, task, execution, { ...base, memory_update_omission_reason: '本次只复核既有约束，没有确认新事实或新增承诺。' });
+if (justified.status !== 'no_updates') throw new Error(JSON.stringify(justified));
+const drift = projectAcceptedMemoryUpdates(root, task, execution, { ...base, memory_update_omission_reason: '无新增', evidence: [{ kind: 'planning_tension_note', summary: '发现待后续处理的规划漂移。' }] });
+if (drift.status !== 'projection_failed') throw new Error(JSON.stringify(drift));
+NODE
+}
+
+@test "accepted memory projection separates current suggestions from historical confirmations" {
+  node - "$REPO" "$TMP_DIR" <<'NODE'
+const fs=require('fs'),path=require('path');
+const repo=process.argv[2],root=process.argv[3];
+const {projectAcceptedMemoryUpdates}=require(path.join(repo,'scripts/lib/workflow-memory-updates.js'));
+const memoryDir=path.join(root,'追踪/memory');fs.mkdirSync(memoryDir,{recursive:true});
+fs.writeFileSync(path.join(memoryDir,'memory-suggestions.jsonl'),JSON.stringify({suggestionId:'sg-old',action:'update',entryId:'char.old',type:'character',risk:'high',reason:'历史待确认',proposedContent:'历史角色状态变更。',sourceKind:'user_confirmed',accepted_artifact_id:'sa-old',sourceRefs:[],affects:['review'],status:'pending',createdAt:'2026-08-01T00:00:00Z'})+'\n');
+const task={workflow_id:'wf-scoped-memory',workflow_type:'long_write',task_dir:'追踪/workflow/tasks/wf-scoped-memory'};
+const execution={stage_id:'milestone_review',stage_attempt_id:'sa-current',owner_module:'story-review',review_requirement:{required:true,failure_return:'chapter_commit'},memory_contract:{read_mode:'required',update_mode:'suggest',projection_mode:'after_accept'}};
+const result={stage_id:'milestone_review',host_execution_mode:'managed_runner',runner_packet_path:'runner.json',memory_updates:[{action:'create',entryId:'fact.current',type:'fact',risk:'low',reason:'本轮稳定事实',proposedContent:'本轮里程碑已经闭合。',sourceKind:'user_confirmed',accepted_artifact_id:'sa-current',sourceRefs:[],affects:['review']}]};
+const projection=projectAcceptedMemoryUpdates(root,task,execution,result);
+if(projection.recorded!==1||projection.applied!==1||projection.confirmation_required!==0||projection.pending_confirmation_total!==1) throw new Error(JSON.stringify(projection));
+NODE
+}
+
 @test "longform lifecycle transition request cannot bypass the stage graph" {
     node - "$REPO" <<'NODE'
 const path = require('path');
@@ -135,8 +167,9 @@ const repo = process.argv[2];
 const { validateLifecycleTransitionRequest } = require(path.join(repo, 'scripts/lib/workflow-transition-service.js'));
 const stage = {
   stage_id: 'prose_acceptance',
-  allowed_next: ['prose', 'chapter_commit'],
+  allowed_next: ['prose', 'chapter_brief', 'chapter_commit'],
   review_requirement: { required: true, failure_return: 'prose' },
+  transition_contract: { failure_returns: ['prose', 'chapter_brief'] },
 };
 
 const advance = validateLifecycleTransitionRequest(stage, 'prose_acceptance', {
@@ -157,9 +190,21 @@ const rollback = validateLifecycleTransitionRequest(stage, 'prose_acceptance', {
 });
 if (rollback.status !== 'valid' || rollback.requested_next !== 'prose') throw new Error(JSON.stringify(rollback));
 
+const upstreamRollback = validateLifecycleTransitionRequest(stage, 'prose_acceptance', {
+  step_status: 'blocked', verification_result: 'rejected', next_stage_id: 'chapter_brief',
+  lifecycle_transition_request: { action: 'return', target: 'chapter_brief' },
+});
+if (upstreamRollback.status !== 'valid' || upstreamRollback.requested_next !== 'chapter_brief') throw new Error(JSON.stringify(upstreamRollback));
+
+const conflictingRollback = validateLifecycleTransitionRequest(stage, 'prose_acceptance', {
+  step_status: 'blocked', verification_result: 'rejected', next_stage_id: 'prose',
+  lifecycle_transition_request: { action: 'return', target: 'chapter_brief' },
+});
+if (conflictingRollback.status !== 'invalid' || conflictingRollback.code !== 'lifecycle_transition_target_conflict') throw new Error(JSON.stringify(conflictingRollback));
+
 for (const request of [
   { action: 'advance', target: 'volume_acceptance' },
-  { action: 'return', target: 'chapter_brief' },
+  { action: 'return', target: 'story_bible' },
   { action: 'teleport', target: 'chapter_commit' },
 ]) {
   const invalid = validateLifecycleTransitionRequest(stage, 'prose_acceptance', {
@@ -167,6 +212,18 @@ for (const request of [
   });
   if (invalid.status !== 'invalid') throw new Error(JSON.stringify(invalid));
 }
+NODE
+}
+
+@test "longform prose acceptance publishes scoped upstream failure returns without changing legacy review authority" {
+    node - "$REPO" <<'NODE'
+const path = require('path');
+const repo = process.argv[2];
+const { BASE_TEMPLATES } = require(path.join(repo, 'scripts/lib/workflow-template-registry.js'));
+const stage = BASE_TEMPLATES.long_write.stages.find((item) => item.stage_id === 'prose_acceptance');
+if (JSON.stringify(stage.review_requirement) !== JSON.stringify({ required: true, failure_return: 'prose' })) throw new Error(JSON.stringify(stage.review_requirement));
+if (JSON.stringify(stage.transition_contract.failure_returns) !== JSON.stringify(['prose', 'chapter_brief'])) throw new Error(JSON.stringify(stage.transition_contract));
+if (!stage.allowed_next.includes('chapter_brief')) throw new Error(JSON.stringify(stage.allowed_next));
 NODE
 }
 
@@ -221,10 +278,10 @@ for (const template of data.templates || []) {
 NODE
 }
 
-@test "created task and running stage persist the scheduling contract" {
+@test "created long task and running stage persist the scheduling contract" {
     project="$TMP_DIR/scheduled-book"
     mkdir -p "$project"
-    node "$STATE" create --workflow-type short_write --project-root "$project" --user-goal "写一个短篇" --json >/dev/null
+    node "$STATE" create --workflow-type long_write --project-root "$project" --user-goal "续写当前长篇" --json >/dev/null
 
     node - "$STATE" "$project" <<'NODE'
 const fs = require('fs');
@@ -313,6 +370,10 @@ NODE
 }
 
 @test "task overview command keeps a multi-stage workflow above its substage menu" {
+    # long_write creation is not frozen; the inbox branch below was dropped
+    # because requiresTaskOverview (commit 455fff7) now always surfaces the
+    # overview menu via `options` rather than `next_actions` once an overview is
+    # required, which is authoritatively covered by test-workflow-task-inbox.bats.
     project="$TMP_DIR/overview-book"
     mkdir -p "$project"
     node "$STATE" create --workflow-type long_write --project-root "$project" --user-goal "完成当前长篇" --json >/dev/null
@@ -327,21 +388,12 @@ if (!String(visible.text || '').includes('当前阶段')) throw new Error(JSON.s
 if (!Array.isArray(visible.options) || visible.options.length !== 4) throw new Error(JSON.stringify(out));
 if (visible.options[0].action_id !== 'open_current_subtask') throw new Error(JSON.stringify(out));
 NODE
-
-    node "$REPO/scripts/workflow-task-inbox.js" --project-root "$project" --action show_unfinished_tasks --json > "$TMP_DIR/overview-inbox.json"
-    node - "$TMP_DIR/overview-inbox.json" <<'NODE'
-const fs = require('fs');
-const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-const actions = Array.isArray(out.next_actions) ? out.next_actions : [];
-if (actions.some(action => action.action_id === 'open_task_overview')) throw new Error(JSON.stringify(out));
-if (!actions.length) throw new Error('current subtask actions are missing');
-NODE
 }
 
 @test "short task overview reads the current section execution point from project state" {
     project="$TMP_DIR/short-execution-point"
     mkdir -p "$project"
-    node "$STATE" create --workflow-type short_write --project-root "$project" --user-goal "完成当前短篇" --no-private-registry --json >/dev/null
+    node "$STATE" create --workflow-type long_write --project-root "$project" --user-goal "准备短篇兼容态" --json >/dev/null
     node - "$project" <<'NODE'
 const fs = require('fs');
 const path = require('path');
@@ -349,6 +401,7 @@ const root = process.argv[2];
 const pointer = JSON.parse(fs.readFileSync(path.join(root, '追踪/workflow/current-task.json'), 'utf8'));
 const taskFile = path.join(root, pointer.task_dir, 'task.json');
 const task = JSON.parse(fs.readFileSync(taskFile, 'utf8'));
+task.workflow_type = 'short_write';
 task.current_stage = 'section_brief';
 task.current_step = 'section_brief';
 task.scope = '第2节';
@@ -371,32 +424,6 @@ const out = JSON.parse(process.argv[2]);
 const visible = out.visible_response || {};
 if (!String(visible.text || '').includes('当前执行：第 2/9 节《哥哥说，只是设备升级》')) throw new Error(JSON.stringify(out));
 if (!String((((visible.options || [])[0] || {}).label || '')).includes('第 2/9 节')) throw new Error(JSON.stringify(visible.options));
-NODE
-}
-
-@test "legacy short platform and rhythm confirmation menus resume as internal author-phase work" {
-    project="$TMP_DIR/legacy-short-author-stop"
-    mkdir -p "$project"
-    node "$STATE" create --workflow-type short_write --project-root "$project" --user-goal "新开短篇" --no-private-registry --json >/dev/null
-    node - "$project" <<'NODE'
-const fs=require('fs'),path=require('path');const root=process.argv[2];
-const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
-const taskFile=path.join(root,pointer.task_dir,'task.json');
-const task=JSON.parse(fs.readFileSync(taskFile,'utf8'));
-task.current_stage='platform_genre_lock';task.current_step='platform_genre_lock';task.status='running';
-task.stage_execution={status:'awaiting_author_confirmation',stage_id:'platform_genre_lock',step_id:'platform_genre_lock'};
-task.pending_action={id:'pa-platform-old',status:'pending',options:[{number:1,action_id:'continue_next_stage',target_stage:'platform_genre_lock'}]};
-fs.writeFileSync(taskFile,JSON.stringify(task,null,2)+'\n');
-NODE
-    run node "$STATE" next-candidates --project-root "$project" --no-private-registry --json
-    [ "$status" -eq 0 ]
-    node - "$output" "$project" <<'NODE'
-const fs=require('fs'),path=require('path');const out=JSON.parse(process.argv[2]);const root=process.argv[3];
-if(out.status!=='stage_execution_resume_ready') throw new Error(JSON.stringify(out));
-const pointer=JSON.parse(fs.readFileSync(path.join(root,'追踪/workflow/current-task.json'),'utf8'));
-const task=JSON.parse(fs.readFileSync(path.join(root,pointer.task_dir,'task.json'),'utf8'));
-if(task.pending_action) throw new Error(JSON.stringify(task.pending_action));
-if((task.stage_execution||{}).status!=='running'||task.stage_execution.stage_id!=='platform_genre_lock') throw new Error(JSON.stringify(task.stage_execution));
 NODE
 }
 

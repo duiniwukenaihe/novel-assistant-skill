@@ -75,12 +75,50 @@ const {
 } = require('./lib/workflow-template-registry');
 const { buildStageContextPacket } = require('./lib/workflow-stage-context-packet');
 const { buildShortSectionOutlineContract } = require('./lib/short-section-outline-contract');
+const { normalizeLegacyQualityFeedbackText, renderQualityFindings } = require('./lib/short-quality-feedback-visibility');
 const { resolveShortReaderMilestone } = require('./lib/short-reader-milestone-policy');
 const { buildShortQualityEvidenceSchema } = require('./lib/short-section-quality-evidence');
 const { buildLongStageContextPacket } = require('./lib/long-stage-context-packet');
+const {
+  resultPacketTemplateFor,
+  stageContractFor,
+} = require('./lib/workflow-runner-execution');
+const { laterCanonicalOutlineTargets } = require('./lib/longform-scope-continuation');
+const { effectiveLegacyRevalidationPolicy } = require('./lib/legacy-revalidation-policy');
+const {
+  authoritativePlanningTargets,
+  isBlockingReviewResult,
+  planDigest: longPlanningRevisionDigest,
+  planningProducerForReview,
+  planningReviewForProducer,
+  validatePlanningRevisionPlan,
+} = require('./lib/long-planning-revision');
+const {
+  buildLongChapterAcceptanceBinding,
+  evaluateLongChapterLength,
+  normalizeLongChapterLengthEvidence,
+  validateLongChapterAcceptanceBinding,
+} = require('./lib/long-chapter-length-contract');
+const { inspectLongChapterBriefBudget } = require('./lib/long-chapter-brief-quality');
+const {
+  LONG_CHAPTER_STAGES,
+  assertTargetsEqual,
+  buildLongChapterTargetV2,
+  enrichAcceptedOutlineTargets,
+  expectedLongChapterWriteSet,
+  formatLongChapterDisplay,
+  joinSchemaByOutlinePath,
+  migrateLegacyPlannedDraftPaths,
+  validateLongChapterTargetV2,
+} = require('./lib/long-chapter-target');
 const { markTaskOverviewPresented } = require('./lib/workflow-task-overview-state');
 const { buildShortRevisionRequirementView } = require('./lib/short-revision-requirement-view');
-const { readShortProjectState, resolveShortStateRelative, shortStateFile } = require('./lib/short-project-state');
+const {
+  readShortProjectState,
+  resolveShortProjectTitle,
+  resolveShortStateRelative,
+  shortStateFile,
+} = require('./lib/short-project-state');
 const { resolvePrivateModule } = require('./lib/private-runtime-resolver');
 const {
   cardIdentity,
@@ -117,6 +155,7 @@ const {
   normalizeRecommendations,
   normalizeSelectedAction,
   renderPendingActionText,
+  stageDescriptionForAction,
 } = require('./lib/workflow-action-renderer');
 const {
   validateResultPacketUnitBinding,
@@ -134,12 +173,17 @@ const {
   shouldStopBeforeStage,
   trustedArtifactFromResult,
 } = require('./lib/workflow-lifecycle-service');
-const { createWorkflowTransitionService, validateLifecycleTransitionRequest } = require('./lib/workflow-transition-service');
+const {
+  createWorkflowTransitionService,
+  validateLifecycleTransitionRequest,
+  validateReviewRevisionReturn,
+} = require('./lib/workflow-transition-service');
 const { createWorkflowRecoveryService } = require('./lib/workflow-recovery-service');
 const { renderTaskMarkdown } = require('./lib/workflow-user-menu');
 const { checkShortProseEntry } = require('./lib/short-prose-entry-guard');
 const { checkBriefFreshness, sidecarRelativePath, writeBriefFreshnessSnapshot } = require('./lib/short-brief-freshness');
 const { checkShortMemoryStage } = require('./lib/short-memory-stage-policy');
+const workflowV3Compatibility = require('./lib/workflow-v3/compatibility-gateway');
 const { resolveShortFeedbackPatch } = require('./lib/short-feedback-impact-policy');
 const { inferShortSectionIndex, resolvePlannedSectionCount, resolveShortPlanProgress } = require('./lib/short-workflow-state');
 const { validateShortSectionAcceptanceProof } = require('./lib/short-section-acceptance-proof');
@@ -177,8 +221,10 @@ const {
   compactPendingActionForConsole,
   compactSubtaskForConsole,
   compactApplyResult,
+  compactInspectResult,
   compactTaskOverviewResult,
   compactNextCandidatesResult,
+  compactResolveActionResult,
   compactVisibleResponseForConsole,
   compactExecutionForConsole,
   compactMenuOptionForConsole,
@@ -232,8 +278,10 @@ Commands:
   reset-incompatible-review-batches --project-root <book-dir> --workflow-id <id> --confirm [--json]
   continue-review-with-legacy-evidence --project-root <book-dir> --workflow-id <id> --confirm [--json]
   restore-incomplete-workflow --project-root <book-dir> --workflow-id <id> --confirm [--json]
+  restart-rejected-stage --project-root <book-dir> --workflow-id <id> --confirm [--json]
   refresh-short-title-lock --project-root <book-dir> --workflow-id <id> [--json]
   resume-pending-short-feedback --project-root <book-dir> --workflow-id <id> [--json]
+  register-short-brief-overload --project-root <book-dir> --workflow-id <id> --scope <brief-file> --reason <findings> [--json]
   discard-short-feedback-item --project-root <book-dir> --workflow-id <id> --feedback-id <id> --confirm [--json]
   reclassify-short-feedback-item --project-root <book-dir> --workflow-id <id> --feedback-id <id> [--plan-id <id>] --confirm [--json]
   migrate-short-lean-workflow --project-root <book-dir> --workflow-id <id> [--confirm] [--json]
@@ -301,7 +349,7 @@ function parseArgs(argv) {
   if (command !== 'templates' && !args.projectRoot) fail('missing --project-root');
   if ((command === 'create' || command === 'switch-intent') && !args.workflowType) fail('missing --workflow-type');
   if (command === 'activate' && !args.workflowId) fail('missing --workflow-id');
-  if (['migrate-longform-successor', 'reset-incompatible-review-batches', 'continue-review-with-legacy-evidence', 'restore-incomplete-workflow', 'reset-unmanaged-review-repair', 'reconcile-runtime', 'refresh-short-title-lock', 'resume-pending-short-feedback', 'discard-short-feedback-item', 'reclassify-short-feedback-item', 'migrate-short-lean-workflow'].includes(command) && !args.workflowId) fail('missing --workflow-id');
+  if (['migrate-longform-successor', 'reset-incompatible-review-batches', 'continue-review-with-legacy-evidence', 'restore-incomplete-workflow', 'reset-unmanaged-review-repair', 'restart-rejected-stage', 'reconcile-runtime', 'refresh-short-title-lock', 'resume-pending-short-feedback', 'register-short-brief-overload', 'discard-short-feedback-item', 'reclassify-short-feedback-item', 'migrate-short-lean-workflow'].includes(command) && !args.workflowId) fail('missing --workflow-id');
   if (['discard-short-feedback-item', 'reclassify-short-feedback-item'].includes(command) && !args.feedbackId) fail('missing --feedback-id');
   if (command === 'reconcile-runtime' && !args.sessionId) fail('missing --session-id');
   if (command === 'resolve-action' && !args.input) fail('missing --input');
@@ -602,7 +650,10 @@ function createTask(args) {
     }
   }
   const previousID = existing && hasActiveWorkflowStatus(existing.status) ? String(existing.workflow_id || '') : '';
-  const task = buildNewTask(args, tpl, { previousWorkflowID: previousID, reason: previousID ? 'create_new_workflow' : '' });
+  const task = buildNewTask(args, tpl, {
+    previousWorkflowID: previousID,
+    reason: args.reason || (previousID ? 'create_new_workflow' : ''),
+  });
   bindTaskFamily(root, task);
   if (previousID) {
     const preserved = pauseTaskForFocusSwitch(root, existing, task.workflow_id, 'create_new_workflow');
@@ -1361,6 +1412,7 @@ function resetUnmanagedReviewRepair(args) {
   task.state_version = Number(task.state_version || 0) + 1;
   task.updated_at = now;
   persistTaskSnapshot(root, task);
+  if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
   writeCurrentTaskMarkdownIfFocused(root, task);
   appendTaskJournal(root, 'unmanaged_repair_candidates_invalidated', { workflow_id: task.workflow_id, archived_candidate_dir: archivedCandidateDir, reason: task.repair_integrity_recovery.reason });
   appendHistory(root, 'unmanaged_repair_candidates_invalidated', { workflow_id: task.workflow_id, workflow_type: task.workflow_type, archived_candidate_dir: archivedCandidateDir });
@@ -1378,187 +1430,173 @@ function latestArchivedRepairCandidate(root, taskDirectory) {
   return candidate && fs.existsSync(candidate) ? rel(root, candidate) : '';
 }
 
-function shortResultPacket(root, task, stageId) {
-  const file = resolveSafeProjectFile(root, `${task.task_dir}/result-packets/${stageId}.result.json`);
-  return file && fs.existsSync(file) ? readJson(file) : null;
+function rejectedManagedResultForExecution(root, task, execution) {
+  const auditDir = resolveSafeProjectFile(
+    root,
+    path.join(String(task.task_dir || ''), 'audit', 'rejected-managed-results'),
+  );
+  if (!auditDir || !fs.existsSync(auditDir) || !fs.statSync(auditDir).isDirectory()) return '';
+  const matches = fs.readdirSync(auditDir)
+    .filter(name => /^[A-Za-z0-9._-]+\.json$/.test(name))
+    .sort()
+    .map(name => path.join(auditDir, name))
+    .filter((file) => {
+      const packet = readJson(file);
+      return packet && !packet.__error
+        && String(packet.host_execution_mode || '') === 'managed_runner'
+        && String(packet.workflow_id || '') === String(task.workflow_id || '')
+        && String(packet.stage_id || '') === String(execution.stage_id || '')
+        && String(packet.stage_attempt_id || '') === String(execution.stage_attempt_id || '');
+    });
+  return matches.length > 0 ? rel(root, matches.at(-1)) : '';
 }
 
-function shortPacketPassed(packet) {
-  if (!packet || packet.__error) return false;
-  if (['blocked', 'failed'].includes(String(packet.step_status || '').toLowerCase())) return false;
-  if (Array.isArray(packet.blocking_findings) && packet.blocking_findings.length > 0) return false;
-  return /^(pass|passed|accepted|approved|ok|completed)$/.test(String(packet.verification_result || packet.machine_gate_result || packet.quality_gate_result || '').toLowerCase());
-}
+function restartRejectedManagedStage(args) {
+  const root = path.resolve(args.projectRoot);
+  const authority = resolveTaskAuthority(root, args.workflowId);
+  if (authority.status !== 'ok') {
+    return blocked(authority.status, authority.message || '当前任务缺少可信快照。');
+  }
+  const task = authority.task;
+  const execution = task.stage_execution && typeof task.stage_execution === 'object'
+    ? task.stage_execution
+    : null;
+  if (!execution || !['running', 'paused'].includes(String(execution.status || ''))
+      || String(execution.stage_id || '') !== String(task.current_stage || '')) {
+    return blocked('blocked_rejected_stage_restart_unavailable', '当前没有可重试的活动阶段。');
+  }
+  const rejectedPacket = rejectedManagedResultForExecution(root, task, execution);
+  if (!rejectedPacket) {
+    return blocked('blocked_rejected_stage_evidence_missing', '没有找到与当前阶段尝试严格匹配的受管结果拒绝记录，禁止重建写集基线。');
+  }
+  const expectedPacket = resolveSafeProjectFile(root, String(execution.expected_result_packet || ''));
+  if (expectedPacket && fs.existsSync(expectedPacket)) {
+    return blocked('blocked_rejected_stage_result_still_present', '当前结果包仍存在；请先应用或归档该结果，不能覆盖后直接重试。');
+  }
+  if (!args.confirmMigration) {
+    return blocked(
+      'blocked_rejected_stage_restart_confirmation_required',
+      `重试会保留已拒绝尝试并以当前项目文件重新采集写集快照；确认后运行 restart-rejected-stage --confirm。拒绝记录：${rejectedPacket}`,
+    );
+  }
 
-function needsInfoSourceSelection(root, task) {
-  if (String((task || {}).current_stage || '') !== 'material_learning') return false;
-  if (task.info_source_selection && String(task.info_source_selection.status || '') === 'selected') return false;
-  const cards = readJsonlRecords(path.join(root, '追踪/private-short-extension/cards/info-source-cards.jsonl'));
-  const selectable = cards.filter(card => ['write', 'backup'].includes(String(card.verdict || '')))
-    .filter(card => !['discarded', 'used'].includes(String(card.pool_status || '')));
-  const hasExplicitSelection = selectable.some(card => String(card.pool_status || '') === 'selected');
-  const topicCards = readJsonlRecords(path.join(root, '追踪/private-short-extension/cards/topic-cards.jsonl'));
-  return selectable.length > 0 && !hasExplicitSelection && topicCards.length === 0;
-}
-
-function assessShortLeanMigration(root, task) {
-  if (!isShortWritingWorkflow(task)) return { status: 'blocked_not_short_workflow', eligible: false };
-  const currentStage = String(task.current_stage || '');
-  if (currentStage === 'info_source_selection'
-      && String(((task.pending_action || {}).id) || '').includes('undefined')) {
-    return {
-      status: 'eligible_info_source_selection_pending_action_rebuild',
-      eligible: true,
-      current_stage: currentStage,
-      target_stage: currentStage,
-      protocol_from: Number(task.workflow_contract_version || 0),
-      protocol_to: SHORT_WORKFLOW_CONTRACT_VERSION,
-      creative_assets_modified: false,
-    };
+  const now = new Date().toISOString();
+  const registry = resolvedTemplateForTask(task);
+  const retryStageId = String(execution.stage_id || task.current_stage || '');
+  const retryStage = registry.status === 'ok' ? findStage(registry.template, retryStageId) : null;
+  const retryRequiresConfirmation = Boolean((retryStage || {}).requires_user_confirm);
+  const retrySelectionId = `pa-retry-rejected-${crypto.createHash('sha256').update(`${task.workflow_id}:${retryStageId}:${now}`).digest('hex').slice(0, 16)}`;
+  const retryExpiresAt = new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString();
+  if (retryRequiresConfirmation) {
+    task.pending_action = decoratePendingAction({
+      id: retrySelectionId,
+      question: '确认按当前项目状态重新执行已拒绝阶段。',
+      options: [{
+        action_id: 'retry_rejected_managed_stage',
+        label: '重新执行当前阶段（推荐）',
+        target_stage: retryStageId,
+        target_scope: String(task.scope || retryStageId),
+        risk_level: String(execution.risk_level || 'medium'),
+        requires_user_confirm: true,
+        recommended: true,
+      }],
+      free_text_enabled: false,
+      status: 'resolved',
+      expires_at: retryExpiresAt,
+      selected_number: 1,
+      selected_action_id: 'retry_rejected_managed_stage',
+      selected_at: now,
+    });
   }
-  if (needsInfoSourceSelection(root, task)) {
-    return {
-      status: 'eligible_info_source_selection_restore',
-      eligible: true,
-      current_stage: currentStage,
-      target_stage: 'info_source_selection',
-      protocol_from: Number(task.workflow_contract_version || 0),
-      protocol_to: SHORT_WORKFLOW_CONTRACT_VERSION,
-      creative_assets_modified: false,
-    };
+  task.stage_execution = {
+    ...execution,
+    status: 'rejected',
+    stopped_at: now,
+    stop_reason: 'managed_result_rejected',
+    failed_result_packet: rejectedPacket,
+  };
+  const retrySelection = {
+    action_id: 'retry_rejected_managed_stage',
+    target_stage: retryStageId,
+    selected_number: 1,
+    risk_level: String(execution.risk_level || 'medium'),
+    requires_user_confirm: retryRequiresConfirmation,
+    selection_id: retryRequiresConfirmation ? retrySelectionId : '',
+    selection_expires_at: retryRequiresConfirmation ? retryExpiresAt : '',
+    visible_choice_hash: retryRequiresConfirmation ? String(task.pending_action.visible_choice_hash || '') : '',
+    target_scope: String(task.scope || retryStageId),
+    execution_contract: { completion_boundary: 'stage_completed' },
+  };
+  const started = maybeStartStageExecution(root, task, retrySelection, now, null);
+  if (!started || started.started !== true) {
+    return started && started.status
+      ? started
+      : blocked('blocked_rejected_stage_restart_failed', '当前阶段未能建立新的受控尝试。');
   }
-  const expectedScope = shortStageWorkUnitScope(root, task, currentStage, task.scope || '');
-  const protocolCurrent = Number(task.workflow_contract_version || 0) >= SHORT_WORKFLOW_CONTRACT_VERSION;
-  const executionScopeCurrent = !task.stage_execution
-    || String((task.stage_execution || {}).work_unit_scope || '') === expectedScope;
-  const taskScopeCurrent = !SHORT_WHOLE_STORY_STAGES.has(currentStage) || String(task.scope || '') === '全篇';
-  if (protocolCurrent && executionScopeCurrent && taskScopeCurrent) {
-    return { status: 'short_workflow_protocol_current', eligible: false, current_stage: currentStage, expected_scope: expectedScope };
-  }
-  const machinePacket = shortResultPacket(root, task, 'section_machine_gate');
-  const qualityPacket = shortResultPacket(root, task, 'quality_gate');
-  const comparePacket = shortResultPacket(root, task, 'section_candidate_compare');
-  const candidateCount = Number((comparePacket || {}).candidate_count || (qualityPacket || {}).candidate_count || 0)
-    || (String((comparePacket || {}).comparison_result || '').includes('single_candidate') ? 1 : 1);
-  if (currentStage === 'section_candidate_compare') {
-    if (!shortPacketPassed(machinePacket) || !shortPacketPassed(qualityPacket)) {
-      return { status: 'blocked_short_quality_not_passed', eligible: false, current_stage: currentStage, candidate_count: candidateCount };
-    }
-    if (candidateCount > 1) return { status: 'comparison_required', eligible: false, current_stage: currentStage, candidate_count: candidateCount };
-    return { status: 'eligible_single_candidate_skip', eligible: true, current_stage: currentStage, target_stage: 'section_accept_anchor', candidate_count: 1 };
-  }
-  if (currentStage === 'next_section_brief') {
-    return { status: 'eligible_resume_next_brief', eligible: true, current_stage: currentStage, target_stage: 'next_section_brief', candidate_count: 1 };
-  }
+  if (!retryRequiresConfirmation) task.pending_action = null;
+  task.updated_at = now;
+  writeTaskState(root, task);
+  if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
+  appendTaskJournal(root, 'rejected_managed_stage_restarted', {
+    workflow_id: task.workflow_id,
+    stage_id: task.current_stage,
+    rejected_result_packet: rejectedPacket,
+    stage_attempt_id: task.stage_execution.stage_attempt_id,
+  });
+  appendHistory(root, 'rejected_managed_stage_restarted', {
+    workflow_id: task.workflow_id,
+    workflow_type: task.workflow_type,
+    stage_id: task.current_stage,
+    rejected_result_packet: rejectedPacket,
+    stage_attempt_id: task.stage_execution.stage_attempt_id,
+  });
   return {
-    status: 'eligible_identity_refresh',
-    eligible: true,
-    current_stage: currentStage,
-    target_stage: currentStage,
-    candidate_count: candidateCount,
-    expected_scope: expectedScope,
-    protocol_from: Number(task.workflow_contract_version || 0),
-    protocol_to: SHORT_WORKFLOW_CONTRACT_VERSION,
+    schemaVersion: SCHEMA_VERSION,
+    status: 'rejected_stage_restarted',
+    workflow_id: String(task.workflow_id || ''),
+    current_stage: String(task.current_stage || ''),
+    rejected_result_packet: rejectedPacket,
+    stage_execution: task.stage_execution,
+    continuation: runningStageResume(task, root),
   };
 }
 
 function migrateShortLeanWorkflow(args) {
   const root = path.resolve(args.projectRoot);
-  const authority = resolveTaskAuthority(root, args.workflowId);
-  if (authority.status !== 'ok') return blocked(authority.status, authority.message || '找不到短篇任务。');
-  const task = authority.task;
-  const assessment = assessShortLeanMigration(root, task);
-  if (!assessment.eligible) return { schemaVersion: SCHEMA_VERSION, ...assessment, workflow_id: task.workflow_id };
-  if (!args.confirmMigration) {
-    return { schemaVersion: SCHEMA_VERSION, ...assessment, workflow_id: task.workflow_id, requires_confirmation: true, creative_assets_modified: false };
+  try {
+    const plan = workflowV3Compatibility.buildMigrationPlan(root, args.workflowId);
+    if (!args.confirmMigration) {
+      return {
+        schemaVersion: SCHEMA_VERSION,
+        status: 'v3_migration_preview',
+        workflow_id: plan.workflow_id,
+        source_stage: plan.source_stage,
+        target_stage: plan.target_stage,
+        plan_digest: plan.plan_digest,
+        requires_confirmation: true,
+        creative_assets_modified: false,
+      };
+    }
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'v3_migration_applied',
+      ...workflowV3Compatibility.applyMigration(root, plan.plan_digest),
+      creative_assets_modified: false,
+    };
+  } catch (error) {
+    if (error && error.code === 'COMPATIBILITY_ALREADY_CURRENT') {
+      return {
+        schemaVersion: SCHEMA_VERSION,
+        status: 'v3_migration_current',
+        workflow_id: String(args.workflowId || ''),
+        creative_assets_modified: false,
+      };
+    }
+    return blocked(
+      'blocked_v3_migration_unavailable',
+      `旧短篇任务暂时不能安全迁移：${String((error || {}).message || error)}`,
+    );
   }
-
-  const previousType = task.workflow_type;
-  const previousExecution = task.stage_execution && typeof task.stage_execution === 'object'
-    ? JSON.parse(JSON.stringify(task.stage_execution))
-    : null;
-  task.workflow_type = 'short_write';
-  task.workflow_profile = String(task.workflow_profile || '') === 'private' ? 'private' : 'public';
-  task.workflow_contract_version = SHORT_WORKFLOW_CONTRACT_VERSION;
-  task.short_lean_migration = {
-    status: 'completed',
-    previous_workflow_type: previousType,
-    migrated_at: new Date().toISOString(),
-    reason: assessment.status,
-    creative_assets_modified: false,
-  };
-  const registryCheck = resolvedTemplateForTask(task);
-  const tpl = registryCheck && registryCheck.status === 'ok' ? registryCheck.template : templates().short_write;
-  task.workflow_owner = String(((tpl.private_overlay || {}).module) || task.workflow_owner || 'story-short-write');
-  const ordered = (tpl.stages || []).map((stage) => stage.stage_id);
-  const targetStage = assessment.target_stage || task.current_stage;
-  const targetStageDef = findStage(tpl, targetStage) || {};
-  task.current_stage = targetStage;
-  task.current_step = targetStage;
-  task.status = 'running';
-  if (SHORT_WHOLE_STORY_STAGES.has(targetStage)) {
-    task.scope = '全篇';
-    task.lifecycle = { ...(task.lifecycle || {}), scope: '全篇' };
-  }
-  task.machine = normalizeMachine(task, tpl);
-  task.machine.completed_stages = (task.machine.completed_stages || []).filter((stage) => ordered.includes(stage) && stage !== targetStage);
-  const targetIndex = Math.max(0, ordered.indexOf(targetStage));
-  task.machine.remaining_stages = ordered.slice(targetIndex).filter((stage) => !task.machine.completed_stages.includes(stage));
-  task.machine.last_transition = 'short_lean_workflow_migrated';
-  task.machine.next_stop_reason = 'ready_for_current_stage';
-  task.stage_execution = null;
-  task.unit_lifecycle = buildUnitLifecycleState(
-    tpl,
-    targetStageDef,
-    shortStageWorkUnitScope(root, task, targetStage, task.scope || ''),
-  );
-  task.memory_migration = {
-    status: 'refresh_on_resume',
-    previous_packet: String((((previousExecution || {}).memory_context || {}).packet_json) || ''),
-    previous_revision: String((((((previousExecution || {}).memory_context || {}).memory_contract) || {}).memory_revision) || ''),
-    reason: 'short_workflow_protocol_upgrade',
-    migrated_at: new Date().toISOString(),
-  };
-  task.migration_history = Array.isArray(task.migration_history) ? task.migration_history : [];
-  task.migration_history.push({
-    kind: 'short_workflow_protocol_upgrade',
-    protocol_from: Number(assessment.protocol_from || 0),
-    protocol_to: SHORT_WORKFLOW_CONTRACT_VERSION,
-    stage_id: targetStage,
-    preserved_planning_target: String((previousExecution || {}).planning_target || ''),
-    preserved_stage_attempt_id: String((previousExecution || {}).stage_attempt_id || ''),
-    migrated_at: new Date().toISOString(),
-  });
-  task.pending_action = targetStage === 'section_accept_anchor'
-    ? buildShortSectionDecisionPendingAction(tpl, task)
-    : targetStage === 'info_source_selection'
-      ? buildShortInfoSourceSelectionPendingAction(task)
-    : buildPendingAction(tpl, targetStageDef);
-  writeTaskState(root, task);
-  if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
-
-  const projectStateFile = shortStateFile(root, 'project-state.json', { forWrite: true });
-  const projectState = readJson(projectStateFile);
-  if (projectState && !projectState.__error) {
-    projectState.workflow_type = 'short_write';
-    projectState.current_stage = task.current_stage;
-    projectState.updated_at = new Date().toISOString();
-    atomicWriteJson(projectStateFile, projectState);
-  }
-  appendHistory(root, 'short_lean_workflow_migrated', { workflow_id: task.workflow_id, previous_workflow_type: previousType, current_stage: task.current_stage });
-  return {
-    schemaVersion: SCHEMA_VERSION,
-    status: 'short_lean_workflow_migrated',
-    workflow_id: task.workflow_id,
-    previous_workflow_type: previousType,
-    workflow_type: task.workflow_type,
-    current_stage: task.current_stage,
-    creative_assets_modified: false,
-    stage_execution: null,
-    workflow_contract_version: task.workflow_contract_version,
-    restored_scope: shortStageWorkUnitScope(root, task, targetStage, task.scope || ''),
-    memory_status: task.memory_migration.status,
-  };
 }
 
 function resetIncompatibleReviewBatches(args) {
@@ -1757,6 +1795,7 @@ function continueReviewWithLegacyEvidence(args) {
   task.state_version = Number(task.state_version || 0) + 1;
   task.updated_at = now;
   persistTaskSnapshot(root, task);
+  if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
   writeCurrentTaskMarkdownIfFocused(root, task);
   appendTaskJournal(root, 'review_legacy_evidence_retained', { workflow_id: task.workflow_id, ranges: task.review_quality_debt.ranges });
   appendHistory(root, 'review_legacy_evidence_retained', { workflow_id: task.workflow_id, workflow_type: task.workflow_type, ranges: task.review_quality_debt.ranges });
@@ -1904,12 +1943,1156 @@ function omitVisibleResponse(value) {
   return rest;
 }
 
+function legacyReviewHandoffCompletion(root, task, missingStages) {
+  if (String((task || {}).workflow_type || '') !== 'review_repair'
+      || !Array.isArray(missingStages)
+      || missingStages.length !== 1
+      || missingStages[0] !== 'execute_repair') {
+    return null;
+  }
+  const packetDir = path.join(root, String(task.task_dir || ''), 'result-packets');
+  const closure = readJson(path.join(packetDir, 'closure.result.json'));
+  const repairGate = readJson(path.join(packetDir, 'repair_machine_gate.result.json'));
+  const recheck = readJson(path.join(packetDir, 'recheck.result.json'));
+  if (!closure || closure.__error || !repairGate || repairGate.__error || !recheck || recheck.__error) return null;
+  const packetCompleted = (packet, stageId) => String(packet.workflow_id || '') === String(task.workflow_id || '')
+    && String(packet.stage_id || '') === stageId
+    && String(packet.step_status || '') === 'completed'
+    && String(packet.verification_result || '') === 'pass'
+    && Array.isArray(packet.changed_files)
+    && packet.changed_files.length === 0;
+  if (!packetCompleted(closure, 'closure')
+      || !packetCompleted(repairGate, 'repair_machine_gate')
+      || !packetCompleted(recheck, 'recheck')) return null;
+  const summaryOutput = Array.isArray(closure.outputs)
+    ? closure.outputs.find((item) => item && item.kind === 'closure_summary' && item.summary)
+    : null;
+  const summary = (summaryOutput || {}).summary || {};
+  const pendingCount = Number(summary.repair_units_pending_user_apply || 0)
+    + Number(summary.repair_units_ready_for_author || 0);
+  if (String(summary.review_repair_status || '') !== 'handoff_completed' || pendingCount < 1) return null;
+  return {
+    status: 'legacy_handoff_completed',
+    omitted_stages: ['execute_repair'],
+    pending_author_apply_count: pendingCount,
+    evidence_path: `${task.task_dir}/result-packets/closure.result.json`,
+  };
+}
+
+function detailOutlineIdentity(target) {
+  return {
+    outline_path: String((target || {}).outline_path || '').replace(/\\/g, '/'),
+    outline_sha256: String((target || {}).outline_sha256 || '').toLowerCase(),
+  };
+}
+
+function sameDetailOutlineIdentities(actual, expected) {
+  const normalized = (items) => arrayOrEmpty(items).map(detailOutlineIdentity);
+  return sameContractValue(normalized(actual), normalized(expected));
+}
+
+function readAcceptedStageAttemptPacket(root, task, stageId, requireVerificationPass = false) {
+  const attempt = arrayOrEmpty((task || {}).stage_attempt_history)
+    .slice()
+    .reverse()
+    .find((item) => String((item || {}).stage_id || '') === String(stageId || '')
+      && String((item || {}).accepted_result_packet || '')
+      && (item || {}).superseded_by_target_revalidation !== true
+      && (item || {}).superseded_by_chapter_prose_revalidation !== true);
+  if (!attempt) return null;
+  const packetPath = String(attempt.accepted_result_packet || '');
+  if (requireVerificationPass
+      && (String(attempt.status || '') !== 'completed'
+        || !String(attempt.stage_attempt_id || '')
+        || !String(attempt.work_unit_id || '')
+        || packetPath !== String(attempt.expected_result_packet || ''))) {
+    return { attempt, packet: null, packet_path: packetPath, invalid: true, reason: 'attempt_authority_invalid' };
+  }
+  const packetFile = resolveSafeProjectFile(root, String(attempt.accepted_result_packet || ''));
+  const packet = packetFile ? readJson(packetFile) : null;
+  if (!packet || packet.__error
+      || String(packet.workflow_id || '') !== String((task || {}).workflow_id || '')
+      || String(packet.stage_id || '') !== String(stageId || '')
+      || String(packet.step_status || '') !== 'completed') {
+    return { attempt, packet: null, packet_path: packetPath, invalid: true, reason: 'packet_identity_or_completion_invalid' };
+  }
+  if (requireVerificationPass && String(packet.verification_result || '').toLowerCase() !== 'pass') {
+    return { attempt, packet, packet_path: packetPath, invalid: true, reason: 'verification_result_not_pass' };
+  }
+  return { attempt, packet, packet_path: packetPath, invalid: false };
+}
+
+function longformChapterProseRevalidationPreview(root, task, sessionId) {
+  if (String((task || {}).workflow_type || '') !== 'long_write'
+      || String((task || {}).current_stage || '') !== 'chapter_commit') return null;
+  const target = task.active_chapter_target || (((task || {}).stage_execution || {}).chapter_target) || {};
+  const targetValidation = validateLongChapterTargetV2(target, {
+    projectRoot: root,
+    workflowId: String(task.workflow_id || ''),
+  });
+  if (!targetValidation.ok) return null;
+  const contractFile = resolveSafeProjectFile(root, String(target.contract_path || ''));
+  const candidateFile = resolveSafeProjectFile(root, String(target.candidate_draft_path || ''));
+  if (!contractFile || !candidateFile || !fs.existsSync(contractFile) || !fs.existsSync(candidateFile)) return null;
+  const contractSource = fs.readFileSync(contractFile, 'utf8');
+  const candidateSource = fs.readFileSync(candidateFile, 'utf8');
+  const prose = readAcceptedStageAttemptPacket(root, task, 'prose');
+  const acceptance = readAcceptedStageAttemptPacket(root, task, 'prose_acceptance');
+  const proseBinding = prose && !prose.invalid ? (prose.packet || {}).chapter_prose_candidate : null;
+  const acceptanceBinding = acceptance && !acceptance.invalid ? (acceptance.packet || {}).chapter_prose_acceptance : null;
+  const proseStatus = validateLongChapterAcceptanceBinding(
+    proseBinding,
+    contractSource,
+    candidateSource,
+    String(target.candidate_draft_path || ''),
+  );
+  const acceptanceStatus = validateLongChapterAcceptanceBinding(
+    acceptanceBinding,
+    contractSource,
+    candidateSource,
+    String(target.candidate_draft_path || ''),
+  );
+  if (proseStatus.status === 'current' && acceptanceStatus.status === 'current') return null;
+  const resumeStage = proseStatus.status === 'current' ? 'prose_acceptance' : 'prose';
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'longform_chapter_prose_revalidation_confirmation_required',
+    workflow_id: String(task.workflow_id || ''),
+    current_stage: String(task.current_stage || ''),
+    resume_stage: resumeStage,
+    chapter_target: target,
+    prose_binding_status: proseStatus,
+    acceptance_binding_status: acceptanceStatus,
+    creative_assets_modified: false,
+    recovery_command: `node scripts/workflow-state-machine.js reconcile-runtime --project-root . --workflow-id ${shellQuote(task.workflow_id)} --session-id ${shellQuote(sessionId)} --confirm --json`,
+    findings: [{
+      field: resumeStage === 'prose' ? 'chapter_prose_candidate' : 'chapter_prose_acceptance',
+      message: resumeStage === 'prose'
+        ? '正文生产回执未绑定当前候选稿内容；必须从正文阶段重新验收。'
+        : '正文验收回执未绑定当前候选稿内容；必须重新验收，不能直接提交。',
+    }],
+  };
+}
+
+function archiveSupersededChapterProsePackets(root, task, now) {
+  const taskDirRel = String(task.task_dir || '').replace(/\\/g, '/').replace(/\/$/, '');
+  const targetId = String(((task.active_chapter_target || {}).target_id) || task.workflow_id || 'chapter');
+  const digest = crypto.createHash('sha256').update(targetId).digest('hex').slice(0, 16);
+  const archiveRootRel = `${taskDirRel}/audit/archive/chapter-prose-revalidation-${digest}-${now.replace(/[:.]/g, '').replace('T', '_').replace('Z', '')}`;
+  const entries = [];
+  const paths = new Set();
+  for (const attempt of arrayOrEmpty(task.stage_attempt_history)) {
+    if (!['prose', 'prose_acceptance'].includes(String((attempt || {}).stage_id || ''))
+        || (attempt || {}).superseded_by_chapter_prose_revalidation === true) continue;
+    for (const field of ['accepted_result_packet', 'expected_result_packet', 'result_packet']) {
+      const candidate = normalizeWriteSetPath(String((attempt || {})[field] || ''));
+      if (candidate && candidate.startsWith(`${taskDirRel}/`)) paths.add(candidate);
+    }
+  }
+  const commitPacket = normalizeWriteSetPath(String((((task || {}).stage_execution || {}).expected_result_packet) || ''));
+  if (commitPacket && commitPacket.startsWith(`${taskDirRel}/`)) paths.add(commitPacket);
+  for (const sourcePath of paths) {
+    const sourceFile = resolveSafeProjectFile(root, sourcePath);
+    if (!sourceFile || !fs.existsSync(sourceFile)) continue;
+    const stat = fs.lstatSync(sourceFile);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      return blocked('blocked_longform_chapter_prose_revalidation_archive_unsafe', `不能归档非普通 result packet：${sourcePath}`);
+    }
+    const relative = sourcePath.slice(taskDirRel.length + 1);
+    const archivePath = `${archiveRootRel}/${relative}`;
+    const archiveFile = resolveSafeProjectFile(root, archivePath);
+    if (!archiveFile) return blocked('blocked_longform_chapter_prose_revalidation_archive_unsafe', `归档路径不安全：${archivePath}`);
+    fs.mkdirSync(path.dirname(archiveFile), { recursive: true });
+    const sha256 = hashFile(sourceFile);
+    fs.renameSync(sourceFile, archiveFile);
+    if (hashFile(archiveFile) !== sha256) {
+      return blocked('blocked_longform_chapter_prose_revalidation_archive_integrity', `归档后哈希不一致：${sourcePath}`);
+    }
+    entries.push({ source_path: sourcePath, archive_path: archivePath, sha256, archived_at: now });
+  }
+  const manifestRel = `${archiveRootRel}/manifest.json`;
+  const manifestFile = resolveSafeProjectFile(root, manifestRel);
+  if (!manifestFile) return blocked('blocked_longform_chapter_prose_revalidation_archive_unsafe', '归档 manifest 路径不安全。');
+  atomicWriteJson(manifestFile, {
+    schemaVersion: SCHEMA_VERSION,
+    kind: 'longform_chapter_prose_revalidation_archive',
+    workflow_id: String(task.workflow_id || ''),
+    entries,
+    created_at: now,
+  });
+  return { status: 'archived', manifest_path: manifestRel, entries };
+}
+
+function applyLongformChapterProseRevalidation(root, task, preview) {
+  const now = new Date().toISOString();
+  const archive = archiveSupersededChapterProsePackets(root, task, now);
+  if (String(archive.status || '').startsWith('blocked_')) return archive;
+  const tpl = templates().long_write;
+  const ordered = tpl.stages.map((stage) => String(stage.stage_id || ''));
+  const resumeStage = String(preview.resume_stage || 'prose');
+  const resumeIndex = ordered.indexOf(resumeStage);
+  if (resumeIndex < 0) return blocked('blocked_longform_chapter_prose_revalidation_stage_invalid', `不支持恢复阶段：${resumeStage}`);
+  for (const attempt of arrayOrEmpty(task.stage_attempt_history)) {
+    if (!['prose', 'prose_acceptance', 'chapter_commit'].includes(String((attempt || {}).stage_id || ''))) continue;
+    attempt.superseded_by_chapter_prose_revalidation = true;
+    attempt.superseded_at = now;
+    attempt.superseded_reason = 'candidate_binding_missing_or_stale';
+    if (String(attempt.status || '') === 'running') attempt.status = 'superseded';
+  }
+  task.current_stage = resumeStage;
+  task.current_step = resumeStage;
+  task.status = 'running';
+  task.lifecycle = { ...(task.lifecycle || {}), status: 'active', updated_at: now, completed_at: '' };
+  task.machine = normalizeMachine(task, tpl);
+  task.machine.completed_stages = ordered.slice(0, resumeIndex);
+  task.machine.remaining_stages = ordered.slice(resumeIndex);
+  task.machine.allowed_actions = ['continue_next_stage', 'pause'];
+  task.machine.last_transition = 'chapter_prose_revalidation';
+  task.machine.next_stop_reason = 'ready_for_current_stage';
+  const graph = normalizeLongformLifecycleGraph(task, tpl);
+  graph.current_node = resumeStage;
+  graph.asset_target = { ...(findStage(tpl, resumeStage).asset_target || {}) };
+  graph.completed_nodes = ordered.slice(0, resumeIndex);
+  graph.invalidated_nodes = ordered.slice(resumeIndex);
+  for (const stageId of ordered.slice(resumeIndex)) delete graph.review_results[stageId];
+  graph.nodes = graph.nodes.map((node) => ({
+    ...node,
+    status: ordered.indexOf(node.id) < resumeIndex ? 'accepted' : (node.id === resumeStage ? 'draft' : 'invalidated'),
+  }));
+  task.lifecycle_graph = graph;
+  task.stage_execution = null;
+  task.pending_action = null;
+  task.longform_chapter_prose_revalidation = {
+    status: 'applied',
+    resume_stage: resumeStage,
+    archive_manifest_path: archive.manifest_path,
+    archived_result_packet_count: archive.entries.length,
+    applied_at: now,
+  };
+  const trustedBrief = String(((task.active_chapter_target || {}).contract_path) || '');
+  task.runtime_guard = task.runtime_guard || {};
+  task.runtime_guard.heartbeat = {
+    ...((task.runtime_guard || {}).heartbeat || {}),
+    latest_trusted_artifact: trustedBrief,
+    updated_at: now,
+    workflow_id: String(task.workflow_id || ''),
+  };
+  task.unit_lifecycle = {
+    ...(task.unit_lifecycle || {}),
+    status: 'active',
+    current_stage: resumeStage,
+    current_role: currentUnitRole(tpl.unit_lifecycle_contract || unitLifecycle('workflow_batch', {}), resumeStage),
+    last_trusted_artifact: trustedBrief,
+    updated_at: now,
+  };
+  const recoverySelectionId = `pa-chapter-prose-revalidation-${crypto.createHash('sha256').update(`${task.workflow_id}:${now}`).digest('hex').slice(0, 16)}`;
+  const recoveryExpiresAt = new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString();
+  task.pending_action = decoratePendingAction({
+    id: recoverySelectionId,
+    question: '确认重新生产并验收当前章节正文。',
+    options: [{
+      action_id: 'revalidate_chapter_prose',
+      label: '重新生产并验收当前章（推荐）',
+      target_stage: resumeStage,
+      target_scope: String(task.scope || ''),
+      risk_level: 'high',
+      requires_user_confirm: true,
+      recommended: true,
+    }],
+    free_text_enabled: false,
+    status: 'resolved',
+    expires_at: recoveryExpiresAt,
+    selected_number: 1,
+    selected_action_id: 'revalidate_chapter_prose',
+    selected_at: now,
+  });
+  const recoverySelection = {
+    action_id: 'revalidate_chapter_prose',
+    selected_number: 1,
+    target_stage: resumeStage,
+    risk_level: 'high',
+    requires_user_confirm: true,
+    selection_id: recoverySelectionId,
+    selection_expires_at: recoveryExpiresAt,
+    visible_choice_hash: String(task.pending_action.visible_choice_hash || ''),
+    target_scope: String(task.scope || ''),
+    execution_contract: { completion_boundary: 'stage_completed' },
+  };
+  task.last_selection = recoverySelection;
+  const started = maybeStartStageExecution(root, task, recoverySelection, now, null);
+  if (!started.started) return blocked('blocked_longform_chapter_prose_revalidation_start_failed', `未能重新启动 ${resumeStage}。`);
+  task.state_version = Number(task.state_version || 0) + 1;
+  task.updated_at = now;
+  persistTaskSnapshot(root, task);
+  if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
+  writeCurrentTaskMarkdownIfFocused(root, task);
+  appendTaskJournal(root, 'longform_chapter_prose_revalidation_started', {
+    workflow_id: task.workflow_id,
+    resume_stage: resumeStage,
+    archive_manifest_path: archive.manifest_path,
+  });
+  appendHistory(root, 'longform_chapter_prose_revalidation_started', {
+    workflow_id: task.workflow_id,
+    workflow_type: task.workflow_type,
+    resume_stage: resumeStage,
+  });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'longform_chapter_prose_revalidation_applied',
+    workflow_id: String(task.workflow_id || ''),
+    current_stage: resumeStage,
+    resume_stage: resumeStage,
+    archive_manifest_path: archive.manifest_path,
+    archived_result_packet_count: archive.entries.length,
+    stage_execution: task.stage_execution,
+    creative_assets_modified: false,
+  };
+}
+
+function legacyLongformTargetRevalidationPreview(root, task, sessionId) {
+  if (!task || String(task.workflow_type || '') !== 'long_write') return null;
+  const tpl = templates().long_write;
+  const stageIds = tpl.stages.map((stageDef) => String(stageDef.stage_id || ''));
+  const reviewIndex = stageIds.indexOf('detail_outline_review');
+  const currentIndex = stageIds.indexOf(String(task.current_stage || ''));
+  if (reviewIndex < 0 || currentIndex <= reviewIndex || !LONG_CHAPTER_STAGES.has(String(task.current_stage || ''))) return null;
+
+  const predecessor = readAcceptedStageAttemptPacket(root, task, 'stage_detail_outline', true);
+  if (!predecessor) return null;
+  if (predecessor.invalid) {
+    return blocked('blocked_longform_detail_outline_target_revalidation_source_invalid', [{
+      field: 'stage_attempt_history.stage_detail_outline.accepted_result_packet',
+      message: '阶段细纲恢复源必须是身份匹配、completed 且 verification_result=pass 的已接受回执。',
+      result_packet_path: predecessor.packet_path,
+      reason: predecessor.reason,
+    }]);
+  }
+  const requiredPredecessors = stageIds.slice(0, reviewIndex);
+  const machineCompleted = new Set(arrayOrEmpty((task.machine || {}).completed_stages).map(String));
+  const graphCompleted = new Set(arrayOrEmpty((task.lifecycle_graph || {}).completed_nodes).map(String));
+  const missingMachinePredecessors = requiredPredecessors.filter((stageId) => !machineCompleted.has(stageId));
+  const missingGraphPredecessors = requiredPredecessors.filter((stageId) => !graphCompleted.has(stageId));
+  if (missingMachinePredecessors.length > 0 || missingGraphPredecessors.length > 0) {
+    return blocked('blocked_longform_detail_outline_target_revalidation_predecessor_incomplete', [
+      ...(missingMachinePredecessors.length > 0 ? [{
+        field: 'machine.completed_stages',
+        message: '目标复核前的阶段没有完整的 machine 完成权威；不能根据当前 prose 阶段反向补齐。',
+        missing_stages: missingMachinePredecessors,
+      }] : []),
+      ...(missingGraphPredecessors.length > 0 ? [{
+        field: 'lifecycle_graph.completed_nodes',
+        message: '目标复核前的阶段没有完整的 lifecycle 完成权威；不能根据当前 prose 阶段反向补齐。',
+        missing_stages: missingGraphPredecessors,
+      }] : []),
+    ]);
+  }
+  const targets = detailOutlineTargetsFromResult(root, predecessor.packet);
+  if (targets.length === 0) {
+    return blocked('blocked_longform_detail_outline_target_revalidation_source_missing', [{
+      field: 'stage_attempt_history.stage_detail_outline.accepted_result_packet',
+      message: '已接受的阶段细纲回执没有声明任何仍存在的细纲文件；不能扫描目录或猜测恢复目标。',
+      result_packet_path: predecessor.packet_path,
+    }]);
+  }
+
+  const acceptedReview = readAcceptedStageAttemptPacket(root, task, 'detail_outline_review');
+  const quality = acceptedReview && !acceptedReview.invalid
+    ? (((acceptedReview.packet || {}).outputs || {}).detail_outline_quality || {})
+    : {};
+  const reviewIsExactV2 = String(quality.version || '') === 'detail_outline_quality_v2'
+    && ['pass', 'pass_with_advisory'].includes(String(quality.status || ''))
+    && sameDetailOutlineIdentities(quality.identities, targets);
+  const acceptedTargetsExact = sameDetailOutlineIdentities(task.accepted_detail_outline_targets, targets);
+  const active = task.active_chapter_target;
+  const frozen = ((task.stage_execution || {}).chapter_target) || null;
+  const targetKeys = new Set(targets.map((target) => `${target.outline_path}\n${target.outline_sha256}`));
+  const validBoundTarget = (target) => {
+    const validation = validateLongChapterTargetV2(target, {
+      projectRoot: root,
+      workflowId: String(task.workflow_id || ''),
+    });
+    const identity = detailOutlineIdentity(target);
+    return validation.ok && targetKeys.has(`${identity.outline_path}\n${identity.outline_sha256}`);
+  };
+  const bindingIsTrusted = validBoundTarget(active)
+    && validBoundTarget(frozen)
+    && assertTargetsEqual(active, frozen).ok;
+  if (reviewIsExactV2 && acceptedTargetsExact && bindingIsTrusted) return null;
+
+  const recoveryCommand = `node scripts/workflow-state-machine.js reconcile-runtime --project-root . --workflow-id ${shellQuote(task.workflow_id)} --session-id ${shellQuote(sessionId)} --confirm --json`;
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'longform_detail_outline_target_revalidation_confirmation_required',
+    workflow_id: String(task.workflow_id || ''),
+    current_stage: String(task.current_stage || ''),
+    source_result_packet: predecessor.packet_path,
+    accepted_review_contract: String(quality.version || 'detail_outline_quality_v1'),
+    detail_outline_review_targets: targets,
+    recovery_command: recoveryCommand,
+    creative_assets_modified: false,
+    findings: [
+      ...(!reviewIsExactV2 ? [{ field: 'detail_outline_review', message: '旧审阅不是覆盖全部前驱细纲身份的 V2 回执，不能视为整批已接纳。' }] : []),
+      ...(!acceptedTargetsExact ? [{ field: 'accepted_detail_outline_targets', message: '已接纳目标清单没有精确覆盖前驱细纲回执。' }] : []),
+      ...(!bindingIsTrusted ? [{ field: 'long_chapter_target', message: '当前逐章执行缺少可验证且相互一致的 active/stage chapter target。' }] : []),
+    ],
+  };
+}
+
+function archiveSupersededTargetRevalidationPackets(root, task, history, sourceResultPacket, archivedAt) {
+  const taskDirRel = String(task.task_dir || '').replace(/\\/g, '/').replace(/\/$/, '');
+  const sourceFile = resolveSafeProjectFile(root, sourceResultPacket);
+  const sourceDigest = sourceFile && fs.existsSync(sourceFile) && fs.statSync(sourceFile).isFile()
+    ? normalizeContentHash(hashFile(sourceFile)).slice(0, 16)
+    : crypto.createHash('sha256').update(String(sourceResultPacket || task.workflow_id || '')).digest('hex').slice(0, 16);
+  const archiveRootRel = `${taskDirRel}/audit/archive/target-revalidation-${sourceDigest}`;
+  const manifestRel = `${archiveRootRel}/manifest.json`;
+  const manifestFile = resolveSafeProjectFile(root, manifestRel);
+  if (!taskDirRel || !manifestFile) {
+    return blocked('blocked_longform_target_revalidation_archive_path_unsafe', '目标复核归档路径不在任务目录内。');
+  }
+
+  const existingManifest = readJson(manifestFile);
+  const existingEntries = existingManifest && !existingManifest.__error && Array.isArray(existingManifest.entries)
+    ? existingManifest.entries.map((entry) => ({ ...entry }))
+    : [];
+  const entryBySource = new Map(existingEntries.map((entry) => [String(entry.source_path || ''), entry]));
+  const candidates = new Map();
+  for (const attempt of arrayOrEmpty(history)) {
+    if ((attempt || {}).superseded_by_target_revalidation !== true) continue;
+    for (const field of ['accepted_result_packet', 'failed_result_packet', 'expected_result_packet', 'result_packet']) {
+      const candidate = String((attempt || {})[field] || '').replace(/\\/g, '/');
+      if (!candidate) continue;
+      if (!candidates.has(candidate)) candidates.set(candidate, { stages: new Set(), fields: new Set() });
+      candidates.get(candidate).stages.add(String((attempt || {}).stage_id || ''));
+      candidates.get(candidate).fields.add(field);
+    }
+  }
+
+  const plans = [];
+  const ignored = [];
+  for (const [candidate, references] of candidates) {
+    if (candidate === manifestRel || !candidate.startsWith(`${taskDirRel}/`)) {
+      ignored.push({ source_path: candidate, reason: 'outside_task_dir' });
+      continue;
+    }
+    const relativeToTask = candidate.slice(taskDirRel.length + 1);
+    const archiveRel = `${archiveRootRel}/${relativeToTask}`;
+    const candidateFile = resolveSafeProjectFile(root, candidate);
+    const archiveFile = resolveSafeProjectFile(root, archiveRel);
+    if (!candidateFile || !archiveFile) {
+      ignored.push({ source_path: candidate, reason: 'unsafe_path' });
+      continue;
+    }
+    const existingEntry = entryBySource.get(candidate);
+    if (existingEntry) {
+      const existingArchive = resolveSafeProjectFile(root, String(existingEntry.archive_path || ''));
+      if (!existingArchive || !fs.existsSync(existingArchive) || !fs.statSync(existingArchive).isFile()
+          || hashFile(existingArchive) !== String(existingEntry.sha256 || '')) {
+        return blocked('blocked_longform_target_revalidation_archive_integrity', [{
+          field: 'longform_target_revalidation.archive_manifest_path',
+          message: '既有 superseded result packet 归档与 manifest 哈希不一致。',
+          source_path: candidate,
+          archive_path: String(existingEntry.archive_path || ''),
+        }]);
+      }
+      continue;
+    }
+    if (fs.existsSync(archiveFile)) {
+      const stat = fs.lstatSync(archiveFile);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        return blocked('blocked_longform_target_revalidation_archive_integrity', `归档目标不是普通文件：${archiveRel}`);
+      }
+      const entry = {
+        source_path: candidate,
+        archive_path: archiveRel,
+        sha256: hashFile(archiveFile),
+        stage_ids: Array.from(references.stages),
+        source_fields: Array.from(references.fields),
+        archived_at: archivedAt,
+      };
+      existingEntries.push(entry);
+      entryBySource.set(candidate, entry);
+      continue;
+    }
+    if (!fs.existsSync(candidateFile)) continue;
+    const stat = fs.lstatSync(candidateFile);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      ignored.push({ source_path: candidate, reason: 'not_regular_file' });
+      continue;
+    }
+    plans.push({
+      source_path: candidate,
+      source_file: candidateFile,
+      archive_path: archiveRel,
+      archive_file: archiveFile,
+      sha256: hashFile(candidateFile),
+      stage_ids: Array.from(references.stages),
+      source_fields: Array.from(references.fields),
+    });
+  }
+
+  for (const plan of plans) {
+    fs.mkdirSync(path.dirname(plan.archive_file), { recursive: true });
+    fs.renameSync(plan.source_file, plan.archive_file);
+    if (hashFile(plan.archive_file) !== plan.sha256) {
+      return blocked('blocked_longform_target_revalidation_archive_integrity', `归档后哈希不一致：${plan.source_path}`);
+    }
+    const entry = {
+      source_path: plan.source_path,
+      archive_path: plan.archive_path,
+      sha256: plan.sha256,
+      stage_ids: plan.stage_ids,
+      source_fields: plan.source_fields,
+      archived_at: archivedAt,
+    };
+    existingEntries.push(entry);
+    entryBySource.set(plan.source_path, entry);
+  }
+  atomicWriteJson(manifestFile, {
+    schemaVersion: SCHEMA_VERSION,
+    kind: 'longform_target_revalidation_superseded_result_packets',
+    workflow_id: String(task.workflow_id || ''),
+    source_detail_outline_result_packet: String(sourceResultPacket || ''),
+    archive_root: archiveRootRel,
+    entries: existingEntries,
+    ignored_paths: ignored,
+    updated_at: archivedAt,
+  });
+  return {
+    status: 'archived',
+    archive_root: archiveRootRel,
+    manifest_path: manifestRel,
+    entries: existingEntries,
+    moved_count: plans.length,
+  };
+}
+
+function currentDetailReviewPacketIsExactV2(root, task, packetPath) {
+  const packetFile = resolveSafeProjectFile(root, packetPath);
+  const packet = packetFile ? readJson(packetFile) : null;
+  if (!packet || packet.__error
+      || String(packet.workflow_id || '') !== String(task.workflow_id || '')
+      || String(packet.stage_id || '') !== 'detail_outline_review') return false;
+  const quality = ((((packet || {}).outputs || {}).detail_outline_quality) || {});
+  return String(quality.version || '') === 'detail_outline_quality_v2'
+    && sameDetailOutlineIdentities(quality.identities, task.detail_outline_review_targets);
+}
+
+function stageAttemptHasTrustedConsumedTarget(root, task, attempt, consumedTargets) {
+  const stageId = String((attempt || {}).stage_id || '');
+  if (!LONG_CHAPTER_STAGES.has(stageId)) return false;
+  const packetPath = String((attempt || {}).accepted_result_packet || '');
+  const packetFile = resolveSafeProjectFile(root, packetPath);
+  const packet = packetFile ? readJson(packetFile) : null;
+  if (!packet || packet.__error
+      || String(packet.workflow_id || '') !== String(task.workflow_id || '')
+      || String(packet.stage_id || '') !== stageId
+      || String(packet.step_status || '') !== 'completed'
+      || String(packet.verification_result || '').toLowerCase() !== 'pass') return false;
+  const packetTarget = packet.chapter_target;
+  if (!validateLongChapterTargetV2(packetTarget, {
+    projectRoot: root,
+    workflowId: String(task.workflow_id || ''),
+  }).ok) return false;
+  const consumedTarget = arrayOrEmpty(consumedTargets)
+    .find((target) => assertTargetsEqual(target, packetTarget).ok);
+  if (!consumedTarget) return false;
+  if (stageId !== 'chapter_commit') return true;
+  const packetCommitId = String((((packet || {}).chapter_commit || {}).accepted_commit_id) || '');
+  const consumedCommitId = String((consumedTarget || {}).accepted_commit_id || '');
+  return Boolean(packetCommitId && consumedCommitId && packetCommitId === consumedCommitId);
+}
+
+function pendingTargetRevalidationArchive(root, task) {
+  if (String((task || {}).workflow_type || '') !== 'long_write'
+      || String((task || {}).current_stage || '') !== 'detail_outline_review'
+      || String((((task || {}).longform_target_revalidation || {}).status) || '') !== 'running') return null;
+  const recovery = task.longform_target_revalidation || {};
+  const manifestRel = String(recovery.archive_manifest_path || '');
+  const manifestFile = manifestRel ? resolveSafeProjectFile(root, manifestRel) : '';
+  const manifest = manifestFile ? readJson(manifestFile) : null;
+  const archivedSources = new Set(manifest && !manifest.__error && Array.isArray(manifest.entries)
+    ? manifest.entries.map((entry) => String((entry || {}).source_path || ''))
+    : []);
+  const taskDirRel = String(task.task_dir || '').replace(/\\/g, '/').replace(/\/$/, '');
+  const currentExpected = String(((task.stage_execution || {}).expected_result_packet) || '').replace(/\\/g, '/');
+  const pending = [];
+  for (const attempt of arrayOrEmpty(task.stage_attempt_history)) {
+    if ((attempt || {}).superseded_by_target_revalidation !== true) continue;
+    for (const field of ['accepted_result_packet', 'failed_result_packet', 'expected_result_packet', 'result_packet']) {
+      const candidate = String((attempt || {})[field] || '').replace(/\\/g, '/');
+      if (!candidate || !candidate.startsWith(`${taskDirRel}/`) || archivedSources.has(candidate)) continue;
+      const candidateFile = resolveSafeProjectFile(root, candidate);
+      if (!candidateFile || !fs.existsSync(candidateFile) || !fs.lstatSync(candidateFile).isFile()) continue;
+      if (candidate === currentExpected && currentDetailReviewPacketIsExactV2(root, task, candidate)) continue;
+      pending.push(candidate);
+    }
+  }
+  return pending.length > 0 ? Array.from(new Set(pending)) : null;
+}
+
+function reconcilePendingTargetRevalidationArchive(root, task, args, pendingPaths) {
+  const recovery = task.longform_target_revalidation || {};
+  const command = `node scripts/workflow-state-machine.js reconcile-runtime --project-root . --workflow-id ${shellQuote(task.workflow_id)} --session-id ${shellQuote(args.sessionId)} --confirm --json`;
+  if (!args.confirmMigration) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'longform_detail_outline_target_revalidation_archive_confirmation_required',
+      workflow_id: String(task.workflow_id || ''),
+      pending_result_packets: pendingPaths,
+      recovery_command: command,
+      creative_assets_modified: false,
+    };
+  }
+  const now = new Date().toISOString();
+  const packetArchive = archiveSupersededTargetRevalidationPackets(
+    root,
+    task,
+    task.stage_attempt_history,
+    String(recovery.source_result_packet || ''),
+    now,
+  );
+  if (String(packetArchive.status || '').startsWith('blocked_')) return packetArchive;
+  task.longform_target_revalidation = {
+    ...recovery,
+    archive_manifest_path: String(packetArchive.manifest_path || ''),
+    archived_result_packet_count: Number((packetArchive.entries || []).length),
+    archive_reconciled_at: now,
+  };
+  if (task.stage_execution) {
+    task.stage_execution.write_snapshot = captureStageWriteSnapshot(root, task, task.stage_execution.expected_result_packet);
+    task.longform_target_revalidation.write_snapshot_refreshed_at = now;
+  }
+  writeTaskState(root, task);
+  if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
+  appendTaskJournal(root, 'longform_detail_outline_target_revalidation_archive_reconciled', {
+    workflow_id: task.workflow_id,
+    archive_manifest_path: String(packetArchive.manifest_path || ''),
+    archived_result_packet_count: Number((packetArchive.entries || []).length),
+  });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'longform_detail_outline_target_revalidation_archive_reconciled',
+    workflow_id: String(task.workflow_id || ''),
+    current_stage: String(task.current_stage || ''),
+    archive_manifest_path: String(packetArchive.manifest_path || ''),
+    archived_result_packet_count: Number((packetArchive.entries || []).length),
+    creative_assets_modified: false,
+  };
+}
+
+function targetRevalidationConfirmationNeedsRepair(task) {
+  return String((task || {}).workflow_type || '') === 'long_write'
+    && String((task || {}).current_stage || '') === 'detail_outline_review'
+    && String((((task || {}).longform_target_revalidation || {}).status) || '') === 'running'
+    && String((((task || {}).stage_execution || {}).stage_id) || '') === 'detail_outline_review'
+    && ((task || {}).stage_execution || {}).requires_user_confirm === true
+    && !validateWorkflowConfirmation(task, task.stage_execution).valid;
+}
+
+function repairTargetRevalidationConfirmation(root, task, args) {
+  const command = `node scripts/workflow-state-machine.js reconcile-runtime --project-root . --workflow-id ${shellQuote(task.workflow_id)} --session-id ${shellQuote(args.sessionId)} --confirm --json`;
+  if (!args.confirmMigration) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'longform_detail_outline_target_revalidation_confirmation_repair_required',
+      workflow_id: String(task.workflow_id || ''),
+      recovery_command: command,
+      creative_assets_modified: false,
+    };
+  }
+  const now = new Date().toISOString();
+  const selectionId = `pa-target-revalidation-${crypto.createHash('sha256').update(`${task.workflow_id}:${now}`).digest('hex').slice(0, 16)}`;
+  const expiresAt = new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString();
+  task.pending_action = decoratePendingAction({
+    id: selectionId,
+    question: '确认按已核验的目标清单重新复核阶段细纲。',
+    options: [{
+      action_id: 'revalidate_detail_outline_targets',
+      label: '重新复核阶段细纲（推荐）',
+      target_stage: 'detail_outline_review',
+      target_scope: String((((task || {}).longform_target_revalidation || {}).previous_scope) || task.scope || ''),
+      risk_level: 'medium',
+      requires_user_confirm: true,
+      recommended: true,
+    }],
+    free_text_enabled: false,
+    status: 'resolved',
+    expires_at: expiresAt,
+    selected_number: 1,
+    selected_action_id: 'revalidate_detail_outline_targets',
+    selected_at: now,
+  });
+  const selected = {
+    action_id: 'revalidate_detail_outline_targets',
+    selected_number: 1,
+    target_stage: 'detail_outline_review',
+    risk_level: 'medium',
+    requires_user_confirm: true,
+    selection_id: selectionId,
+    selection_expires_at: expiresAt,
+    visible_choice_hash: String(task.pending_action.visible_choice_hash || ''),
+    target_scope: String((((task || {}).longform_target_revalidation || {}).previous_scope) || task.scope || ''),
+    execution_contract: { completion_boundary: 'stage_completed' },
+  };
+  const confirmation = buildConfirmationContext(task, selected, 'detail_outline_review', now);
+  selected.confirmation_token = confirmation.confirmation_token;
+  selected.confirmation_expires_at = confirmation.expires_at;
+  task.last_selection = selected;
+  task.stage_execution = {
+    ...(task.stage_execution || {}),
+    action_id: selected.action_id,
+    selected_number: selected.selected_number,
+    confirmation_token: confirmation.confirmation_token,
+    confirmation_context: confirmation,
+  };
+  task.stage_execution.write_snapshot = captureStageWriteSnapshot(root, task, task.stage_execution.expected_result_packet);
+  task.longform_target_revalidation = {
+    ...((task.longform_target_revalidation || {})),
+    confirmation_repaired_at: now,
+    write_snapshot_refreshed_at: now,
+  };
+  writeTaskState(root, task);
+  if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'longform_detail_outline_target_revalidation_confirmation_repaired',
+    workflow_id: String(task.workflow_id || ''),
+    current_stage: String(task.current_stage || ''),
+    creative_assets_modified: false,
+  };
+}
+
+function targetRevalidationSnapshotNeedsRefresh(task) {
+  return String((task || {}).workflow_type || '') === 'long_write'
+    && String((task || {}).current_stage || '') === 'detail_outline_review'
+    && String((((task || {}).longform_target_revalidation || {}).status) || '') === 'running'
+    && String((((task || {}).stage_execution || {}).stage_id) || '') === 'detail_outline_review'
+    && !String((((task || {}).longform_target_revalidation || {}).write_snapshot_refreshed_at) || '');
+}
+
+function repairTargetRevalidationSnapshot(root, task, args) {
+  const command = `node scripts/workflow-state-machine.js reconcile-runtime --project-root . --workflow-id ${shellQuote(task.workflow_id)} --session-id ${shellQuote(args.sessionId)} --confirm --json`;
+  if (!args.confirmMigration) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'longform_detail_outline_target_revalidation_snapshot_refresh_required',
+      workflow_id: String(task.workflow_id || ''),
+      recovery_command: command,
+      creative_assets_modified: false,
+    };
+  }
+  const now = new Date().toISOString();
+  task.stage_execution.write_snapshot = captureStageWriteSnapshot(root, task, task.stage_execution.expected_result_packet);
+  task.longform_target_revalidation = {
+    ...(task.longform_target_revalidation || {}),
+    write_snapshot_refreshed_at: now,
+  };
+  writeTaskState(root, task);
+  if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'longform_detail_outline_target_revalidation_snapshot_refreshed',
+    workflow_id: String(task.workflow_id || ''),
+    current_stage: String(task.current_stage || ''),
+    creative_assets_modified: false,
+  };
+}
+
+function applyLegacyLongformTargetRevalidation(root, task, preview) {
+  const tpl = templates().long_write;
+  const stageIds = tpl.stages.map((stageDef) => String(stageDef.stage_id || ''));
+  const reviewIndex = stageIds.indexOf('detail_outline_review');
+  const reviewStage = findStage(tpl, 'detail_outline_review');
+  const now = new Date().toISOString();
+  const targets = arrayOrEmpty(preview.detail_outline_review_targets).map((target) => ({ ...target }));
+  const targetKeys = new Set(targets.map((target) => {
+    const identity = detailOutlineIdentity(target);
+    return `${identity.outline_path}\n${identity.outline_sha256}`;
+  }));
+  const preservedConsumed = [];
+  const consumedIds = new Set();
+  for (const target of arrayOrEmpty(task.consumed_detail_outline_targets)) {
+    const validation = validateLongChapterTargetV2(target, {
+      projectRoot: root,
+      workflowId: String(task.workflow_id || ''),
+    });
+    const identity = detailOutlineIdentity(target);
+    const key = `${identity.outline_path}\n${identity.outline_sha256}`;
+    const targetId = String((target || {}).target_id || '');
+    if (validation.ok && targetKeys.has(key) && targetId && !consumedIds.has(targetId)) {
+      preservedConsumed.push({ ...target });
+      consumedIds.add(targetId);
+    }
+  }
+
+  const previousExecution = task.stage_execution && typeof task.stage_execution === 'object'
+    ? { ...task.stage_execution }
+    : null;
+  const history = arrayOrEmpty(task.stage_attempt_history).map((attempt) => ({ ...attempt }));
+  if (previousExecution && previousExecution.stage_attempt_id
+      && !history.some((attempt) => String(attempt.stage_attempt_id || '') === String(previousExecution.stage_attempt_id || ''))) {
+    history.push({
+      stage_attempt_id: String(previousExecution.stage_attempt_id || ''),
+      work_unit_id: String(previousExecution.work_unit_id || ''),
+      stage_id: String(previousExecution.stage_id || task.current_stage || ''),
+      status: String(previousExecution.status || ''),
+      expected_result_packet: String(previousExecution.expected_result_packet || ''),
+      accepted_result_packet: String(previousExecution.accepted_result_packet || previousExecution.result_packet || ''),
+      failed_result_packet: String(previousExecution.failed_result_packet || ''),
+      started_at: String(previousExecution.started_at || ''),
+      preserved_at: now,
+    });
+  }
+  for (const attempt of history) {
+    const attemptIndex = stageIds.indexOf(String(attempt.stage_id || ''));
+    if (attemptIndex >= reviewIndex
+        && !stageAttemptHasTrustedConsumedTarget(root, task, attempt, preservedConsumed)) {
+      attempt.superseded_by_target_revalidation = true;
+      attempt.superseded_at = now;
+      attempt.superseded_reason = 'detail_outline_review_v2_exact_coverage_required';
+    }
+  }
+  const packetArchive = archiveSupersededTargetRevalidationPackets(
+    root,
+    task,
+    history,
+    String(preview.source_result_packet || ''),
+    now,
+  );
+  if (String(packetArchive.status || '').startsWith('blocked_')) return packetArchive;
+
+  const previousStage = String(task.current_stage || '');
+  const previousScope = String(task.scope || '');
+  const invalidated = new Set([
+    ...arrayOrEmpty((task.lifecycle_graph || {}).invalidated_nodes)
+      .filter((stageId) => String(stageId || '') !== 'detail_outline_review'),
+    ...stageIds.slice(reviewIndex + 1),
+  ]);
+  const reviewResults = { ...(((task.lifecycle_graph || {}).review_results) || {}) };
+  for (const stageId of stageIds.slice(reviewIndex)) delete reviewResults[stageId];
+  task.lifecycle_graph = {
+    ...(task.lifecycle_graph || {}),
+    current_node: 'detail_outline_review',
+    asset_target: { ...((reviewStage || {}).asset_target || {}) },
+    completed_nodes: stageIds.slice(0, reviewIndex),
+    invalidated_nodes: stageIds.filter((stageId) => invalidated.has(stageId)),
+    review_results: reviewResults,
+    last_transition_validation: {
+      allowed: true,
+      rule: 'target_revalidation_return',
+      from: previousStage,
+      to: 'detail_outline_review',
+      validated_at: now,
+    },
+    nodes: arrayOrEmpty((task.lifecycle_graph || {}).nodes).map((node) => {
+      const nodeIndex = stageIds.indexOf(String((node || {}).id || ''));
+      return {
+        ...node,
+        status: nodeIndex < reviewIndex ? 'accepted' : nodeIndex === reviewIndex ? 'needs_review' : 'invalidated',
+      };
+    }),
+  };
+  task.current_stage = 'detail_outline_review';
+  task.current_step = 'detail_outline_review';
+  task.status = 'running';
+  task.lifecycle = normalizeLifecycle(task);
+  task.lifecycle.status = 'active';
+  task.lifecycle.scope = `阶段细纲复核（${targets.length}项）`;
+  task.lifecycle.updated_at = now;
+  task.machine = {
+    ...normalizeMachine(task, tpl),
+    completed_stages: stageIds.slice(0, reviewIndex),
+    remaining_stages: stageIds.slice(reviewIndex),
+    allowed_actions: ['await_result_packet', 'pause'],
+    last_transition: 'detail_outline_targets_revalidation_started',
+    last_execution_event: 'stage_started',
+    last_result_packet: String(preview.source_result_packet || ''),
+    next_stop_reason: 'stage_running_waiting_result_packet',
+  };
+  task.detail_outline_review_targets = targets;
+  task.accepted_detail_outline_targets = [];
+  task.consumed_detail_outline_targets = preservedConsumed;
+  task.active_chapter_target = null;
+  task.stage_attempt_history = history.slice(-100);
+  task.stage_execution = null;
+  const recoverySelectionId = `pa-target-revalidation-${crypto.createHash('sha256').update(`${task.workflow_id}:${now}`).digest('hex').slice(0, 16)}`;
+  const recoveryExpiresAt = new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString();
+  task.pending_action = decoratePendingAction({
+    id: recoverySelectionId,
+    question: '确认按已核验的目标清单重新复核阶段细纲。',
+    options: [{
+      action_id: 'revalidate_detail_outline_targets',
+      label: '重新复核阶段细纲（推荐）',
+      target_stage: 'detail_outline_review',
+      target_scope: previousScope,
+      risk_level: 'medium',
+      requires_user_confirm: true,
+      recommended: true,
+    }],
+    free_text_enabled: false,
+    status: 'resolved',
+    expires_at: recoveryExpiresAt,
+    selected_number: 1,
+    selected_action_id: 'revalidate_detail_outline_targets',
+    selected_at: now,
+  });
+  const recoveryVisibleChoiceHash = String(task.pending_action.visible_choice_hash || '');
+  delete task.canonical_write_baseline;
+  delete task.canonical_stage_receipt;
+  delete task.detail_outline_review_failure;
+  task.unit_lifecycle = buildUnitLifecycleState(tpl, reviewStage, task.lifecycle.scope);
+  task.runtime_guard = task.runtime_guard || {};
+  task.runtime_guard.heartbeat = {
+    ...((task.runtime_guard || {}).heartbeat || {}),
+    updated_at: now,
+    latest_trusted_artifact: String(preview.source_result_packet || ''),
+    current_batch: task.lifecycle.scope,
+    workflow_id: String(task.workflow_id || ''),
+  };
+  task.longform_target_revalidation = {
+    status: 'running',
+    source_result_packet: String(preview.source_result_packet || ''),
+    superseded_stage: previousStage,
+    previous_scope: previousScope,
+    review_contract: 'detail_outline_quality_v2',
+    target_count: targets.length,
+    preserved_consumed_target_count: preservedConsumed.length,
+    archive_manifest_path: String(packetArchive.manifest_path || ''),
+    archived_result_packet_count: Number((packetArchive.entries || []).length),
+    started_at: now,
+    creative_assets_modified: false,
+  };
+
+  const recoverySelection = {
+    action_id: 'revalidate_detail_outline_targets',
+    selected_number: 1,
+    target_stage: 'detail_outline_review',
+    risk_level: (reviewStage || {}).risk_level || 'medium',
+    requires_user_confirm: true,
+    selection_id: recoverySelectionId,
+    selection_expires_at: recoveryExpiresAt,
+    visible_choice_hash: recoveryVisibleChoiceHash,
+    target_scope: previousScope,
+    execution_contract: { completion_boundary: 'stage_completed' },
+  };
+  task.last_selection = recoverySelection;
+  const started = maybeStartStageExecution(root, task, recoverySelection, now, null);
+  if (!started.started) {
+    return blocked('blocked_longform_detail_outline_target_revalidation_start_failed', '未能建立 detail_outline_review V2 执行权威。');
+  }
+  task.longform_target_revalidation.write_snapshot_refreshed_at = now;
+  writeTaskState(root, task);
+  if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
+  appendTaskJournal(root, 'longform_detail_outline_target_revalidation_started', {
+    workflow_id: task.workflow_id,
+    source_result_packet: String(preview.source_result_packet || ''),
+    target_count: targets.length,
+    preserved_consumed_target_count: preservedConsumed.length,
+  });
+  appendHistory(root, 'longform_detail_outline_target_revalidation_started', {
+    workflow_id: task.workflow_id,
+    workflow_type: task.workflow_type,
+    source_result_packet: String(preview.source_result_packet || ''),
+    target_count: targets.length,
+  });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'longform_detail_outline_target_revalidation_applied',
+    workflow_id: String(task.workflow_id || ''),
+    current_stage: 'detail_outline_review',
+    detail_outline_review_targets: targets,
+    preserved_consumed_target_count: preservedConsumed.length,
+    archive_manifest_path: String(packetArchive.manifest_path || ''),
+    archived_result_packet_count: Number((packetArchive.entries || []).length),
+    stage_execution: task.stage_execution,
+    creative_assets_modified: false,
+  };
+}
+
+function repairAppliedChapterProseRevalidationCheckpoint(root, task) {
+  const recovery = (task || {}).longform_chapter_prose_revalidation || {};
+  if (String(recovery.status || '') !== 'applied'
+      || String(recovery.resume_stage || '') !== String((task || {}).current_stage || '')) return false;
+  let repaired = false;
+  const heartbeat = (((task || {}).runtime_guard || {}).heartbeat) || {};
+  const current = resolveSafeProjectFile(root, String(heartbeat.latest_trusted_artifact || ''));
+  const contractPath = String(((task.active_chapter_target || {}).contract_path) || '');
+  const contractFile = resolveSafeProjectFile(root, contractPath);
+  if ((!current || !fs.existsSync(current))
+      && contractFile && fs.existsSync(contractFile) && fs.statSync(contractFile).isFile()) {
+    task.runtime_guard = task.runtime_guard || {};
+    task.runtime_guard.heartbeat = { ...heartbeat, latest_trusted_artifact: contractPath };
+    task.unit_lifecycle = { ...(task.unit_lifecycle || {}), last_trusted_artifact: contractPath };
+    repaired = true;
+  }
+  const execution = task.stage_execution || {};
+  if (String(execution.stage_id || '') === String(task.current_stage || '')
+      && execution.requires_user_confirm === true
+      && !validateWorkflowConfirmation(task, execution).valid) {
+    const now = new Date().toISOString();
+    const selectionId = `pa-chapter-prose-revalidation-${crypto.createHash('sha256').update(`${task.workflow_id}:${now}`).digest('hex').slice(0, 16)}`;
+    const expiresAt = new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString();
+    task.pending_action = decoratePendingAction({
+      id: selectionId,
+      question: '确认重新生产并验收当前章节正文。',
+      options: [{
+        action_id: 'revalidate_chapter_prose',
+        label: '重新生产并验收当前章（推荐）',
+        target_stage: String(task.current_stage || ''),
+        target_scope: String(task.scope || ''),
+        risk_level: 'high',
+        requires_user_confirm: true,
+        recommended: true,
+      }],
+      free_text_enabled: false,
+      status: 'resolved',
+      expires_at: expiresAt,
+      selected_number: 1,
+      selected_action_id: 'revalidate_chapter_prose',
+      selected_at: now,
+    });
+    const selected = {
+      action_id: 'revalidate_chapter_prose',
+      selected_number: 1,
+      target_stage: String(task.current_stage || ''),
+      risk_level: 'high',
+      requires_user_confirm: true,
+      selection_id: selectionId,
+      selection_expires_at: expiresAt,
+      visible_choice_hash: String(task.pending_action.visible_choice_hash || ''),
+      target_scope: String(task.scope || ''),
+      execution_contract: { completion_boundary: 'stage_completed' },
+    };
+    const confirmation = buildConfirmationContext(task, selected, String(task.current_stage || ''), now);
+    selected.confirmation_token = confirmation.confirmation_token;
+    selected.confirmation_expires_at = confirmation.expires_at;
+    task.last_selection = selected;
+    task.stage_execution = {
+      ...execution,
+      action_id: selected.action_id,
+      selected_number: selected.selected_number,
+      confirmation_token: confirmation.confirmation_token,
+      confirmation_context: confirmation,
+    };
+    task.stage_execution.write_snapshot = captureStageWriteSnapshot(root, task, task.stage_execution.expected_result_packet);
+    repaired = true;
+  }
+  return repaired;
+}
+
+function reconciledRuntimeSessionLease(task, requestedSession, familySession, previousLease, otherHolder, now) {
+  const nowText = now.toISOString();
+  return {
+    holder_id: requestedSession,
+    workflow_id: task.workflow_id,
+    acquired_at: familySession
+      ? String(((familySession.writer_lease || {}).acquired_at) || nowText)
+      : (otherHolder ? nowText : (previousLease.acquired_at || nowText)),
+    heartbeat_at: nowText,
+    expires_at: familySession
+      ? String(((familySession.writer_lease || {}).expires_at) || new Date(now.getTime() + WORKFLOW_SESSION_LEASE_MS).toISOString())
+      : new Date(now.getTime() + WORKFLOW_SESSION_LEASE_MS).toISOString(),
+    host: familySession
+      ? String(((familySession.writer_lease || {}).host) || requestedSession.split(':')[0] || 'unknown')
+      : requestedSession.split(':')[0] || 'unknown',
+    task_family_id: String(task.task_family_id || ''),
+    session_role: familySession ? familySession.role : 'writer',
+  };
+}
+
+function repairScopeContinuationAuthority(root, task, tpl) {
+  const continuation = (task || {}).longform_scope_continuation || {};
+  const revalidation = (task || {}).longform_target_revalidation || {};
+  const applicable = String((task || {}).workflow_type || '') === 'long_write'
+    && String((task || {}).current_stage || '') === 'detail_outline_review'
+    && String(continuation.status || '') === 'later_outlines_require_review';
+  if (!applicable) return { repaired: false, confirmation_reset: false };
+  const now = new Date().toISOString();
+  let repaired = restoreAcceptedPredecessorReviewResults(root, task, tpl, 'detail_outline_review');
+  let confirmationReset = false;
+  if (String(revalidation.status || '') === 'running') {
+    task.longform_target_revalidation = {
+      ...revalidation,
+      status: 'superseded',
+      superseded_at: now,
+      completion_reason: 'accepted_scope_reached_milestone',
+      superseded_by: 'later_outline_scope_continuation',
+    };
+    repaired = true;
+  }
+  const execution = task.stage_execution || {};
+  if (String(execution.stage_id || '') === 'detail_outline_review'
+      && String(execution.status || '') === 'running'
+      && execution.requires_user_confirm === true
+      && !validateWorkflowConfirmation(task, execution).valid) {
+    task.stage_execution = {
+      ...execution,
+      status: 'superseded',
+      stopped_at: now,
+      stop_reason: 'scope_continuation_confirmation_invalid',
+      superseded_reason: 'fresh_author_confirmation_required',
+    };
+    preservePreviousStageAttempt(task, stageWorkUnitId(task, 'detail_outline_review', task.scope), now);
+    task.stage_execution = null;
+    const reviewStage = findStage(tpl, 'detail_outline_review');
+    task.pending_action = buildPendingAction(tpl, reviewStage);
+    bindPendingActionToNextState(task, root);
+    task.machine = {
+      ...normalizeMachine(task, tpl),
+      last_transition: 'scope_continuation_confirmation_reset',
+      last_execution_event: 'awaiting_user_confirmation',
+      next_stop_reason: 'awaiting_user_confirmation',
+      allowed_actions: ['continue_next_stage', 'inspect_current_state', 'pause', 'free_text'],
+    };
+    repaired = true;
+    confirmationReset = true;
+  }
+  return { repaired, confirmation_reset: confirmationReset };
+}
+
+function restoreAcceptedPredecessorReviewResults(root, task, tpl, currentStage) {
+  if (!tpl || !task.lifecycle_graph) return false;
+  const stageIds = tpl.stages.map((stage) => String(stage.stage_id || ''));
+  const currentIndex = stageIds.indexOf(String(currentStage || ''));
+  if (currentIndex < 0) return false;
+  const reviewResults = { ...((task.lifecycle_graph || {}).review_results || {}) };
+  let repaired = false;
+  for (const stageDef of tpl.stages.slice(0, currentIndex)) {
+    const stageId = String(stageDef.stage_id || '');
+    if (!((stageDef.review_requirement || {}).required) || reviewResults[stageId]) continue;
+    const attempt = arrayOrEmpty(task.stage_attempt_history).slice().reverse().find((item) => (
+      String((item || {}).stage_id || '') === stageId
+      && String((item || {}).status || '') === 'completed'
+      && String((item || {}).accepted_result_packet || '')
+    ));
+    const packetRel = String((attempt || {}).accepted_result_packet || '');
+    const packetFile = resolveSafeProjectFile(root, packetRel);
+    const packet = packetFile && fs.existsSync(packetFile) ? readJson(packetFile) : null;
+    const accepted = packet && !packet.__error
+      && String(packet.stage_id || '') === stageId
+      && String(packet.step_status || '') === 'completed'
+      && ['pass', 'accepted'].includes(String(packet.verification_result || '').toLowerCase())
+      && (!packet.review_decision || String(packet.review_decision).toLowerCase() === 'accepted');
+    if (!accepted) continue;
+    reviewResults[stageId] = {
+      status: 'accepted',
+      verification_result: String(packet.verification_result || 'pass'),
+      result_packet_path: packetRel,
+    };
+    repaired = true;
+  }
+  if (repaired) task.lifecycle_graph.review_results = reviewResults;
+  return repaired;
+}
+
 function reconcileRuntime(args) {
   const root = path.resolve(args.projectRoot);
   if (!/^[A-Za-z0-9._-]+$/.test(String(args.workflowId || ''))) {
     return blocked('blocked_workflow_task_not_found', `找不到任务：${args.workflowId}`);
   }
   const targetFile = path.join(taskDir(root, args.workflowId), 'task.json');
+  const durableTaskTextBeforeReconcile = fs.existsSync(targetFile) ? fs.readFileSync(targetFile, 'utf8') : '';
   const task = readJson(targetFile);
   const current = readFocusedAuthority(root);
   if (current && current.__error) return blockedFocusedAuthority(current);
@@ -1917,6 +3100,106 @@ function reconcileRuntime(args) {
     return blocked('blocked_workflow_task_not_active', '只能校正当前正在使用的任务；请先激活目标任务。');
   }
   const tpl = templates()[task.workflow_type];
+  // A partially completed target-revalidation archive owns packets already
+  // marked superseded by that transaction.  Let that scoped recovery finish
+  // before the generic invalid-current-packet recovery; unrelated current
+  // packets still use the stricter generic path below.
+  const pendingRevalidationArchive = pendingTargetRevalidationArchive(root, task);
+  const urgentInvalidStageResult = pendingRevalidationArchive
+    ? null
+    : classifyInvalidCurrentLongformResultPacket(root, task);
+  if (urgentInvalidStageResult && urgentInvalidStageResult.recoverable === false) {
+    return blocked(urgentInvalidStageResult.validation_status, urgentInvalidStageResult.reason);
+  }
+  const legacyPlanningReview = urgentInvalidStageResult ? null : legacyPlanningReviewRestartPreview(root, task);
+  if (legacyPlanningReview) {
+    const requestedSession = String(args.sessionId || '').trim();
+    if (task.task_family_id) {
+      let familySession = null;
+      try {
+        familySession = claimFamilyWriter(root, task.task_family_id, {
+          session_id: requestedSession,
+          host: requestedSession.split(':')[0] || 'unknown',
+        }, {
+          write: true,
+          projectLockHeld: true,
+          takeover: args.takeover === true,
+          confirmed: args.confirmMigration === true,
+        });
+      } catch (error) {
+        if (error.code !== 'TASK_FAMILY_NOT_FOUND') throw error;
+      }
+      if (familySession && familySession.takeover_required) {
+        return workflowSessionTakeoverMenu(task, requestedSession, familySession, familySession.status === 'awaiting_claim');
+      }
+    } else {
+      const lease = (((task.runtime_guard || {}).session_lease) || {});
+      if (WORKFLOW_RECOVERY.isLiveWorkflowSessionLease(lease, new Date())
+          && String(lease.holder_id || '') !== requestedSession
+          && !(args.takeover && args.confirmMigration)) {
+        return workflowSessionTakeoverMenu(task, requestedSession, { writer_lease: lease }, false);
+      }
+    }
+    return restartLegacyPlanningReviewReadOnly(root, task, tpl, legacyPlanningReview, requestedSession);
+  }
+  const scopeContinuationAuthorityRepair = repairScopeContinuationAuthority(root, task, tpl);
+  let deferredTargetRevalidation = null;
+  if (!urgentInvalidStageResult && targetRevalidationConfirmationNeedsRepair(task)) {
+    if (!args.confirmMigration) return repairTargetRevalidationConfirmation(root, task, args);
+    deferredTargetRevalidation = { kind: 'confirmation' };
+  }
+  if (!urgentInvalidStageResult && !deferredTargetRevalidation && targetRevalidationSnapshotNeedsRefresh(task)) {
+    if (!args.confirmMigration) return repairTargetRevalidationSnapshot(root, task, args);
+    deferredTargetRevalidation = { kind: 'snapshot' };
+  }
+  if (!deferredTargetRevalidation && pendingRevalidationArchive) {
+    if (!args.confirmMigration) return reconcilePendingTargetRevalidationArchive(root, task, args, pendingRevalidationArchive);
+    deferredTargetRevalidation = { kind: 'archive', pending_paths: pendingRevalidationArchive };
+  }
+  const targetRevalidation = deferredTargetRevalidation || urgentInvalidStageResult
+    ? null
+    : legacyLongformTargetRevalidationPreview(root, task, args.sessionId);
+  if (!deferredTargetRevalidation && targetRevalidation) {
+    if (String(targetRevalidation.status || '').startsWith('blocked_') || !args.confirmMigration) return targetRevalidation;
+    deferredTargetRevalidation = { kind: 'revalidation', preview: targetRevalidation };
+  }
+  const chapterProseRevalidation = deferredTargetRevalidation || urgentInvalidStageResult
+    ? null
+    : longformChapterProseRevalidationPreview(root, task, args.sessionId);
+  if (!deferredTargetRevalidation && chapterProseRevalidation) {
+    if (!args.confirmMigration) return chapterProseRevalidation;
+    deferredTargetRevalidation = { kind: 'chapter_prose', preview: chapterProseRevalidation };
+  }
+  if (deferredTargetRevalidation && task.task_family_id) {
+    const requestedSession = String(args.sessionId || '').trim();
+    let preflight = null;
+    try {
+      preflight = claimFamilyWriter(root, task.task_family_id, {
+        session_id: requestedSession,
+        host: requestedSession.split(':')[0] || 'unknown',
+      }, {
+        write: false,
+        takeover: args.takeover === true,
+        confirmed: args.confirmMigration === true,
+      });
+    } catch (error) {
+      if (error.code !== 'TASK_FAMILY_NOT_FOUND') throw error;
+    }
+    if (preflight && preflight.takeover_required) {
+      return workflowSessionTakeoverMenu(task, requestedSession, preflight, preflight.status === 'awaiting_claim');
+    }
+  } else if (deferredTargetRevalidation) {
+    const requestedSession = String(args.sessionId || '').trim();
+    const lease = (((task.runtime_guard || {}).session_lease) || {});
+    if (WORKFLOW_RECOVERY.isLiveWorkflowSessionLease(lease, new Date())
+        && String(lease.holder_id || '') !== requestedSession
+        && !(args.takeover && args.confirmMigration)) {
+      return workflowSessionTakeoverMenu(task, requestedSession, { writer_lease: lease }, false);
+    }
+  }
+  const prematureVolumeAcceptanceRepaired = repairPrematureVolumeAcceptance(root, task, tpl);
+  const skippedLongChapterLoopRepaired = repairSkippedLongChapterLoop(root, task, tpl);
+  const chapterProseCheckpointRepaired = repairAppliedChapterProseRevalidationCheckpoint(root, task);
   const projectRootRebound = rebindTaskToCurrentProjectRoot(task);
   const terminalStatus = ['completed', 'completed_verified', 'done', 'closed'].includes(String(task.status || '').toLowerCase());
   if (tpl && terminalStatus) {
@@ -1924,11 +3207,19 @@ function reconcileRuntime(args) {
     const completedStages = new Set(Array.isArray((task.machine || {}).completed_stages)
       ? task.machine.completed_stages.map(String)
       : []);
-    const terminalComplete = orderedStages.length > 0 && orderedStages.every((stageId) => completedStages.has(stageId));
+    const missingStages = orderedStages.filter((stageId) => !completedStages.has(stageId));
+    const legacyHandoff = legacyReviewHandoffCompletion(root, task, missingStages);
+    const terminalComplete = orderedStages.length > 0 && (missingStages.length === 0 || Boolean(legacyHandoff));
     if (!terminalComplete) {
       return blocked('blocked_completed_workflow_incomplete', '任务被标记为已完成，但仍有阶段没有可信完成回执；不能自动收束。');
     }
     const nowText = new Date().toISOString();
+    if (legacyHandoff) {
+      task.workflow_completion_compatibility = {
+        ...legacyHandoff,
+        reconciled_at: nowText,
+      };
+    }
     task.lifecycle = { ...(task.lifecycle || {}), status: 'completed', updated_at: nowText, completed_at: String(((task.lifecycle || {}).completed_at) || nowText) };
     task.unit_lifecycle = {
       ...(task.unit_lifecycle || {}),
@@ -1988,6 +3279,13 @@ function reconcileRuntime(args) {
   if (!tpl || !stageDef || ['completed', 'closed', 'cancelled'].includes(String(task.status || '').toLowerCase())) {
     return blocked('blocked_workflow_runtime_not_reconcilable', '当前任务没有可恢复的运行阶段。');
   }
+  const activeLongChapterScope = String(task.workflow_type || '') === 'long_write'
+      && LONG_EXECUTABLE_STAGE_CONTRACTS.has(String(task.current_stage || ''))
+    ? synchronizeLongChapterScope(
+        task,
+        ((task.stage_execution || {}).chapter_target) || ensureActiveChapterTarget(task),
+      )
+    : '';
   const activeShortStageRefresh = refreshActiveShortStageGuidance(root, task);
 
   const now = new Date();
@@ -2018,6 +3316,31 @@ function reconcileRuntime(args) {
     return workflowSessionTakeoverMenu(task, requestedSession, { writer_lease: lease }, false);
   }
 
+  if (deferredTargetRevalidation) {
+    task.runtime_guard = task.runtime_guard || {};
+    task.runtime_guard.session_lease = reconciledRuntimeSessionLease(
+      task,
+      requestedSession,
+      familySession,
+      lease,
+      otherHolder,
+      now,
+    );
+    if (deferredTargetRevalidation.kind === 'archive') {
+      return reconcilePendingTargetRevalidationArchive(root, task, args, deferredTargetRevalidation.pending_paths);
+    }
+    if (deferredTargetRevalidation.kind === 'confirmation') {
+      return repairTargetRevalidationConfirmation(root, task, args);
+    }
+    if (deferredTargetRevalidation.kind === 'snapshot') {
+      return repairTargetRevalidationSnapshot(root, task, args);
+    }
+    if (deferredTargetRevalidation.kind === 'chapter_prose') {
+      return applyLongformChapterProseRevalidation(root, task, deferredTargetRevalidation.preview);
+    }
+    return applyLegacyLongformTargetRevalidation(root, task, deferredTargetRevalidation.preview);
+  }
+
   const nowText = now.toISOString();
   const ordered = tpl.stages.map((item) => item.stage_id);
   const currentIndex = ordered.indexOf(task.current_stage);
@@ -2037,7 +3360,9 @@ function reconcileRuntime(args) {
   task.machine.next_stop_reason = 'ready_for_current_stage';
   task.status = ['paused', 'paused_after_batch'].includes(String(task.status || '').toLowerCase()) ? 'paused' : 'running';
   task.lifecycle = { ...(task.lifecycle || {}), status: task.status === 'paused' ? 'paused' : 'active', updated_at: nowText, completed_at: '' };
-  const reconciledScope = shortStageWorkUnitScope(root, task, stageDef.stage_id, task.scope || '');
+  const reconciledScope = activeLongChapterScope
+    || shortStageWorkUnitScope(root, task, stageDef.stage_id, task.scope || '');
+  task.lifecycle.scope = reconciledScope;
   task.unit_lifecycle = {
     ...(task.unit_lifecycle || {}),
     ...buildUnitLifecycleState(tpl, stageDef, reconciledScope),
@@ -2051,22 +3376,7 @@ function reconcileRuntime(args) {
   };
   task.runtime_guard = task.runtime_guard || {};
   refreshRuntimeModelProfile(task, args, nowText);
-  task.runtime_guard.session_lease = {
-    holder_id: requestedSession,
-    workflow_id: task.workflow_id,
-    acquired_at: familySession
-      ? String(((familySession.writer_lease || {}).acquired_at) || nowText)
-      : (otherHolder ? nowText : (lease.acquired_at || nowText)),
-    heartbeat_at: nowText,
-    expires_at: familySession
-      ? String(((familySession.writer_lease || {}).expires_at) || new Date(now.getTime() + WORKFLOW_SESSION_LEASE_MS).toISOString())
-      : new Date(now.getTime() + WORKFLOW_SESSION_LEASE_MS).toISOString(),
-    host: familySession
-      ? String(((familySession.writer_lease || {}).host) || requestedSession.split(':')[0] || 'unknown')
-      : requestedSession.split(':')[0] || 'unknown',
-    task_family_id: String(task.task_family_id || ''),
-    session_role: familySession ? familySession.role : 'writer',
-  };
+  task.runtime_guard.session_lease = reconciledRuntimeSessionLease(task, requestedSession, familySession, lease, otherHolder, now);
   task.runtime_guard.heartbeat = {
     ...((task.runtime_guard || {}).heartbeat || {}),
     updated_at: nowText,
@@ -2088,8 +3398,46 @@ function reconcileRuntime(args) {
       task.stage_execution = null;
     }
   }
+  const detailOutlineRevisionScopeRepaired = configureDetailOutlineRevisionExecutionScope(root, task);
+  let staleStageResultRetired = null;
+  let staleStageResultCandidate = null;
   if (task.stage_execution && task.stage_execution.status === 'running') {
+    const expectedPacket = String(task.stage_execution.expected_result_packet || '');
+    const expectedFile = resolveSafeProjectFile(root, expectedPacket);
+    const existingPacket = expectedFile && fs.existsSync(expectedFile) ? readJson(expectedFile) : null;
+    const existingAttemptId = String((existingPacket || {}).stage_attempt_id || '');
+    const activeAttemptId = String(task.stage_execution.stage_attempt_id || '');
+    if (existingPacket && !existingPacket.__error && existingAttemptId && existingAttemptId !== activeAttemptId) {
+      staleStageResultCandidate = { kind: 'prior_attempt', expected_result_packet: expectedPacket };
+    }
+    if (String(task.workflow_type || '') === 'long_write' && reconciledScope) {
+      task.stage_execution = {
+        ...task.stage_execution,
+        work_unit_scope: reconciledScope,
+        work_unit_id: stageWorkUnitId(task, task.current_stage, reconciledScope),
+        confirmation_context: task.stage_execution.confirmation_context
+          ? { ...task.stage_execution.confirmation_context, target_scope: reconciledScope }
+          : task.stage_execution.confirmation_context,
+      };
+    }
     task.stage_execution = bindStageCompletionContract(task.stage_execution);
+    attachLongStageExecutionGuidance(root, task, task.current_stage);
+    attachStageMemoryGuidance(root, task, task.current_stage);
+    attachCooperativeLongformResultContract(root, task);
+    const stageBlocker = runningStageExecutionBlocker(task.stage_execution);
+    if (stageBlocker) return blocked('blocked_stage_execution_context', stageBlocker.reason);
+    const invalidCurrentResult = classifyInvalidCurrentLongformResultPacket(root, task);
+    if (!staleStageResultCandidate && invalidCurrentResult) {
+      staleStageResultCandidate = {
+        kind: 'invalid_current_contract',
+        expected_result_packet: expectedPacket,
+        finding: invalidCurrentResult,
+      };
+    }
+    const reconciledExecutionContract = validateStartedStageExecutionContract(task, task.current_stage);
+    if (reconciledExecutionContract.status === 'missing') {
+      return blocked('blocked_stage_execution_contract_missing', reconciledExecutionContract.reason);
+    }
   }
   const shortDraftStop = isShortWritingWorkflow(task)
     && ['draft_first_section', 'draft_section', 'draft_next_section'].includes(String(task.current_stage || ''))
@@ -2103,7 +3451,26 @@ function reconcileRuntime(args) {
   }
   task.state_version = Number(task.state_version || 0) + 1;
   task.updated_at = nowText;
-  persistTaskSnapshot(root, task);
+  if (staleStageResultCandidate) {
+    staleStageResultRetired = staleStageResultCandidate.kind === 'invalid_current_contract'
+      ? retireInvalidCurrentStageResultContract(root, task, staleStageResultCandidate.finding)
+      : retireAcceptedStageResultForRetry(root, task, task.current_stage, staleStageResultCandidate.expected_result_packet);
+    if (staleStageResultRetired && String(staleStageResultRetired.status || '').startsWith('blocked_')) {
+      return staleStageResultRetired;
+    }
+  }
+  try {
+    if (process.env.NOVEL_ASSISTANT_TEST_FAIL_RECONCILE_PERSIST === '1') {
+      throw new Error('forced runtime reconciliation persistence failure');
+    }
+    persistTaskSnapshot(root, task);
+  } catch (error) {
+    if (staleStageResultRetired && typeof staleStageResultRetired.rollback === 'function') {
+      staleStageResultRetired.rollback();
+    }
+    if (durableTaskTextBeforeReconcile) atomicWriteText(targetFile, durableTaskTextBeforeReconcile);
+    return blocked('blocked_runtime_reconcile_persist_failed', `运行时校正未能持久化，已恢复原阶段回执：${String((error && error.message) || error || 'unknown error')}`);
+  }
   writeCurrentTaskMarkdownIfFocused(root, task);
   appendTaskJournal(root, 'runtime_reconciled', { workflow_id: task.workflow_id, current_stage: task.current_stage, session_id: requestedSession });
   appendHistory(root, 'runtime_reconciled', { workflow_id: task.workflow_id, workflow_type: task.workflow_type, current_stage: task.current_stage, session_id: requestedSession });
@@ -2116,6 +3483,14 @@ function reconcileRuntime(args) {
     project_root_rebound: projectRootRebound,
     project_progress_resume: shortProjectResume.applied ? shortProjectResume : null,
     active_short_stage_refresh: activeShortStageRefresh,
+    active_long_chapter_scope: activeLongChapterScope,
+    premature_volume_acceptance_repaired: prematureVolumeAcceptanceRepaired,
+    skipped_long_chapter_loop_repaired: skippedLongChapterLoopRepaired,
+    chapter_prose_checkpoint_repaired: chapterProseCheckpointRepaired,
+    detail_outline_revision_scope_repaired: detailOutlineRevisionScopeRepaired,
+    stale_stage_result_retired: staleStageResultRetired,
+    scope_continuation_authority_repaired: scopeContinuationAuthorityRepair.repaired,
+    scope_continuation_confirmation_reset: scopeContinuationAuthorityRepair.confirmation_reset,
     session_takeover: familySession
       ? ['taken_over', 'reclaimed_stale'].includes(familySession.status)
       : Boolean(otherHolder),
@@ -2123,6 +3498,622 @@ function reconcileRuntime(args) {
     session_claim_status: familySession ? familySession.status : 'legacy_lease',
     session_lease: task.runtime_guard.session_lease,
   };
+}
+
+function legacyPlanningReviewRestartPreview(root, task) {
+  const alreadyRestarted = restartedLegacyPlanningReviewPreview(root, task);
+  if (alreadyRestarted) return alreadyRestarted;
+  const currentStage = String((task || {}).current_stage || '');
+  const returnedReviewStage = planningReviewForProducer(currentStage);
+  const durableReturn = (((task || {}).lifecycle_graph || {}).last_transition_validation) || {};
+  const reviewReturnRecorded = String((((task || {}).machine || {}).last_transition) || '') === 'review_failed_return_to_asset'
+    || (durableReturn.allowed === true
+      && String(durableReturn.rule || '') === 'required_review_failure_return'
+      && String(durableReturn.from || '') === returnedReviewStage
+      && String(durableReturn.to || '') === currentStage);
+  const returnedProducer = ['master_outline', 'volume_outline'].includes(currentStage)
+    && reviewReturnRecorded
+    && !(task.planning_revision && typeof task.planning_revision === 'object');
+  const stageId = returnedProducer ? returnedReviewStage : currentStage;
+  if (!['master_outline_review', 'volume_outline_review'].includes(stageId)) return null;
+  const execution = (task || {}).stage_execution || {};
+  if (returnedProducer) {
+    if (String(execution.stage_id || '') !== currentStage
+        || !['running', 'paused', 'contract_blocked'].includes(String(execution.status || ''))) return null;
+  } else if (String(execution.stage_id || '') !== stageId
+      || !['running', 'paused'].includes(String(execution.status || ''))) return null;
+  const resultRel = returnedProducer
+    ? normalizeWriteSetPath(`${task.task_dir}/result-packets/${stageId}.result.json`)
+    : normalizeWriteSetPath(execution.expected_result_packet);
+  const resultFile = resolveSafeProjectFile(root, resultRel);
+  if (!resultFile || !fs.existsSync(resultFile)) return null;
+  const stat = fs.lstatSync(resultFile);
+  if (!stat.isFile() || stat.isSymbolicLink()) return null;
+  const packet = readJson(resultFile);
+  if (!packet || packet.__error
+      || String(packet.workflow_id || '') !== String(task.workflow_id || '')
+      || String(packet.stage_id || '') !== stageId
+      || !isBlockingReviewResult(packet)
+      || (packet.planning_revision_plan && typeof packet.planning_revision_plan === 'object')) return null;
+  return {
+    stage_id: stageId,
+    result_rel: resultRel,
+    result_file: resultFile,
+    packet,
+    mode: returnedProducer ? 'returned_producer_without_plan' : 'review_result_pending_apply',
+  };
+}
+
+function restartedLegacyPlanningReviewPreview(root, task) {
+  const stageId = String((task || {}).current_stage || '');
+  const execution = (task || {}).stage_execution || {};
+  const restart = execution.legacy_review_restart || {};
+  if (!['master_outline_review', 'volume_outline_review'].includes(stageId)
+      || String(execution.stage_id || '') !== stageId
+      || String(execution.status || '') !== 'running'
+      || String(restart.mode || '') !== 'read_only_review'
+      || [execution.write_set, execution.canonical_write_set, execution.planning_targets, execution.revision_targets]
+        .some((items) => !Array.isArray(items) || items.length !== 0)) return null;
+  const archiveRel = normalizeWriteSetPath(restart.source_result_packet);
+  const archivePrefix = `${String((task || {}).task_dir || '')}/audit/archive/legacy-planning-review/`;
+  if (!archiveRel.startsWith(archivePrefix) || !archiveRel.endsWith('.result.json')) return null;
+  const archiveFile = resolveSafeProjectFile(root, archiveRel);
+  if (!archiveFile || !fs.existsSync(archiveFile)) return null;
+  const stat = fs.lstatSync(archiveFile);
+  if (!stat.isFile() || stat.isSymbolicLink()) return null;
+  const packet = readJson(archiveFile);
+  if (!packet || packet.__error
+      || String(packet.workflow_id || '') !== String((task || {}).workflow_id || '')
+      || String(packet.stage_id || '') !== stageId
+      || !isBlockingReviewResult(packet)
+      || (packet.planning_revision_plan && typeof packet.planning_revision_plan === 'object')) return null;
+  const resultRel = normalizeWriteSetPath(execution.expected_result_packet);
+  const resultFile = resolveSafeProjectFile(root, resultRel);
+  if (!resultFile || fs.existsSync(resultFile)) return null;
+  return {
+    stage_id: stageId,
+    result_rel: resultRel,
+    result_file: resultFile,
+    archive_rel: archiveRel,
+    archive_file: archiveFile,
+    packet,
+    mode: 'already_restarted_read_only',
+  };
+}
+
+function synchronizeLegacyPlanningReviewRestartState(task, tpl, reviewStage, now) {
+  const stageIds = (tpl.stages || []).map((stage) => String(stage.stage_id || ''));
+  const reviewIndex = stageIds.indexOf(reviewStage);
+  const producerStage = planningProducerForReview(reviewStage);
+  const reviewDef = findStage(tpl, reviewStage);
+  if (reviewIndex < 1 || stageIds[reviewIndex - 1] !== producerStage || !reviewDef) return false;
+  const before = JSON.stringify({
+    current_stage: task.current_stage,
+    status: task.status,
+    lifecycle: task.lifecycle,
+    machine: task.machine,
+    lifecycle_graph: task.lifecycle_graph,
+    unit_lifecycle: task.unit_lifecycle,
+  });
+  const graph = normalizeLongformLifecycleGraph(task, tpl);
+  const reviewResults = Object.fromEntries(Object.entries(graph.review_results || {})
+    .filter(([stageId]) => stageIds.indexOf(stageId) >= 0 && stageIds.indexOf(stageId) < reviewIndex));
+  const contract = tpl.unit_lifecycle_contract || unitLifecycle('workflow_batch', {});
+  const completedRoles = Array.from(new Set(stageIds.slice(0, reviewIndex)
+    .map((stageId) => currentUnitRole(contract, stageId))
+    .filter(Boolean)));
+  const nodeStatusesAligned = graph.nodes.every((node) => {
+    const index = stageIds.indexOf(String((node || {}).id || ''));
+    const expected = index < reviewIndex ? 'accepted' : index === reviewIndex ? 'draft' : 'invalidated';
+    return String((node || {}).status || '') === expected;
+  });
+  const alreadyAligned = String(task.current_stage || '') === reviewStage
+    && String(task.status || '') === 'running'
+    && String((task.lifecycle || {}).status || '') === 'active'
+    && graph.current_node === reviewStage
+    && sameContractValue(graph.asset_target, reviewDef.asset_target)
+    && sameContractValue(graph.completed_nodes, stageIds.slice(0, reviewIndex))
+    && sameContractValue(graph.invalidated_nodes, stageIds.slice(reviewIndex))
+    && sameContractValue(graph.review_results, reviewResults)
+    && String(((graph.last_transition_validation || {}).rule) || '') === 'legacy_planning_review_read_only_restart'
+    && nodeStatusesAligned
+    && sameContractValue(((task.machine || {}).completed_stages) || [], stageIds.slice(0, reviewIndex))
+    && sameContractValue(((task.machine || {}).remaining_stages) || [], stageIds.slice(reviewIndex))
+    && String(((task.unit_lifecycle || {}).current_stage) || '') === reviewStage
+    && String(((task.unit_lifecycle || {}).current_role) || '') === currentUnitRole(contract, reviewStage)
+    && sameContractValue(((task.unit_lifecycle || {}).completed_roles) || [], completedRoles);
+  if (alreadyAligned) return false;
+  const existingValidation = graph.last_transition_validation || {};
+  task.current_stage = reviewStage;
+  task.current_step = reviewStage;
+  task.status = 'running';
+  task.lifecycle = { ...normalizeLifecycle(task), status: 'active', updated_at: now, completed_at: '' };
+  task.lifecycle_graph = {
+    ...graph,
+    current_node: reviewStage,
+    asset_target: { ...(reviewDef.asset_target || {}) },
+    completed_nodes: stageIds.slice(0, reviewIndex),
+    invalidated_nodes: stageIds.slice(reviewIndex),
+    review_results: reviewResults,
+    last_transition_validation: String(existingValidation.rule || '') === 'legacy_planning_review_read_only_restart'
+      ? existingValidation
+      : {
+        allowed: true,
+        rule: 'legacy_planning_review_read_only_restart',
+        from: String(graph.current_node || producerStage),
+        to: reviewStage,
+        validated_at: now,
+      },
+    nodes: graph.nodes.map((node) => {
+      const index = stageIds.indexOf(String((node || {}).id || ''));
+      return { ...node, status: index < reviewIndex ? 'accepted' : index === reviewIndex ? 'draft' : 'invalidated' };
+    }),
+  };
+  task.machine = {
+    ...normalizeMachine(task, tpl),
+    completed_stages: stageIds.slice(0, reviewIndex),
+    remaining_stages: stageIds.slice(reviewIndex),
+    allowed_actions: ['await_result_packet', 'pause'],
+    last_transition: 'legacy_planning_review_restarted_read_only',
+    last_execution_event: 'stage_started',
+    next_stop_reason: 'stage_running_waiting_result_packet',
+  };
+  task.unit_lifecycle = {
+    ...(task.unit_lifecycle || {}),
+    status: 'active',
+    current_scope: String((((task || {}).stage_execution || {}).work_unit_scope) || task.scope || ''),
+    current_stage: reviewStage,
+    current_role: currentUnitRole(contract, reviewStage),
+    stage_roles: contract.stage_roles || {},
+    required_sequence: contract.required_sequence || [],
+    completed_roles: completedRoles,
+    updated_at: now,
+  };
+  const after = JSON.stringify({
+    current_stage: task.current_stage,
+    status: task.status,
+    lifecycle: task.lifecycle,
+    machine: task.machine,
+    lifecycle_graph: task.lifecycle_graph,
+    unit_lifecycle: task.unit_lifecycle,
+  });
+  return before !== after;
+}
+
+function runningStageMemoryBindingCurrent(execution) {
+  if (!execution || typeof execution !== 'object') return false;
+  const policy = resolveExecutionMemoryPolicy(execution);
+  if (policy.mode === 'none' || policy.mode === 'missing') return true;
+  const context = execution.memory_context && typeof execution.memory_context === 'object'
+    ? execution.memory_context
+    : {};
+  const contract = context.memory_contract && typeof context.memory_contract === 'object'
+    ? context.memory_contract
+    : null;
+  const receipt = context.memory_read_receipt && typeof context.memory_read_receipt === 'object'
+    ? context.memory_read_receipt
+    : null;
+  const query = (contract && contract.query) || {};
+  const attemptId = String(execution.stage_attempt_id || '');
+  const workUnitId = String(execution.work_unit_id || '');
+  if (!attemptId || String(query.stage_attempt_id || '') !== attemptId || String((receipt || {}).stage_attempt_id || '') !== attemptId) return false;
+  if (workUnitId && (String(query.work_unit_id || '') !== workUnitId || String((receipt || {}).work_unit_id || '') !== workUnitId)) return false;
+  return validateMemoryReadReceipt(contract, receipt).status === 'current';
+}
+
+function refreshLegacyRunningStageMemoryBinding(root, task, stageId) {
+  const execution = task && task.stage_execution;
+  if (!execution || String(execution.status || '') !== 'running') return { changed: false, blocked: false };
+  if (runningStageMemoryBindingCurrent(execution)) return { changed: false, blocked: false };
+  attachStageMemoryGuidance(root, task, stageId);
+  attachCooperativeLongformResultContract(root, task);
+  if (execution.memory_context && execution.memory_context.blocking) {
+    return {
+      changed: false,
+      blocked: true,
+      status: String(execution.memory_context.status || 'blocked_memory_context'),
+      reason: '旧项目当前阶段的记忆上下文无法按新运行时重新绑定；已停止继续，未修改创作资产。',
+    };
+  }
+  if (!runningStageMemoryBindingCurrent(execution)) {
+    return {
+      changed: false,
+      blocked: true,
+      status: 'blocked_legacy_stage_memory_binding_refresh_failed',
+      reason: '旧项目当前阶段的记忆回执仍未绑定到当前执行 attempt/work unit。',
+    };
+  }
+  return { changed: true, blocked: false };
+}
+
+function restartLegacyPlanningReviewReadOnly(root, task, tpl, preview, requestedSession) {
+  const now = new Date().toISOString();
+  const execution = task.stage_execution || {};
+  const registryCheck = resolvedTemplateForTask(task);
+  if (registryCheck.status !== 'ok') return blockedTaskTemplate(registryCheck);
+  const resolvedTemplate = registryCheck.template;
+  if (!findStage(resolvedTemplate, preview.stage_id)) {
+    return blocked('blocked_workflow_runtime_not_reconcilable', '旧规划审阅对应的只读阶段不存在，不能安全重启。');
+  }
+  if (preview.mode === 'already_restarted_read_only') {
+    const changed = synchronizeLegacyPlanningReviewRestartState(task, resolvedTemplate, preview.stage_id, now);
+    const memoryRefresh = refreshLegacyRunningStageMemoryBinding(root, task, preview.stage_id);
+    if (memoryRefresh.blocked) return blocked(memoryRefresh.status, memoryRefresh.reason);
+    if (!changed && !memoryRefresh.changed) {
+      return {
+        schemaVersion: SCHEMA_VERSION,
+        status: 'long_planning_review_already_restarted_read_only',
+        workflow_id: task.workflow_id,
+        current_stage: task.current_stage,
+        creative_assets_modified: false,
+      };
+    }
+    task.state_version = Number(task.state_version || 0) + 1;
+    task.updated_at = now;
+    persistTaskSnapshot(root, task);
+    if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
+    writeCurrentTaskMarkdownIfFocused(root, task);
+    appendTaskJournal(root, 'legacy_planning_review_restart_state_reconciled', {
+      workflow_id: task.workflow_id,
+      stage_id: preview.stage_id,
+      archived_result_packet: preview.archive_rel,
+      memory_context_refreshed: memoryRefresh.changed,
+    });
+    appendHistory(root, 'legacy_planning_review_restart_state_reconciled', {
+      workflow_id: task.workflow_id,
+      workflow_type: task.workflow_type,
+      stage_id: preview.stage_id,
+      archived_result_packet: preview.archive_rel,
+      memory_context_refreshed: memoryRefresh.changed,
+    });
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'long_planning_review_restart_state_reconciled',
+      workflow_id: task.workflow_id,
+      current_stage: task.current_stage,
+      archived_result_packet: preview.archive_rel,
+      stage_execution: task.stage_execution,
+      memory_context_refreshed: memoryRefresh.changed,
+      creative_assets_modified: false,
+    };
+  }
+  const safeAttempt = safeLongPathSegment(String(preview.packet.stage_attempt_id || execution.stage_attempt_id || 'legacy-review'));
+  const archiveRel = `${task.task_dir}/audit/archive/legacy-planning-review/${safeAttempt}.result.json`;
+  const archiveFile = resolveSafeProjectFile(root, archiveRel);
+  if (!archiveFile) return blocked('blocked_long_planning_review_restart_archive_unsafe', '旧规划审阅回执归档路径不安全。');
+  fs.mkdirSync(path.dirname(archiveFile), { recursive: true });
+  const archiveCreated = !fs.existsSync(archiveFile);
+  if (fs.existsSync(archiveFile)) {
+    if (!fs.lstatSync(archiveFile).isFile() || hashFile(archiveFile) !== hashFile(preview.result_file)) {
+      return blocked('blocked_long_planning_review_restart_archive_conflict', '旧规划审阅回执与既有归档不一致。');
+    }
+  }
+  const taskBeforeRestart = JSON.parse(JSON.stringify(task));
+  const manifestFile = `${archiveFile}.manifest.json`;
+  const manifestBefore = fs.existsSync(manifestFile) ? fs.readFileSync(manifestFile) : null;
+  const restoreTask = () => {
+    for (const key of Object.keys(task)) delete task[key];
+    Object.assign(task, taskBeforeRestart);
+  };
+  const rollbackRestart = () => {
+    if (!fs.existsSync(preview.result_file) && fs.existsSync(archiveFile)) {
+      fs.copyFileSync(archiveFile, preview.result_file);
+    }
+    if (archiveCreated && fs.existsSync(archiveFile)) fs.unlinkSync(archiveFile);
+    if (manifestBefore) fs.writeFileSync(manifestFile, manifestBefore);
+    else if (fs.existsSync(manifestFile)) fs.unlinkSync(manifestFile);
+    restoreTask();
+  };
+  task.stage_execution = {
+    ...execution,
+    status: 'rejected',
+    stopped_at: now,
+    stop_reason: 'planning_revision_plan_missing',
+    ...(preview.mode === 'review_result_pending_apply' ? { failed_result_packet: archiveRel } : {}),
+  };
+  const selected = {
+    action_id: 'restart_legacy_planning_review_read_only',
+    target_stage: preview.stage_id,
+    selected_number: 1,
+    risk_level: 'low',
+    requires_user_confirm: false,
+    execution_contract: { completion_boundary: 'stage_completed' },
+  };
+  let started = null;
+  try {
+    started = maybeStartStageExecution(root, task, selected, now, null, { skipResultRetirement: true });
+  } catch (error) {
+    restoreTask();
+    throw error;
+  }
+  if (!started || started.started !== true) {
+    restoreTask();
+    return started && started.status
+      ? started
+      : blocked('blocked_long_planning_review_restart_failed', '旧规划审阅未能建立新的只读尝试。');
+  }
+  try {
+    if (archiveCreated) fs.copyFileSync(preview.result_file, archiveFile, fs.constants.COPYFILE_EXCL);
+    atomicWriteJson(manifestFile, {
+      schemaVersion: SCHEMA_VERSION,
+      kind: 'legacy_long_planning_review_without_plan',
+      workflow_id: String(task.workflow_id || ''),
+      stage_id: preview.stage_id,
+      stage_attempt_id: String(preview.packet.stage_attempt_id || execution.stage_attempt_id || ''),
+      source_path: preview.result_rel,
+      archive_path: archiveRel,
+      sha256: hashFile(archiveFile),
+      archived_at: now,
+    });
+    fs.unlinkSync(preview.result_file);
+    task.stage_execution.write_set = [];
+    task.stage_execution.canonical_write_set = [];
+    task.stage_execution.planning_targets = [];
+    task.stage_execution.revision_targets = [];
+    task.stage_execution.legacy_review_restart = {
+      mode: 'read_only_review',
+      source_result_packet: archiveRel,
+      restarted_at: now,
+    };
+    task.stage_execution.resume_hint = '只读复核当前正式规划资产，并在失败时补齐 planning_revision_plan；除 expected_result_packet 外不得修改任何文件。';
+    task.stage_execution.write_snapshot = captureStageWriteSnapshot(root, task, task.stage_execution.expected_result_packet);
+    task.runtime_guard = task.runtime_guard || {};
+    task.runtime_guard.session_lease = {
+      ...((task.runtime_guard || {}).session_lease || {}),
+      holder_id: requestedSession,
+      heartbeat_at: now,
+    };
+    synchronizeLegacyPlanningReviewRestartState(task, resolvedTemplate, preview.stage_id, now);
+    task.pending_action = null;
+    task.state_version = Number(task.state_version || 0) + 1;
+    task.updated_at = now;
+    persistTaskSnapshot(root, task);
+  } catch (error) {
+    rollbackRestart();
+    throw error;
+  }
+  if (task.task_family_id) ensureTaskFamily(root, task, { write: true, projectLockHeld: true });
+  writeCurrentTaskMarkdownIfFocused(root, task);
+  appendTaskJournal(root, 'legacy_planning_review_restarted_read_only', {
+    workflow_id: task.workflow_id,
+    stage_id: preview.stage_id,
+    archived_result_packet: archiveRel,
+  });
+  appendHistory(root, 'legacy_planning_review_restarted_read_only', {
+    workflow_id: task.workflow_id,
+    workflow_type: task.workflow_type,
+    stage_id: preview.stage_id,
+    archived_result_packet: archiveRel,
+  });
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'long_planning_review_restarted_read_only',
+    workflow_id: task.workflow_id,
+    current_stage: task.current_stage,
+    archived_result_packet: archiveRel,
+    stage_execution: task.stage_execution,
+    creative_assets_modified: false,
+  };
+}
+
+function repairPrematureVolumeAcceptance(root, task, tpl) {
+  if (!tpl || String((task || {}).workflow_type || '') !== 'long_write'
+      || String((task || {}).current_stage || '') !== 'volume_acceptance') return false;
+  const execution = task.stage_execution || {};
+  if (String(execution.stage_id || '') !== 'volume_acceptance'
+      || !['running', 'paused'].includes(String(execution.status || ''))) return false;
+  const resultFile = resolveSafeProjectFile(root, String(execution.expected_result_packet || ''));
+  if (resultFile && fs.existsSync(resultFile)) return false;
+  const laterTargets = laterCanonicalOutlineTargets(root, task);
+  if (laterTargets.length === 0) return false;
+  const reviewStage = findStage(tpl, 'detail_outline_review');
+  if (!reviewStage) return false;
+  const now = new Date().toISOString();
+  const staleReviewArchive = archiveScopeContinuationResult(root, task, 'detail_outline_review', now);
+  if (staleReviewArchive && String(staleReviewArchive.status || '').startsWith('blocked_')) return false;
+  const stageIds = tpl.stages.map(item => String(item.stage_id || ''));
+  const reviewIndex = stageIds.indexOf('detail_outline_review');
+  const predecessorReviewResults = Object.fromEntries(Object.entries(((task.lifecycle_graph || {}).review_results) || {})
+    .filter(([stageId]) => stageIds.indexOf(String(stageId || '')) >= 0 && stageIds.indexOf(String(stageId || '')) < reviewIndex));
+  task.stage_execution = {
+    ...execution,
+    status: 'superseded',
+    stopped_at: now,
+    stop_reason: 'premature_volume_acceptance',
+    superseded_reason: 'later_canonical_outlines_require_review',
+  };
+  task.current_stage = 'detail_outline_review';
+  task.current_step = 'detail_outline_review';
+  task.scope = `后续阶段细纲复核（${laterTargets.length}项）`;
+  task.lifecycle = normalizeLifecycle(task);
+  task.lifecycle.scope = task.scope;
+  task.lifecycle.updated_at = now;
+  task.unit_lifecycle = {
+    ...(task.unit_lifecycle || {}),
+    current_scope: task.scope,
+    updated_at: now,
+  };
+  task.detail_outline_review_targets = laterTargets;
+  task.active_chapter_target = null;
+  task.lifecycle_graph = {
+    ...(task.lifecycle_graph || {}),
+    current_node: 'detail_outline_review',
+    asset_target: { ...(reviewStage.asset_target || {}) },
+    completed_nodes: stageIds.slice(0, reviewIndex),
+    invalidated_nodes: stageIds.slice(reviewIndex + 1),
+    review_results: predecessorReviewResults,
+    last_transition_validation: {
+      allowed: true,
+      rule: 'later_outline_scope_continuation',
+      from: 'volume_acceptance',
+      to: 'detail_outline_review',
+      validated_at: now,
+    },
+    nodes: arrayOrEmpty((task.lifecycle_graph || {}).nodes).map((node) => {
+      const index = stageIds.indexOf(String((node || {}).id || ''));
+      return { ...node, status: index < reviewIndex ? 'accepted' : index === reviewIndex ? 'needs_review' : 'invalidated' };
+    }),
+  };
+  task.machine = {
+    ...normalizeMachine(task, tpl),
+    completed_stages: stageIds.slice(0, reviewIndex),
+    remaining_stages: stageIds.slice(reviewIndex),
+    last_transition: 'premature_volume_acceptance_repaired',
+    next_stop_reason: 'stage_running_waiting_result_packet',
+  };
+  if (task.longform_target_revalidation) {
+    task.longform_target_revalidation = {
+      ...task.longform_target_revalidation,
+      status: 'superseded',
+      superseded_at: now,
+      completion_reason: 'accepted_scope_reached_milestone',
+      superseded_by: 'later_outline_scope_continuation',
+    };
+  }
+  preservePreviousStageAttempt(task, stageWorkUnitId(task, 'detail_outline_review', task.scope), now);
+  task.stage_execution = null;
+  task.pending_action = buildPendingAction(tpl, reviewStage);
+  bindPendingActionToNextState(task, root);
+  task.machine = {
+    ...task.machine,
+    last_execution_event: 'awaiting_user_confirmation',
+    next_stop_reason: 'awaiting_user_confirmation',
+    allowed_actions: ['continue_next_stage', 'inspect_current_state', 'pause', 'free_text'],
+  };
+  task.longform_scope_continuation = {
+    status: 'later_outlines_require_review',
+    repaired_at: now,
+    outline_count: laterTargets.length,
+    outline_paths: laterTargets.map(item => item.outline_path),
+    superseded_stage: 'volume_acceptance',
+    archived_result_packet: String((staleReviewArchive || {}).archive_path || ''),
+    archive_manifest_path: String((staleReviewArchive || {}).manifest_path || ''),
+  };
+  return true;
+}
+
+function archiveScopeContinuationResult(root, task, stageId, archivedAt) {
+  const sourceRel = expectedResultPacketPath(task, stageId, root);
+  const sourceFile = resolveSafeProjectFile(root, sourceRel);
+  if (!sourceFile || !fs.existsSync(sourceFile)) return null;
+  const stat = fs.lstatSync(sourceFile);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    return blocked('blocked_scope_continuation_result_archive_unsafe', `不能归档非普通 result packet：${sourceRel}`);
+  }
+  const digest = normalizeContentHash(hashFile(sourceFile)).slice(0, 16);
+  const archiveRoot = `${String(task.task_dir || '').replace(/\/$/, '')}/audit/archive/scope-continuation-${digest}`;
+  const archiveRel = `${archiveRoot}/${path.basename(sourceRel)}`;
+  const manifestRel = `${archiveRoot}/manifest.json`;
+  const archiveFile = resolveSafeProjectFile(root, archiveRel);
+  const manifestFile = resolveSafeProjectFile(root, manifestRel);
+  if (!archiveFile || !manifestFile) return blocked('blocked_scope_continuation_result_archive_unsafe', '续写范围结果归档路径不安全。');
+  fs.mkdirSync(path.dirname(archiveFile), { recursive: true });
+  if (fs.existsSync(archiveFile)) {
+    if (!fs.lstatSync(archiveFile).isFile() || hashFile(archiveFile) !== hashFile(sourceFile)) {
+      return blocked('blocked_scope_continuation_result_archive_integrity', '既有续写范围结果归档与当前旧回执不一致。');
+    }
+    fs.unlinkSync(sourceFile);
+  } else {
+    fs.renameSync(sourceFile, archiveFile);
+  }
+  const sha256 = hashFile(archiveFile);
+  atomicWriteJson(manifestFile, {
+    schemaVersion: SCHEMA_VERSION,
+    kind: 'longform_scope_continuation_superseded_result',
+    workflow_id: String(task.workflow_id || ''),
+    stage_id: String(stageId || ''),
+    source_path: sourceRel,
+    archive_path: archiveRel,
+    sha256,
+    archived_at: archivedAt,
+  });
+  return { status: 'archived', source_path: sourceRel, archive_path: archiveRel, manifest_path: manifestRel, sha256 };
+}
+
+function repairSkippedLongChapterLoop(root, task, tpl) {
+  if (!tpl || String((task || {}).workflow_type || '') !== 'long_write'
+      || String((task || {}).current_stage || '') !== 'milestone_review') return false;
+  const pending = pendingDetailOutlineTargets(task);
+  if (pending.length === 0) return false;
+  const execution = task.stage_execution || {};
+  if (String(execution.stage_id || '') !== 'milestone_review'
+      || !['running', 'paused'].includes(String(execution.status || ''))) return false;
+  const resultFile = resolveSafeProjectFile(root, String(execution.expected_result_packet || ''));
+  if (resultFile && fs.existsSync(resultFile)) return false;
+  const stageIds = tpl.stages.map((stage) => String(stage.stage_id || ''));
+  const briefIndex = stageIds.indexOf('chapter_brief');
+  if (briefIndex < 0) return false;
+  const now = new Date().toISOString();
+  if (execution.stage_attempt_id) {
+    const history = arrayOrEmpty(task.stage_attempt_history).map((attempt) => ({ ...attempt }));
+    if (!history.some((attempt) => String((attempt || {}).stage_attempt_id || '') === String(execution.stage_attempt_id || ''))) {
+      history.push({
+        stage_attempt_id: String(execution.stage_attempt_id || ''),
+        work_unit_id: String(execution.work_unit_id || ''),
+        stage_id: 'milestone_review',
+        status: 'superseded',
+        expected_result_packet: String(execution.expected_result_packet || ''),
+        accepted_result_packet: '',
+        failed_result_packet: '',
+        started_at: String(execution.started_at || ''),
+        superseded_at: now,
+        superseded_reason: 'pending_chapter_targets_must_continue_before_milestone_review',
+      });
+    }
+    task.stage_attempt_history = history.slice(-100);
+  }
+  const nextTarget = pending[0];
+  task.current_stage = 'chapter_brief';
+  task.current_step = 'chapter_brief';
+  task.status = 'running';
+  task.active_chapter_target = { ...nextTarget };
+  task.scope = `全书第${String(nextTarget.global_chapter_no || '').padStart(3, '0')}章 / ${String(nextTarget.volume || '')}第${String(nextTarget.volume_chapter_no || '').padStart(3, '0')}章`;
+  task.machine = {
+    ...normalizeMachine(task, tpl),
+    completed_stages: stageIds.slice(0, briefIndex),
+    remaining_stages: stageIds.slice(briefIndex),
+    allowed_actions: ['await_result_packet', 'pause'],
+    last_transition: 'pending_chapter_loop_repaired',
+    last_execution_event: 'stage_started',
+    next_stop_reason: 'stage_running_waiting_result_packet',
+  };
+  const reviewResults = { ...(((task.lifecycle_graph || {}).review_results) || {}) };
+  for (const stageId of stageIds.slice(briefIndex)) delete reviewResults[stageId];
+  task.lifecycle_graph = {
+    ...(task.lifecycle_graph || {}),
+    current_node: 'chapter_brief',
+    asset_target: { kind: 'chapter', id: 'current-chapter' },
+    completed_nodes: stageIds.slice(0, briefIndex),
+    invalidated_nodes: stageIds.slice(briefIndex),
+    review_results: reviewResults,
+    last_transition_validation: {
+      allowed: true,
+      from: 'milestone_review',
+      to: 'chapter_brief',
+      rule: 'pending_chapter_loop_repair',
+      validated_at: now,
+    },
+    nodes: arrayOrEmpty((task.lifecycle_graph || {}).nodes).map((node) => {
+      const index = stageIds.indexOf(String((node || {}).id || ''));
+      return { ...node, status: index >= 0 && index < briefIndex ? 'accepted' : 'invalidated' };
+    }),
+  };
+  task.lifecycle = { ...normalizeLifecycle(task), status: 'active', scope: task.scope, updated_at: now, completed_at: '' };
+  task.unit_lifecycle = buildUnitLifecycleState(tpl, findStage(tpl, 'chapter_brief'), task.scope);
+  task.stage_execution = null;
+  task.pending_action = null;
+  delete task.canonical_write_baseline;
+  const started = maybeAutoStartInternalStage(root, task, tpl);
+  if (!started.started) throw new Error('pending long chapter loop repair could not start chapter_brief');
+  task.longform_chapter_loop_repair = {
+    status: 'applied',
+    repaired_from: 'milestone_review',
+    resume_stage: 'chapter_brief',
+    target_id: String(nextTarget.target_id || ''),
+    pending_target_count: pending.length,
+    repaired_at: now,
+  };
+  return true;
 }
 
 function refreshRuntimeModelProfile(task, args, nowText) {
@@ -2241,6 +4232,8 @@ function resumePendingShortFeedback(args) {
     pending = task.pending_feedback || {};
   }
   if (!String(pending.text || '').trim()) return blocked('blocked_short_feedback_missing', '当前没有待处理的短篇反馈。');
+  normalizePendingShortQualityFeedback(task);
+  pending = task.pending_feedback || pending;
   const registryCheck = resolvedTemplateForTask(task);
   if (registryCheck.status !== 'ok') return blockedTaskTemplate(registryCheck);
   let impact = task.short_feedback_impact || {};
@@ -2617,20 +4610,28 @@ function buildShortFeedbackProposal(task, result, now = new Date().toISOString()
 function buildShortFeedbackProposalPendingAction(template, task) {
   const stageDef = findStage(template, 'feedback_apply_patch');
   const proposalPending = buildPendingAction(template, stageDef);
+  const confirm = proposalPending.options.find(option => String(option.action_id || '') === 'continue_next_stage') || {};
   return decoratePendingAction({
     ...proposalPending,
     feedback_id: String(((task || {}).pending_feedback || {}).feedback_id || ''),
     proposal_id: String(((task || {}).proposed_plan || {}).proposal_id || ''),
     question: '反馈影响分析已完成，请确认当前回写方案',
-    options: proposalPending.options.map((option) => {
-      if (String(option.action_id || '') === 'continue_next_stage') {
-        return { ...option, label: '确认当前反馈回写方案（推荐）' };
-      }
-      if (String(option.action_id || '') === 'inspect_current_state') {
-        return { ...option, label: '查看当前方案、影响范围与依据' };
-      }
-      return option;
-    }),
+    options: [
+      { ...confirm, label: '确认并执行当前回写方案（推荐）' },
+      {
+        action_id: 'request_feedback_proposal_revision_input',
+        label: '进入 Chat 修改或补充方案',
+        risk_level: 'low',
+        requires_user_confirm: false,
+      },
+      {
+        action_id: 'inspect_current_state',
+        label: '查看当前方案、影响范围与依据',
+        risk_level: 'low',
+        requires_user_confirm: false,
+      },
+      { action_id: 'pause', label: '暂停并保存断点', risk_level: 'low', requires_user_confirm: false },
+    ],
     visible_choice_hash: '',
   });
 }
@@ -3388,7 +5389,7 @@ function createSeededChildProject(incubatorRoot, parentTask, taskTemplate, card,
       card,
       card_id: cardIdentity(card),
       project_id: String(existingState.project_id || ''),
-      project_title: String(existingState.project_title || cardTitle(card)),
+      project_title: resolveShortProjectTitle(existingState, cardTitle(card)),
       project_root: projectRoot,
       workflow_id: String(existingTask.workflow_id || ''),
       current_stage: String(existingTask.current_stage || 'short_setting'),
@@ -3660,6 +5661,82 @@ function ensureShortSettingAuthorDecisionMigration(root, task, taskTemplate) {
   return true;
 }
 
+function buildShortBriefOverloadPendingAction(task, sectionIndex, brief, findings) {
+  return decoratePendingAction({
+    id: `pa-short-brief-overload-${String(task.workflow_id || 'short')}-${Number(sectionIndex || 0)}`,
+    question: `第 ${Number(sectionIndex || 0)} 节写作提要需要作者决定收敛方式`,
+    options: [
+      {
+        action_id: 'retry_short_brief_with_core_focus',
+        label: '保留核心因果，压缩次要收束（推荐）',
+        target_stage: String(task.current_stage || 'next_section_brief'),
+        risk_level: 'medium',
+        requires_user_confirm: false,
+      },
+      {
+        action_id: 'request_short_brief_overload_revision_input',
+        label: '进入 Chat 指定保留、删减或拆分方式',
+        risk_level: 'low',
+        requires_user_confirm: false,
+      },
+      {
+        action_id: 'inspect_short_brief_overload',
+        label: '查看超载项、当前提要与依据',
+        risk_level: 'low',
+        requires_user_confirm: false,
+      },
+      {
+        action_id: 'pause',
+        label: '暂停并保存断点',
+        risk_level: 'low',
+        requires_user_confirm: false,
+      },
+    ],
+    free_text_enabled: true,
+    brief,
+    findings,
+  });
+}
+
+function registerShortBriefOverload(args) {
+  const root = path.resolve(args.projectRoot);
+  const authority = resolveTaskAuthority(root, args.workflowId);
+  if (authority.status !== 'ok') return blocked(String(authority.status || 'blocked_task_authority'), '无法定位当前工作流。');
+  const task = authority.task;
+  const stageId = String(task.current_stage || '');
+  if (!['first_section_brief', 'section_brief', 'next_section_brief'].includes(stageId)) {
+    return blocked('blocked_short_brief_overload_stage_mismatch', `当前阶段不是写作提要：${stageId}`);
+  }
+  const sectionIndex = shortSectionIndex(root, task, stageId);
+  const findings = String(args.reason || '').split('|').map(item => item.trim()).filter(Boolean);
+  const now = new Date().toISOString();
+  task.status = 'paused_after_step';
+  task.lifecycle = { ...(task.lifecycle || {}), status: 'paused', updated_at: now };
+  task.stage_execution = {
+    ...(task.stage_execution || {}),
+    status: 'awaiting_author_choice',
+    stopped_at: now,
+    stop_reason: 'short_brief_retry_exhausted',
+  };
+  task.short_brief_overload = {
+    status: 'awaiting_author_choice',
+    section_index: sectionIndex,
+    brief: String(args.scope || ''),
+    findings,
+    requested_at: now,
+  };
+  task.pending_action = buildShortBriefOverloadPendingAction(task, sectionIndex, String(args.scope || ''), findings);
+  writeTaskState(root, task);
+  const visibleResponse = pendingActionVisibleResponse(task, root, '自动精简已经达到重试上限，需要由你决定收敛方式。');
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'workflow_choice_required',
+    workflow_id: String(task.workflow_id || ''),
+    pending_action: refreshedVisibleMenu(task, root),
+    visible_response: visibleResponse,
+  };
+}
+
 function resolveAction(args) {
   const root = path.resolve(args.projectRoot);
   const task = readFocusedAuthority(root);
@@ -3695,6 +5772,21 @@ function resolveAction(args) {
   }
   task.pending_action = pending;
   const rawInput = String(args.input || '').trim();
+  const proposalRevisionAwaitingChat = String((((task || {}).proposal_revision_input || {}).status) || '') === 'awaiting_chat';
+  if (proposalRevisionAwaitingChat && Number.isInteger(Number(rawInput))) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'feedback_proposal_revision_input_required',
+      workflow_id: String(task.workflow_id || ''),
+      proposal_id: String((((task || {}).proposal_revision_input || {}).proposal_id) || ''),
+      instruction: '当前正在修改方案，请先直接输入修改意见；旧方案不会执行。',
+      visible_response: {
+        render_mode: 'free_text_revision',
+        status: 'feedback_proposal_revision_input_required',
+        text: '当前正在修改方案，请先直接输入修改意见。系统吸收后会生成新版方案，再恢复数字确认；旧方案不会执行。',
+      },
+    };
+  }
   const infoCardCommand = parseInfoSourceCardCommand(root, task, rawInput);
   const infoCardSelection = parseInfoSourceCardSelection(root, task, rawInput);
   const infoCardPoolActive = infoSourceSelectionCards(root, task).length > 0;
@@ -3768,13 +5860,30 @@ function resolveAction(args) {
       ? task.task_revision_input
       : {};
     const taskRevisionPending = String(taskRevisionInput.status || '') === 'awaiting_chat';
-    const classified = taskRevisionPending
+    const proposalRevisionInput = task.proposal_revision_input && typeof task.proposal_revision_input === 'object'
+      ? task.proposal_revision_input
+      : {};
+    const proposalRevisionPending = String(proposalRevisionInput.status || '') === 'awaiting_chat'
+      || awaitingCurrentShortFeedbackProposal(task);
+    const briefOverloadInput = task.short_brief_overload && typeof task.short_brief_overload === 'object'
+      ? task.short_brief_overload
+      : {};
+    const briefOverloadRevisionPending = String(briefOverloadInput.status || '') === 'awaiting_chat';
+    const classified = taskRevisionPending || briefOverloadRevisionPending
       ? {
           classification: 'scope_change',
           impact_level: 'planning_or_scope',
           return_to: String(task.current_stage || ''),
           source_kind: 'task_revision_requirement',
         }
+      : proposalRevisionPending && inferFreeTextClassification(rawInput).classification === 'free_text_instruction'
+        ? {
+            classification: 'current_artifact_feedback',
+            recommended_action: 'route_feedback_before_execution',
+            suggested_workflow_type: '',
+            target_scope: '',
+            reason: '用户正在修改待确认方案；先吸收意见并重新分析，不执行旧方案。',
+          }
       : classifyFreeTextInput(task, args.input, pending);
     if (isShortWritingWorkflow(task) && classified.classification === 'restart_short_info_discovery') {
       return restartShortInfoDiscovery(root, task, taskTemplate, args.input);
@@ -3810,7 +5919,11 @@ function resolveAction(args) {
         minimumImpactLevel: scopedRevisionInput ? 'current_brief' : '',
         sourceKind: taskRevisionPending
           ? 'task_revision_requirement'
-          : scopedRevisionInput ? 'user_revision_requirement' : 'user_message',
+          : briefOverloadRevisionPending
+            ? 'brief_overload_revision'
+          : proposalRevisionPending
+            ? 'user_proposal_revision'
+            : scopedRevisionInput ? 'user_revision_requirement' : 'user_message',
       });
       if (taskRevisionPending) {
         task.task_revision_input = {
@@ -3828,9 +5941,34 @@ function resolveAction(args) {
           received_at: now,
         };
       }
+      if (proposalRevisionPending) {
+        task.proposal_revision_input = {
+          ...proposalRevisionInput,
+          status: 'feedback_received',
+          feedback_id: String(((queuedFeedback.pending_feedback || {}).feedback_id) || ''),
+          base_proposal_id: String(proposalRevisionInput.proposal_id || ((task.proposed_plan || {}).proposal_id) || ''),
+          received_at: now,
+        };
+        if (task.proposed_plan && String(task.proposed_plan.status || '') === 'awaiting_user_confirmation') {
+          task.proposed_plan = {
+            ...task.proposed_plan,
+            status: 'superseded_pending_reanalysis',
+            superseded_at: now,
+          };
+        }
+      }
+      if (briefOverloadRevisionPending) {
+        task.short_brief_overload = {
+          ...briefOverloadInput,
+          status: 'feedback_received',
+          feedback_id: String(((queuedFeedback.pending_feedback || {}).feedback_id) || ''),
+          feedback_received_at: now,
+        };
+      }
       if (queuedFeedback.status === 'feedback_queued') invalidateShortFeedbackAnalysis(task, now);
       reopenShortTaskForFeedback(task, now);
-      if (classified.classification === 'current_artifact_feedback'
+      if (!proposalRevisionPending
+        && classified.classification === 'current_artifact_feedback'
         && isExpressionOnlyShortFeedback(task.pending_feedback.text)) {
         const repairStage = findStage(tpl, 'section_repair_loop');
         if (!repairStage) return blocked('blocked_short_repair_stage_missing', '短篇工作流缺少当前节修订阶段。');
@@ -3972,6 +6110,61 @@ function resolveAction(args) {
       last_trusted_artifact: String((((task.runtime_guard || {}).heartbeat || {}).latest_trusted_artifact) || task.last_trusted_artifact || ''),
       pending_action: menu,
       visible_response: pendingActionVisibleResponse(task, root, '当前进度已显示，原选择仍然有效。'),
+    };
+  }
+  if (semanticAction === 'request_feedback_proposal_revision_input') {
+    const proposal = task.proposed_plan && typeof task.proposed_plan === 'object' ? task.proposed_plan : {};
+    const now = new Date().toISOString();
+    task.proposal_revision_input = {
+      status: 'awaiting_chat',
+      feedback_id: String(proposal.feedback_id || ((task.pending_feedback || {}).feedback_id) || ''),
+      proposal_id: String(proposal.proposal_id || ''),
+      requested_at: now,
+    };
+    writeTaskState(root, task, { writeMarkdown: false });
+    const summary = String(proposal.summary || '').trim();
+    const instruction = '请直接输入你要删除、补充或调整的内容。系统会吸收意见并重新分析，生成新版方案后再次请你确认；不会执行当前方案。';
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'feedback_proposal_revision_input_requested',
+      workflow_id: String(task.workflow_id || ''),
+      proposal_id: String(proposal.proposal_id || ''),
+      instruction,
+      visible_response: {
+        render_mode: 'free_text_revision',
+        status: 'feedback_proposal_revision_input_requested',
+        text: [summary ? `当前方案：${summary}` : '', instruction].filter(Boolean).join('\n\n'),
+      },
+    };
+  }
+  if (semanticAction === 'request_short_brief_overload_revision_input') {
+    task.short_brief_overload = {
+      ...(task.short_brief_overload || {}),
+      status: 'awaiting_chat',
+      requested_at: new Date().toISOString(),
+    };
+    writeTaskState(root, task, { writeMarkdown: false });
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'short_brief_overload_revision_input_requested',
+      workflow_id: String(task.workflow_id || ''),
+      visible_response: {
+        render_mode: 'free_text_revision',
+        status: 'short_brief_overload_revision_input_requested',
+        text: '请直接输入要保留、删减、合并或拆分的内容。系统会先生成新版方案，再请你确认。',
+      },
+    };
+  }
+  if (semanticAction === 'inspect_short_brief_overload') {
+    const overload = task.short_brief_overload || {};
+    const findings = Array.isArray(overload.findings) ? overload.findings.join('、') : '';
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'short_brief_overload_inspected',
+      workflow_id: String(task.workflow_id || ''),
+      overload,
+      pending_action: refreshedVisibleMenu(task, root),
+      visible_response: pendingActionVisibleResponse(task, root, findings ? `当前写作提要超载项：${findings}` : '当前写作提要需要收敛后才能继续。'),
     };
   }
   if (semanticAction === 'free_text') {
@@ -4154,6 +6347,14 @@ function resolveAction(args) {
     };
   }
   const startResult = maybeStartStageExecution(root, task, selected, selectedAt, reviewPlanValidation);
+  if (selected.action_id === 'retry_short_brief_with_core_focus' && startResult.started && task.stage_execution) {
+    task.short_brief_overload = {
+      ...(task.short_brief_overload || {}),
+      status: 'compression_selected',
+      selected_at: selectedAt,
+    };
+    task.stage_execution.resume_hint = '只保留当前节不可缺少的核心因果、主角选择与节尾兑现；压缩次要关系余韵和重复承担项。完成写作提要后必须同轮执行 stage_completion_command；不得再次自由追问作者。';
+  }
   writeTaskState(root, task);
   appendHistory(root, 'resolved_action', {
     ...selected,
@@ -4449,7 +6650,19 @@ function recordShortFeedbackImpactResult(task, result) {
     result_packet_path: String(result.result_packet_path || ''),
     analyzed_at: new Date().toISOString(),
   };
+  const proposalRevision = task.proposal_revision_input && typeof task.proposal_revision_input === 'object'
+    ? task.proposal_revision_input
+    : null;
   task.proposed_plan = buildShortFeedbackProposal(task, result);
+  if (proposalRevision && String(proposalRevision.status || '') === 'feedback_received') {
+    task.proposed_plan.supersedes_proposal_id = String(proposalRevision.base_proposal_id || proposalRevision.proposal_id || '');
+    task.proposal_revision_input = {
+      ...proposalRevision,
+      status: 'reanalysis_completed',
+      revised_proposal_id: String(task.proposed_plan.proposal_id || ''),
+      completed_at: new Date().toISOString(),
+    };
+  }
   return task.short_feedback_impact;
 }
 
@@ -4570,7 +6783,8 @@ function visibleChoiceBinding(task, pending, root) {
 }
 
 function refreshedVisibleMenu(task, root) {
-  const progress = awaitingCurrentShortFeedbackProposal(task) ? null : shortRevisionQueueProgress(task, root);
+  const overloadChoice = String((((task || {}).pending_action || {}).id) || '').startsWith('pa-short-brief-overload-');
+  const progress = awaitingCurrentShortFeedbackProposal(task) || overloadChoice ? null : shortRevisionQueueProgress(task, root);
   let sourcePending = task.pending_action && typeof task.pending_action === 'object'
     ? { ...task.pending_action, options: Array.isArray(task.pending_action.options) ? task.pending_action.options.map(option => ({ ...option })) : [] }
     : { options: [] };
@@ -4677,7 +6891,8 @@ function refreshedVisibleMenu(task, root) {
 
 function pendingActionVisibleResponse(task, root, intro = '') {
   const pending = refreshedVisibleMenu(task, root);
-  const progress = awaitingCurrentShortFeedbackProposal(task) ? null : shortRevisionQueueProgress(task, root);
+  const overloadChoice = String((pending || {}).id || '').startsWith('pa-short-brief-overload-');
+  const progress = awaitingCurrentShortFeedbackProposal(task) || overloadChoice ? null : shortRevisionQueueProgress(task, root);
   const infoSourceCards = infoSourceSelectionCards(root, task);
   const infoCardPoolMode = String(task.current_stage || '') === 'info_source_selection' && infoSourceCards.length > 0;
   const projectSeedCards = projectSeedTopicCards(root, task);
@@ -4982,13 +7197,12 @@ function workflowTaskOverview(task, root) {
 }
 
 function resolveShortWorkingTitle(root, state = {}) {
-  const stored = String(
-    state.working_title
-    || state.title
-    || ((state.selected_material || {}).label)
-    || state.project_title
-    || '',
-  ).trim();
+  const stored = resolveShortProjectTitle({
+    working_title: state.working_title,
+    book_title: state.book_title,
+    title: state.title,
+    project_title: ((state.selected_material || {}).label),
+  }, state.project_title);
   if (stored) return stored.replace(/^《|》(?:设定(?:（第\s*\d+\s*版）)?|人物|世界观)?$/gu, '').trim();
 
   const material = readText(path.join(root, '素材卡.md'));
@@ -5081,7 +7295,17 @@ function runningStageResume(task, root) {
     ? task.stage_execution
     : null;
   if (!execution) return null;
+  attachCooperativeLongformResultContract(root, task);
   if (!shortFeedbackExecutionContractCurrent(task, execution)) return shortFeedbackContractRecovery(task);
+  const stageBlocker = runningStageExecutionBlocker(execution);
+  if (stageBlocker) return blocked('blocked_stage_execution_context', stageBlocker.reason);
+  const invalidLongformResult = classifyInvalidCurrentLongformResultPacket(root, task);
+  if (invalidLongformResult) {
+    if (invalidLongformResult.recoverable === false) {
+      return blocked(invalidLongformResult.validation_status, invalidLongformResult.reason);
+    }
+    return longformResultContractRecovery(task, invalidLongformResult);
+  }
   const boundExecution = bindStageCompletionContract(execution);
   const completionCommand = portableProjectCommand(boundExecution.stage_completion_command, root);
   const portableExecution = {
@@ -5133,6 +7357,49 @@ function runningStageResume(task, root) {
       requires_user_confirm: false,
       completion_required_before_reply: true,
       terminal_reply_allowed_on: terminalReplyAllowedOn,
+    },
+  };
+}
+
+function runningStageExecutionBlocker(execution) {
+  const memory = execution && execution.memory_context;
+  if (memory && memory.blocking === true) {
+    return { reason: String(memory.reason || memory.status || '当前阶段记忆上下文不可用。') };
+  }
+  for (const field of ['character_contract_blocking', 'context_packet_blocking']) {
+    const finding = execution && execution[field];
+    if (!finding || typeof finding !== 'object') continue;
+    if (finding.blocking === true || String(finding.status || '').startsWith('blocked_')) {
+      return { reason: String(finding.reason || finding.status || '当前阶段上下文存在阻断项。') };
+    }
+  }
+  return null;
+}
+
+function longformResultContractRecovery(task, finding) {
+  const holder = String(((((task || {}).runtime_guard || {}).session_lease || {}).holder_id) || 'recovery:stage-result-contract');
+  const command = `node scripts/workflow-state-machine.js reconcile-runtime --project-root . --workflow-id ${JSON.stringify(String((task || {}).workflow_id || ''))} --session-id ${JSON.stringify(holder)} --json`;
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'stage_result_contract_recovery_ready',
+    selection_status: 'recover',
+    workflow_id: String((task || {}).workflow_id || ''),
+    workflow_type: String((task || {}).workflow_type || ''),
+    current_stage: String((task || {}).current_stage || ''),
+    interaction_mode: 'execute_command',
+    presentation_allowed: false,
+    execution_workdir: '.',
+    execution_command: command,
+    recovery_reason: finding,
+    visible_response: {
+      render_mode: 'silent_execute',
+      user_visible: false,
+      status: 'stage_result_contract_recovery_ready',
+      selection_contract: 'execute_direct_intent_command',
+      interaction_mode: 'execute_command',
+      execution_workdir: '.',
+      execution_command: command,
+      requires_user_confirm: false,
     },
   };
 }
@@ -5273,11 +7540,18 @@ function shortStageWorkUnitScope(root, task, stageId, fallback = '') {
   return String(fallback || task.scope || '全篇');
 }
 
-function maybeStartStageExecution(root, task, selected, selectedAt, reviewPlan) {
+function maybeStartStageExecution(root, task, selected, selectedAt, reviewPlan, options = {}) {
   if (selected.action_id === 'pause') return { started: false, stageExecution: null };
 
   const targetStage = selected.target_stage || task.current_stage || task.current_step || '';
   if (!targetStage) return { started: false, stageExecution: null };
+
+  const schemaMigration = targetStage === 'detail_outline_review' && String(task.workflow_type || '') === 'long_write'
+    ? migrateLegacyPlannedDraftPaths(root, arrayOrEmpty(task.detail_outline_review_targets))
+    : null;
+  if (schemaMigration && String(schemaMigration.status || '').startsWith('blocked_')) {
+    return { started: false, stageExecution: null, ...schemaMigration };
+  }
 
   const activeReviewBatch = targetStage === 'evidence_scan' ? currentReviewBatch(task.review_batches) : null;
   const activePlanEntry = activeReviewBatch && reviewPlan && reviewPlan.planEntriesById
@@ -5287,16 +7561,26 @@ function maybeStartStageExecution(root, task, selected, selectedAt, reviewPlan) 
   const expectedResultPacket = activeReviewBatch
     ? expectedReviewBatchResultPacket(task, activeReviewBatch.id)
     : expectedResultPacketPath(task, targetStage, root);
+  const retiredResult = options.skipResultRetirement === true
+    ? null
+    : retireAcceptedStageResultForRetry(root, task, targetStage, expectedResultPacket);
+  if (retiredResult && String(retiredResult.status || '').startsWith('blocked_')) {
+    return { started: false, stageExecution: null, ...retiredResult };
+  }
   const registryCheck = resolvedTemplateForTask(task);
   if (registryCheck.status !== 'ok') return blockedTaskTemplate(registryCheck);
   const tpl = registryCheck.template;
   const stageDef = findStage(tpl, targetStage) || {};
-  const unitScope = shortStageWorkUnitScope(
-    root,
-    task,
-    targetStage,
-    activeBatchRange || ((task.lifecycle || {}).scope) || ((task.unit_lifecycle || {}).current_scope) || targetStage,
-  );
+  const chapterTarget = task.workflow_type === 'long_write' && LONG_EXECUTABLE_STAGE_CONTRACTS.has(targetStage)
+    ? ensureActiveChapterTarget(task)
+    : null;
+  const chapterScope = synchronizeLongChapterScope(task, chapterTarget);
+  const unitScope = chapterScope || shortStageWorkUnitScope(
+      root,
+      task,
+      targetStage,
+      activeBatchRange || ((task.lifecycle || {}).scope) || ((task.unit_lifecycle || {}).current_scope) || targetStage,
+    );
   const workUnitId = stageWorkUnitId(task, targetStage, unitScope);
   const attemptChain = preservePreviousStageAttempt(task, workUnitId, selectedAt);
   const confirmationContext = stageDef.requires_user_confirm
@@ -5323,12 +7607,21 @@ function maybeStartStageExecution(root, task, selected, selectedAt, reviewPlan) 
     started_at: selectedAt,
     expected_result_packet: expectedResultPacket,
     owner_module: stageDef.owner_module || '',
-    stage_description: String(stageDef.description || ''),
+    stage_description: stageDescriptionForAction(selected, stageDef),
     required_inputs: Array.isArray(stageDef.required_inputs) ? stageDef.required_inputs.slice() : [],
     lifecycle_node: stageDef.lifecycle_node || '',
     asset_target: { ...(stageDef.asset_target || {}) },
     review_requirement: { ...(stageDef.review_requirement || {}) },
     write_set: Array.isArray(stageDef.write_set) ? stageDef.write_set.slice() : [],
+    result_contract: String(stageDef.result_contract || ''),
+    review_targets: targetStage === 'detail_outline_review'
+      ? arrayOrEmpty(task.detail_outline_review_targets).map((item) => ({ ...item }))
+      : [],
+    schema_migration: schemaMigration ? { ...schemaMigration } : null,
+    chapter_target: chapterTarget ? { ...chapterTarget } : null,
+    chapter_targets: targetStage === 'chapter_brief'
+      ? pendingDetailOutlineTargets(task).map((item) => ({ ...item }))
+      : [],
     scheduling_contract: tpl.scheduling_contract && typeof tpl.scheduling_contract === 'object'
       ? JSON.parse(JSON.stringify(tpl.scheduling_contract))
       : null,
@@ -5352,10 +7645,16 @@ function maybeStartStageExecution(root, task, selected, selectedAt, reviewPlan) 
     host_execution_mode: 'cooperative_interactive',
     execution_boundary: normalizeExecutionBoundary({ host_execution_mode: 'cooperative_interactive' }),
   };
+  configureDetailOutlineRevisionExecutionScope(root, task);
   attachShortStageExecutionGuidance(root, task, targetStage);
   attachShortReviewStageExecutionGuidance(task, targetStage);
   attachLongStageExecutionGuidance(root, task, targetStage);
+  const planningRevisionScope = configureConfirmedLongPlanningRevision(root, task, targetStage, selectedAt);
+  if (planningRevisionScope.status === 'blocked') {
+    return blockStageExecutionContract(root, task, targetStage, { reason: planningRevisionScope.reason });
+  }
   attachStageMemoryGuidance(root, task, targetStage);
+  attachCooperativeLongformResultContract(root, task);
   const executionContract = validateStartedStageExecutionContract(task, targetStage);
   if (executionContract.status === 'missing') {
     return blockStageExecutionContract(root, task, targetStage, executionContract);
@@ -5406,6 +7705,169 @@ function maybeStartStageExecution(root, task, selected, selectedAt, reviewPlan) 
   return { started: true, stageExecution: task.stage_execution };
 }
 
+function retireAcceptedStageResultForRetry(root, task, stageId, expectedResultPacket) {
+  const sourceFile = resolveSafeProjectFile(root, expectedResultPacket);
+  if (!sourceFile || !fs.existsSync(sourceFile)) return null;
+  const sourceStat = fs.lstatSync(sourceFile);
+  if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+    return blocked('blocked_stale_result_packet_unsafe', `既有阶段回执不是安全普通文件：${expectedResultPacket}`);
+  }
+  const sourcePacket = readJson(sourceFile);
+  const packetAttemptId = String((sourcePacket || {}).stage_attempt_id || '');
+  const history = arrayOrEmpty(task.stage_attempt_history);
+  const priorIndex = history.map((attempt, index) => ({ attempt, index })).reverse().find(({ attempt }) => (
+    String((attempt || {}).stage_id || '') === String(stageId || '')
+      && String((attempt || {}).expected_result_packet || '') === String(expectedResultPacket || '')
+      && (!packetAttemptId || String((attempt || {}).stage_attempt_id || '') === packetAttemptId)
+      && [String((attempt || {}).accepted_result_packet || ''), String((attempt || {}).failed_result_packet || '')]
+        .includes(String(expectedResultPacket || ''))
+  ));
+  const prior = priorIndex ? priorIndex.attempt : null;
+  if (!prior) {
+    return blocked('blocked_stale_result_packet_untrusted', `新阶段尝试发现未归档的既有回执，无法证明它已被接受：${expectedResultPacket}`);
+  }
+  if (!sourcePacket || sourcePacket.__error
+      || String(sourcePacket.workflow_id || '') !== String(task.workflow_id || '')
+      || String(sourcePacket.stage_id || '') !== String(stageId || '')
+      || (packetAttemptId && packetAttemptId !== String(prior.stage_attempt_id || ''))) {
+    return blocked('blocked_stale_result_packet_archive_mismatch', `既有阶段回执身份与历史尝试不一致，禁止自动清理：${expectedResultPacket}`);
+  }
+  const safeStage = String(stageId || 'stage').replace(/[^A-Za-z0-9._-]/g, '_');
+  const safeAttempt = String(prior.stage_attempt_id || 'attempt').replace(/[^A-Za-z0-9._-]/g, '_');
+  const archiveRel = `${task.task_dir}/audit/archive/stage-result-retry/${safeStage}/${safeAttempt}.result.json`;
+  const archiveFile = resolveSafeProjectFile(root, archiveRel);
+  if (!archiveFile) return blocked('blocked_stale_result_packet_archive_unsafe', `阶段回执归档路径不安全：${archiveRel}`);
+  fs.mkdirSync(path.dirname(archiveFile), { recursive: true });
+  const archiveExisted = fs.existsSync(archiveFile);
+  const manifestFile = `${archiveFile}.manifest.json`;
+  const archive = archiveStageResultPacketTransaction(sourceFile, archiveFile, manifestFile, {
+    schemaVersion: SCHEMA_VERSION,
+    kind: 'stage_result_retry_archive',
+    workflow_id: String(task.workflow_id || ''),
+    stage_id: String(stageId || ''),
+    stage_attempt_id: String(prior.stage_attempt_id || ''),
+    source_path: expectedResultPacket,
+    archive_path: archiveRel,
+    sha256: hashFile(sourceFile),
+    archived_at: new Date().toISOString(),
+  }, archiveExisted);
+  if (archive.status !== 'archived') return archive;
+  const attempt = history[priorIndex.index];
+  if (String(attempt.accepted_result_packet || '') === String(expectedResultPacket || '')) attempt.accepted_result_packet = archiveRel;
+  if (String(attempt.failed_result_packet || '') === String(expectedResultPacket || '')) attempt.failed_result_packet = archiveRel;
+  task.stage_attempt_history = history;
+  if (String((((task || {}).detail_outline_review_failure || {}).result_packet_path) || '') === String(expectedResultPacket || '')) {
+    task.detail_outline_review_failure.result_packet_path = archiveRel;
+  }
+  const retired = {
+    status: 'accepted_stage_result_retired',
+    source_path: expectedResultPacket,
+    accepted_result_packet: archiveRel,
+    stage_attempt_id: String(prior.stage_attempt_id || ''),
+  };
+  Object.defineProperty(retired, 'rollback', {
+    enumerable: false,
+    value: archive.rollback,
+  });
+  return retired;
+}
+
+function archiveStageResultPacketTransaction(sourceFile, archiveFile, manifestFile, manifest, archiveExisted = false) {
+  const manifestBefore = fs.existsSync(manifestFile) ? fs.readFileSync(manifestFile) : null;
+  const rollback = () => {
+    if (!fs.existsSync(sourceFile) && fs.existsSync(archiveFile)) {
+      if (archiveExisted) fs.copyFileSync(archiveFile, sourceFile);
+      else fs.renameSync(archiveFile, sourceFile);
+    }
+    if (!archiveExisted && fs.existsSync(archiveFile)) fs.unlinkSync(archiveFile);
+    if (manifestBefore) fs.writeFileSync(manifestFile, manifestBefore);
+    else if (fs.existsSync(manifestFile)) fs.unlinkSync(manifestFile);
+  };
+  try {
+    if (archiveExisted) {
+      const archiveStat = fs.lstatSync(archiveFile);
+      if (!archiveStat.isFile() || archiveStat.isSymbolicLink() || hashFile(archiveFile) !== hashFile(sourceFile)) {
+        return blocked('blocked_stale_result_packet_archive_mismatch', '既有阶段回执与归档内容不一致。');
+      }
+      fs.unlinkSync(sourceFile);
+    } else {
+      fs.renameSync(sourceFile, archiveFile);
+    }
+    if (process.env.NOVEL_ASSISTANT_TEST_FAIL_RESULT_ARCHIVE_MANIFEST === '1') {
+      throw new Error('forced stage result archive manifest failure');
+    }
+    atomicWriteJson(manifestFile, manifest);
+  } catch (error) {
+    rollback();
+    return blocked('blocked_runtime_reconcile_archive_failed', `阶段回执归档未能完成，已恢复原文件：${String((error && error.message) || error || 'unknown error')}`);
+  }
+  return { status: 'archived', rollback };
+}
+
+function nextVersionedInvalidStageResultArchive(root, task, safeStage, safeAttempt, sourceFile) {
+  const digest = hashFile(sourceFile).slice(0, 12);
+  const base = `${task.task_dir}/audit/archive/stage-result-invalid/${safeStage}/${safeAttempt}`;
+  for (let version = 1; version < 100000; version += 1) {
+    const archiveRel = `${base}/${String(version).padStart(4, '0')}-${digest}.result.json`;
+    const archiveFile = resolveSafeProjectFile(root, archiveRel);
+    if (archiveFile && !fs.existsSync(archiveFile) && !fs.existsSync(`${archiveFile}.manifest.json`)) {
+      return { archiveRel, archiveFile };
+    }
+  }
+  return null;
+}
+
+function retireInvalidCurrentStageResultContract(root, task, finding) {
+  const currentFinding = classifyInvalidCurrentLongformResultPacket(root, task);
+  if (!currentFinding
+      || currentFinding.recoverable === false
+      || String(currentFinding.expected_result_packet || '') !== String((finding || {}).expected_result_packet || '')
+      || String(currentFinding.stage_attempt_id || '') !== String((finding || {}).stage_attempt_id || '')) {
+    return blocked('blocked_invalid_stage_result_contract_not_stale', '既有阶段回执不再满足严格的过期合同判定，禁止自动归档。');
+  }
+  const expectedResultPacket = String(currentFinding.expected_result_packet || '');
+  const sourceFile = resolveSafeProjectFile(root, expectedResultPacket);
+  if (!sourceFile || !fs.existsSync(sourceFile)) return null;
+  const sourceStat = fs.lstatSync(sourceFile);
+  if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+    return blocked('blocked_stale_result_packet_unsafe', `既有阶段回执不是安全普通文件：${expectedResultPacket}`);
+  }
+  const safeStage = String(((task || {}).stage_execution || {}).stage_id || 'stage').replace(/[^A-Za-z0-9._-]/g, '_');
+  const safeAttempt = String(currentFinding.stage_attempt_id || 'attempt').replace(/[^A-Za-z0-9._-]/g, '_');
+  const versioned = nextVersionedInvalidStageResultArchive(root, task, safeStage, safeAttempt, sourceFile);
+  if (!versioned) return blocked('blocked_stale_result_packet_archive_unsafe', '无法分配安全的阶段回执版本归档路径。');
+  const { archiveRel, archiveFile } = versioned;
+  fs.mkdirSync(path.dirname(archiveFile), { recursive: true });
+  const manifestFile = `${archiveFile}.manifest.json`;
+  const archive = archiveStageResultPacketTransaction(sourceFile, archiveFile, manifestFile, {
+    schemaVersion: SCHEMA_VERSION,
+    kind: 'invalid_stage_result_contract_archive',
+    workflow_id: String(task.workflow_id || ''),
+    stage_id: String(((task || {}).stage_execution || {}).stage_id || ''),
+    stage_attempt_id: String(currentFinding.stage_attempt_id || ''),
+    source_path: expectedResultPacket,
+    archive_path: archiveRel,
+    validation_status: String(currentFinding.validation_status || ''),
+    stale_fields: arrayOrEmpty(currentFinding.stale_fields),
+    sha256: hashFile(sourceFile),
+    archived_at: new Date().toISOString(),
+  });
+  if (archive.status !== 'archived') return archive;
+  const retired = {
+    status: 'invalid_stage_result_contract_retired',
+    source_path: expectedResultPacket,
+    accepted_result_packet: archiveRel,
+    stage_attempt_id: String(currentFinding.stage_attempt_id || ''),
+    validation_status: String(currentFinding.validation_status || ''),
+    stale_fields: arrayOrEmpty(currentFinding.stale_fields),
+  };
+  Object.defineProperty(retired, 'rollback', {
+    enumerable: false,
+    value: archive.rollback,
+  });
+  return retired;
+}
+
 function stageWorkUnitId(task, stageId, scope) {
   const identity = [
     String((task || {}).workflow_id || 'workflow'),
@@ -5431,6 +7893,7 @@ function preservePreviousStageAttempt(task, nextWorkUnitId, preservedAt) {
       status: String(previous.status || ''),
       expected_result_packet: String(previous.expected_result_packet || ''),
       accepted_result_packet: String(previous.accepted_result_packet || previous.result_packet || ''),
+      failed_result_packet: String(previous.failed_result_packet || ''),
       started_at: String(previous.started_at || ''),
       preserved_at: String(preservedAt || new Date().toISOString()),
     });
@@ -5488,6 +7951,144 @@ function attachShortReviewStageExecutionGuidance(task, targetStage) {
   execution.execution_command = `node scripts/workflow-stage-controller.js advance --project-root . --workflow-id ${workflowId} --result ${resultPacket} --json`;
   execution.resume_hint = `先运行 context_read_command，只读完成“${targetStage}”。按 expected_result_packet 写一份回执，固定包含 workflow_id、workflow_type=short_review、stage_id、step_id、owner_module、step_status=completed、outputs、changed_files=[]、evidence、verification_result、blocking_findings、output_health_result、checkpoint_state、result_packet_path；owner_module 必须沿用当前阶段。然后只运行 execution_command，不猜脚本参数、不读取工作流源码、不使用复合命令。`;
   task.stage_execution = execution;
+}
+
+function attachCooperativeLongformResultContract(root, task) {
+  if (String((task || {}).workflow_type || '') !== 'long_write') return;
+  const execution = task.stage_execution || {};
+  if (String(execution.host_execution_mode || '') !== 'cooperative_interactive') return;
+  const specialCommand = authoritativeCooperativeLongformCommand(task, execution);
+  const completionCommand = specialCommand
+    || `node scripts/workflow-state-machine.js apply-result --project-root . --workflow-id ${JSON.stringify(String(task.workflow_id || ''))} --result ${JSON.stringify(String(execution.expected_result_packet || ''))} --compact --json`;
+  execution.execution_command = completionCommand;
+  execution.stage_completion_command = completionCommand;
+  Object.assign(execution, bindStageCompletionContract(execution));
+  const context = execution.stage_context_packet && typeof execution.stage_context_packet === 'object'
+    ? execution.stage_context_packet
+    : {};
+  const consumedArtifactIds = Array.from(new Set((Array.isArray(context.source_files) ? context.source_files : [])
+    .map((item) => String((item || {}).artifact_id || '')).filter(Boolean)));
+  execution.result_packet_template = resultPacketTemplateFor(
+    task,
+    execution,
+    stageContractFor(root, task, execution),
+    String(execution.expected_result_packet || ''),
+    '',
+    execution.memory_context || {},
+    consumedArtifactIds,
+    { hostExecutionMode: 'cooperative_interactive' },
+  );
+}
+
+function authoritativeCooperativeLongformCommand(task, execution) {
+  const workflowId = String((task || {}).workflow_id || '');
+  const stageId = String((execution || {}).stage_id || '');
+  const command = String((execution || {}).execution_command || '').trim();
+  let expected = '';
+  if (['master_outline', 'volume_outline', 'stage_detail_outline'].includes(stageId)) {
+    expected = `node scripts/long-planning-stage-finalize.js --project-root . --workflow-id ${shellQuote(workflowId)} --apply --json`;
+  } else if (stageId === 'chapter_commit') {
+    expected = `node scripts/long-chapter-commit-finalize.js --project-root . --workflow-id ${JSON.stringify(workflowId)} --apply --json`;
+  } else if (stageId === 'prose_acceptance') {
+    expected = `node scripts/long-chapter-machine-gate.js --project-root . --workflow-id ${JSON.stringify(workflowId)} --apply --json`;
+  }
+  return expected && command === expected ? command : '';
+}
+
+function classifyInvalidCurrentLongformResultPacket(root, task) {
+  const execution = (task || {}).stage_execution || {};
+  if (String((task || {}).workflow_type || '') !== 'long_write'
+      || String(execution.status || '') !== 'running'
+      || String(execution.host_execution_mode || '') !== 'cooperative_interactive') return null;
+  const expectedResultPacket = String(execution.expected_result_packet || '');
+  const resultFile = resolveSafeProjectFile(root, expectedResultPacket);
+  if (!resultFile || !fs.existsSync(resultFile)) return null;
+  const stat = fs.lstatSync(resultFile);
+  if (!stat.isFile() || stat.isSymbolicLink()) return null;
+  if (!String(execution.stage_attempt_id || '')) return null;
+  const recordedAsAccepted = arrayOrEmpty(task.stage_attempt_history).some((attempt) => (
+    String((attempt || {}).stage_attempt_id || '') === String(execution.stage_attempt_id || '')
+      && String((attempt || {}).accepted_result_packet || '') === expectedResultPacket
+  ));
+  const packet = readJson(resultFile);
+  const baseFinding = {
+    status: 'invalid_current_stage_result_contract',
+    expected_result_packet: expectedResultPacket,
+    stage_attempt_id: String(execution.stage_attempt_id || ''),
+    recoverable: true,
+    stale_fields: [],
+  };
+  if (!packet || packet.__error) {
+    if (recordedAsAccepted) return null;
+    return { ...baseFinding, validation_status: 'blocked_result_packet_malformed' };
+  }
+  const expectedIdentity = {
+    workflow_id: String(task.workflow_id || ''),
+    workflow_type: 'long_write',
+    stage_id: String(execution.stage_id || ''),
+    stage_attempt_id: String(execution.stage_attempt_id || ''),
+    work_unit_id: String(execution.work_unit_id || ''),
+  };
+  const mismatchedFields = Object.entries(expectedIdentity)
+    .filter(([field, expected]) => Object.prototype.hasOwnProperty.call(packet, field)
+      && String(packet[field] || '') !== expected)
+    .map(([field]) => field);
+  if (mismatchedFields.length > 0) {
+    const trustedPriorAttempt = arrayOrEmpty(task.stage_attempt_history).some((attempt) => (
+      String((attempt || {}).stage_id || '') === String(execution.stage_id || '')
+        && String((attempt || {}).stage_attempt_id || '') === String(packet.stage_attempt_id || '')
+        && (!String(packet.work_unit_id || '') || String((attempt || {}).work_unit_id || '') === String(packet.work_unit_id || ''))
+        && String((attempt || {}).expected_result_packet || '') === expectedResultPacket
+        && [String((attempt || {}).accepted_result_packet || ''), String((attempt || {}).failed_result_packet || '')]
+          .includes(expectedResultPacket)
+    ));
+    if (trustedPriorAttempt
+        && !mismatchedFields.some(field => ['workflow_id', 'workflow_type', 'stage_id'].includes(field))) return null;
+    return {
+      ...baseFinding,
+      recoverable: false,
+      validation_status: 'blocked_invalid_stage_result_identity_mismatch',
+      mismatched_fields: mismatchedFields,
+      reason: `既有阶段回执明确属于其他执行身份，禁止自动归档：${mismatchedFields.join(', ')}`,
+    };
+  }
+  if (recordedAsAccepted) return null;
+  const missingIdentityFields = Object.keys(expectedIdentity)
+    .filter(field => !Object.prototype.hasOwnProperty.call(packet, field) || !String(packet[field] || ''));
+  if (missingIdentityFields.length > 0) {
+    return {
+      ...baseFinding,
+      validation_status: 'blocked_result_packet_identity_missing',
+      stale_fields: missingIdentityFields,
+    };
+  }
+  let contractFinding = validatePlanningRevisionPlan(root, task, packet);
+  const safePlanningBlocks = new Set([
+    'blocked_long_planning_revision_plan_missing',
+    'blocked_long_planning_revision_plan_invalid',
+    'blocked_long_planning_revision_target_mismatch',
+  ]);
+  if (!safePlanningBlocks.has(String(contractFinding.status || ''))) {
+    contractFinding = validateInteractiveLongMemoryReceipt(task, packet, root);
+  }
+  if (!contractFinding) {
+    const taskTemplate = templates()[String(task.workflow_type || '')];
+    const schemaFinding = validateResultAgainstTask(task, packet, root, resultFile, taskTemplate);
+    contractFinding = ['blocked_result_packet_invalid', 'blocked_result_packet_incomplete']
+      .includes(String((schemaFinding || {}).status || '')) ? schemaFinding : null;
+  }
+  const safeStatus = String((contractFinding || {}).status || '');
+  if (![...safePlanningBlocks,
+    'blocked_interactive_memory_receipt_invalid',
+    'blocked_interactive_memory_context_stale',
+    'blocked_result_packet_invalid',
+    'blocked_result_packet_incomplete',
+  ].includes(safeStatus)) return null;
+  return {
+    ...baseFinding,
+    validation_status: safeStatus,
+    stale_fields: arrayOrEmpty(((contractFinding.findings || [])[0] || {}).stale_fields),
+  };
 }
 
 function blockStageExecutionContract(root, task, targetStage, finding) {
@@ -5631,6 +8232,16 @@ function markShortMemoryMigrationRefreshed(task, context, targetStage) {
 function attachLongStageExecutionGuidance(root, task, targetStage) {
   if (String(task.workflow_type || '') !== 'long_write') return;
   const execution = task.stage_execution || {};
+  const target = execution.chapter_target;
+  if (target && validateLongChapterTargetV2(target, {
+    projectRoot: root,
+    workflowId: String(task.workflow_id || ''),
+  }).ok) {
+    if (targetStage === 'chapter_brief') execution.write_set = [target.contract_path];
+    else if (targetStage === 'prose') execution.write_set = [target.candidate_draft_path];
+    else if (targetStage === 'chapter_commit') execution.write_set = [target.draft_path];
+    else if (['brief_review', 'prose_acceptance'].includes(targetStage)) execution.write_set = [];
+  }
   execution.execution_workdir = '.';
   delete execution.context_read_command;
   let packet;
@@ -5646,22 +8257,48 @@ function attachLongStageExecutionGuidance(root, task, targetStage) {
     execution.resume_hint = '先补全人物设定并通过人物合同；不要继续生成章节 Brief 或正文。';
     return;
   }
+  if (targetStage === 'stage_detail_outline' && packet && packet.blocking) {
+    execution.context_packet_blocking = packet;
+    execution.context_packet_warning = packet.reason;
+    execution.resume_hint = '先恢复上一轮细纲审阅证据、卷纲权威和精确回炉目标；上下文包恢复前不得修改任何细纲。';
+    return;
+  }
   if (!packet || packet.status !== 'assembled') return;
   delete execution.character_contract_blocking;
+  delete execution.context_packet_blocking;
   execution.context_read_command = `node scripts/workflow-stage-context.js read-current --project-root . --workflow-id ${JSON.stringify(String(task.workflow_id || ''))}`;
   execution.stage_context_packet = {
     status: packet.status, packet_md: packet.packet_md, packet_json: packet.packet_json,
     chapter: packet.chapter, volume: packet.volume, estimated_tokens: packet.estimated_tokens,
     token_budget: packet.token_budget, source_files: packet.source_files, draft: packet.draft,
+    review_target_count: packet.review_target_count, revision_target_count: packet.revision_target_count,
   };
-  if (targetStage === 'prose_acceptance') {
-    execution.execution_command = `node scripts/long-chapter-machine-gate.js --project-root . --workflow-id ${JSON.stringify(String(task.workflow_id || ''))} --json`;
+  if (targetStage === 'chapter_commit') {
+    execution.host_execution_mode = 'deterministic_command';
+    execution.execution_boundary = normalizeExecutionBoundary({ host_execution_mode: 'deterministic_command' });
+    execution.execution_command = `node scripts/long-chapter-commit-finalize.js --project-root . --workflow-id ${JSON.stringify(String(task.workflow_id || ''))} --apply --json`;
+    execution.resume_hint = '直接运行 execution_command。脚本会核验正文与验收回执、恢复被拒绝的旧版直接写入，并通过内部章节事务提交正式稿；不得调用正文模型、手写 result packet 或直接覆盖正式正文。';
+  } else if (targetStage === 'prose_acceptance') {
+    execution.execution_command = `node scripts/long-chapter-machine-gate.js --project-root . --workflow-id ${JSON.stringify(String(task.workflow_id || ''))} --apply --json`;
     execution.quality_command = `node scripts/long-chapter-quality-gate.js --project-root . --workflow-id ${JSON.stringify(String(task.workflow_id || ''))} --apply --json`;
     execution.resume_hint = '先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径。再运行 execution_command；通过后完成八项故事判断并运行 quality_command。质量脚本会返回 pass/revise 两条单命令，按判断选择其一执行；不得把占位符交给 shell，不得逐个调用检查器或扩读全书。';
+  } else if (targetStage === 'stage_detail_outline') {
+    const stagedTargets = (Array.isArray(execution.planning_targets) ? execution.planning_targets : [])
+      .map((item) => String((item || {}).staged || ''))
+      .filter(Boolean);
+    execution.resume_hint = stagedTargets.length > 0
+      ? `先逐字运行 context_read_command 读取定向回炉包；只修改 ${stagedTargets.join('、')} 这 ${packet.revision_target_count} 个暂存细纲，落实全部 blocking 意见。完成后逐字运行 execution_command，由内部事务一次性提交对应正式细纲；不得直接修改正式细纲、卷纲、已通过细纲、正文或追踪状态。`
+      : `先逐字运行 context_read_command 读取定向回炉包；只修改 ${packet.revision_target_count} 个未通过细纲，落实全部 blocking 意见，不得修改卷纲、已通过细纲、正文或追踪状态。`;
   } else if (targetStage === 'prose') {
     execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；据此写当前第${packet.chapter}章候选稿，不得读取完整总纲、卷纲、细纲、任务日志或无关章节。`;
+  } else if (targetStage === 'detail_outline_review') {
+    const reviewTargetCount = Number(packet.review_target_count)
+      || (Array.isArray(execution.review_targets) ? execution.review_targets.length : 0);
+    execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；据此复核当前 ${reviewTargetCount} 个阶段细纲，仅在包内 gate.fail 指明缺口时读取对应 sourceFiles。`;
   } else {
-    execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；据此完成当前第${packet.chapter}章阶段，仅在包内 gate.fail 指明缺口时读取对应 sourceFiles。`;
+    const chapter = Number(packet.chapter) || 0;
+    const stageScope = chapter > 0 ? `当前第${chapter}章阶段` : '当前阶段';
+    execution.resume_hint = `先逐字运行 context_read_command 读取当前最小包，不得手抄 packet_md 路径；据此完成${stageScope}，仅在包内 gate.fail 指明缺口时读取对应 sourceFiles。`;
   }
 }
 
@@ -6469,7 +9106,31 @@ function suggestedWorkflowType(text) {
 }
 
 function internalizeLegacyAuthorStop(root, task, tpl) {
+  if (String((((task || {}).pending_action || {}).id) || '').startsWith('pa-short-brief-overload-')) {
+    return { changed: false, started: false };
+  }
+  const confirmedRevisionAction = confirmedShortFeedbackRevisionDraftAction(task);
+  if (confirmedRevisionAction) {
+    task.pending_action = null;
+    task.stage_execution = null;
+    task.state_version = Number(task.state_version || 0) + 1;
+    task.updated_at = new Date().toISOString();
+    const autoStart = maybeAutoStartInternalStage(root, task, tpl);
+    persistTaskSnapshot(root, task);
+    writeCurrentTaskMarkdownIfFocused(root, task);
+    appendTaskJournal(root, 'confirmed_feedback_revision_auto_recheck_started', {
+      workflow_id: task.workflow_id,
+      section_index: confirmedRevisionAction.section_index,
+      stage_id: String(((autoStart.stageExecution || {}).stage_id) || ''),
+    });
+    return { changed: true, started: autoStart.started, stageExecution: autoStart.stageExecution || null };
+  }
   if (activeShortFeedbackRevision(task)) return { changed: false, started: false };
+  // A failed long-form review deliberately returns to its producer with a
+  // fresh pending menu.  It is not a legacy author stop: consuming that menu
+  // here would call maybeAutoStartInternalStage(), which intentionally does
+  // not auto-start review repairs, and leave both authorities empty.
+  if (longformReviewReturnWaitingProducer(task)) return { changed: false, started: false };
   const stageDef = findStage(tpl, task.current_stage);
   const interaction = ((stageDef || {}).interaction_contract) || {};
   if (!stageDef
@@ -6524,11 +9185,12 @@ function nextCandidates(args) {
   if (resume) return resume;
   const tpl = registryCheck.template;
   const current = findStage(tpl, task.current_stage);
-  const status = shouldStopBeforeStage(task, current) ? 'requires_user_confirm' : 'ok';
+  const overloadChoice = String((((task || {}).pending_action || {}).id) || '').startsWith('pa-short-brief-overload-');
+  const status = overloadChoice ? 'workflow_choice_required' : shouldStopBeforeStage(task, current) ? 'requires_user_confirm' : 'ok';
   const feedbackProposalIntro = awaitingCurrentShortFeedbackProposal(task)
     ? String(((task.proposed_plan || {}).summary) || '')
     : '';
-  const visibleResponse = pendingActionVisibleResponse(task, root, feedbackProposalIntro);
+  const visibleResponse = pendingActionVisibleResponse(task, root, feedbackProposalIntro || longformReviewReturnIntro(task));
   return {
     schemaVersion: SCHEMA_VERSION,
     status,
@@ -6811,10 +9473,28 @@ function applyResult(args) {
   const pendingFeedbackBlock = shortFeedbackReconcileBlock(task, result);
   if (pendingFeedbackBlock) return pendingFeedbackBlock;
 
+  normalizeLongChapterBriefReviewBudget(root, task, result, resultFile);
+
+  const planningRevisionValidation = validatePlanningRevisionPlan(root, task, result);
+  if (String(planningRevisionValidation.status || '').startsWith('blocked_')) {
+    const response = {
+      schemaVersion: SCHEMA_VERSION,
+      ...planningRevisionValidation,
+      workflow_id: String(task.workflow_id || ''),
+      creative_assets_modified: false,
+    };
+    if (planningRevisionValidation.status === 'blocked_long_planning_revision_plan_missing') {
+      response.recovery_command = `node scripts/workflow-state-machine.js reconcile-runtime --project-root . --workflow-id ${shellQuote(task.workflow_id)} --session-id <current-session> --json`;
+    }
+    return response;
+  }
+
   const validation = validateResultAgainstTask(task, result, root, resultFile, registryCheck.template);
   if (validation.status !== 'ok') {
     return validation;
   }
+  const longChapterProseBinding = stampLongChapterProseBinding(root, task, result, resultFile);
+  if (longChapterProseBinding) return longChapterProseBinding;
   const characterContractValidation = validateWorkflowCharacterContract(root, task, result);
   if (characterContractValidation && characterContractValidation.status !== 'pass') {
     return characterContractValidation;
@@ -6835,6 +9515,11 @@ function applyResult(args) {
 
   const shortFullStoryReviewValidation = validateShortFullStoryReviewResult(root, task, result);
   if (shortFullStoryReviewValidation) return shortFullStoryReviewValidation;
+
+  const detailOutlineQuality = WORKFLOW_TRANSITIONS.validateDetailOutlineQualityResult(result, task, root);
+  if (detailOutlineQuality.status === 'review_failed') {
+    return finalizeDetailOutlineReviewFailure(root, task, result, registryCheck.template);
+  }
 
   const canonicalStageReceipt = acceptValidatedStageWrites(root, task, result, stageCanonicalWriteSet(result));
   if (String(canonicalStageReceipt.status || '').startsWith('blocked_')) {
@@ -6973,6 +9658,7 @@ function applyResult(args) {
     resultFile,
     taskTemplate: registryCheck.template,
     reviewPlanValidation,
+    planningRevisionValidation,
     memoryProjection,
     acceptanceContext: {
       canonicalStageReceipt,
@@ -6995,6 +9681,7 @@ function finalizeAcceptedResult({
   resultFile,
   taskTemplate,
   reviewPlanValidation,
+  planningRevisionValidation,
   memoryProjection,
   acceptanceContext = {},
 }) {
@@ -7058,7 +9745,78 @@ function finalizeAcceptedResult({
     }
   }
 
+  if (String(result.stage_id || '') === 'stage_detail_outline') {
+    const reviewTargets = detailOutlineTargetsFromResult(root, result);
+    if (reviewTargets.length > 0) task.detail_outline_review_targets = reviewTargets;
+  }
+  if (String(result.stage_id || '') === 'detail_outline_review' && detailOutlineReviewAccepted(result)) {
+    const reviewTargets = arrayOrEmpty((task.stage_execution || {}).review_targets);
+    const quality = (((result || {}).outputs || {}).detail_outline_quality) || {};
+    const acceptedTargets = reviewTargets.length > 0
+      ? reviewTargets
+      : String(quality.version || '') === 'detail_outline_quality_v2'
+        ? arrayOrEmpty(quality.identities)
+        : [quality];
+    const pathHashOnly = acceptedTargets
+      .map((item) => ({
+        outline_path: String((item || {}).outline_path || ''),
+        outline_sha256: String((item || {}).outline_sha256 || ''),
+      }))
+      .filter((item) => item.outline_path && /^[0-9a-f]{64}$/.test(item.outline_sha256));
+    const workflowId = String(task.workflow_id || '');
+    const enrichment = enrichAcceptedOutlineTargets(root, pathHashOnly, workflowId);
+    if (enrichment.errors.length) {
+      return blocked('blocked_detail_outline_review_schema_unresolved', enrichment.errors.map((err) => ({
+        field: 'detail_outline_review.targets',
+        status: err.status,
+        reason_code: err.reason_code,
+        outline_path: err.outline_path,
+      })));
+    }
+    if (!enrichment.targets.length) {
+      return blocked('blocked_detail_outline_review_no_accepted_targets', [{
+        field: 'detail_outline_review.targets',
+        message: 'detail outline review 没有提供任何 outline_path/outline_sha256 身份。',
+      }]);
+    }
+    const acceptedKeys = new Set(enrichment.targets.map(detailOutlineTargetKey));
+    const preservedConsumed = arrayOrEmpty(task.consumed_detail_outline_targets)
+      .filter((item) => acceptedKeys.has(detailOutlineTargetKey(item)));
+    const consumedKeys = new Set(preservedConsumed.map(detailOutlineTargetKey));
+    const previousActive = task.active_chapter_target;
+    task.accepted_detail_outline_targets = enrichment.targets;
+    task.consumed_detail_outline_targets = preservedConsumed;
+    task.active_chapter_target = previousActive
+      && acceptedKeys.has(detailOutlineTargetKey(previousActive))
+      && !consumedKeys.has(detailOutlineTargetKey(previousActive))
+      ? enrichment.targets.find((item) => detailOutlineTargetKey(item) === detailOutlineTargetKey(previousActive)) || null
+      : null;
+  }
+
+  if (String(result.stage_id || '') === 'milestone_review'
+      && String(result.next_stage_id || '') === 'detail_outline_review') {
+    const laterTargets = laterCanonicalOutlineTargets(root, task);
+    if (laterTargets.length === 0) {
+      return blocked('blocked_longform_scope_continuation_missing', '里程碑回执要求复核后续细纲，但当前卷没有可验证的后续细纲。');
+    }
+    task.detail_outline_review_targets = laterTargets;
+    task.scope = `后续阶段细纲复核（${laterTargets.length}项）`;
+  }
+
   const advanced = advanceTask(task, result, root, taskTemplate);
+  if (planningRevisionValidation && planningRevisionValidation.status === 'accepted') {
+    advanced.planning_revision = {
+      status: 'awaiting_author_confirmation',
+      plan: planningRevisionValidation.plan,
+      plan_digest: planningRevisionValidation.digest,
+      target_authority: planningRevisionValidation.authority,
+      source_result_packet: String(result.result_packet_path || ''),
+      recorded_at: new Date().toISOString(),
+    };
+  }
+  if (String(result.stage_id || '') === 'chapter_commit' && String(advanced.current_stage || '') !== 'chapter_commit') {
+    consumeActiveChapterTarget(advanced, result);
+  }
   if (!['not_applicable', 'no_canonical_stage_writes'].includes(String(canonicalStageReceipt.status || ''))) {
     advanced.canonical_stage_receipt = canonicalStageReceipt;
   }
@@ -7100,9 +9858,17 @@ function finalizeAcceptedResult({
   const feedbackProposalIntro = awaitingCurrentShortFeedbackProposal(advanced)
     ? String(((advanced.proposed_plan || {}).summary) || '')
     : '';
+  const planningRevisionIntro = advanced.planning_revision
+    && String(advanced.planning_revision.status || '') === 'awaiting_author_confirmation'
+    ? [
+      `审阅未通过：${String(((advanced.planning_revision.plan || {}).summary) || '')}`,
+      ...arrayOrEmpty(((advanced.planning_revision.plan || {}).requirements)).map((item, index) => `${index + 1}. ${item}`),
+      `拟修订文件：${arrayOrEmpty(((advanced.planning_revision.plan || {}).targets)).join('、')}`,
+    ].filter(Boolean).join('\n')
+    : '';
   const visibleResponse = continuation
     ? continuation.visible_response
-    : pendingActionVisibleResponse(advanced, root, feedbackProposalIntro || result.handoff_summary || '当前阶段已完成。');
+    : pendingActionVisibleResponse(advanced, root, planningRevisionIntro || feedbackProposalIntro || result.handoff_summary || '当前阶段已完成。');
   return {
     schemaVersion: SCHEMA_VERSION,
     status: autoStart.started ? 'stage_started' : 'advanced',
@@ -7115,6 +9881,209 @@ function finalizeAcceptedResult({
     visible_response: visibleResponse,
     interaction_contract: continuation ? 'continue_confirmed_internal_stage' : 'render_visible_response_text_verbatim',
   };
+}
+
+function finalizeDetailOutlineReviewFailure(root, task, result, taskTemplate) {
+  const failedResultPacket = String(result.result_packet_path || '');
+  const quality = (((result || {}).outputs || {}).detail_outline_quality) || {};
+  const identities = String(quality.version || '') === 'detail_outline_quality_v2'
+    ? arrayOrEmpty(quality.identities)
+    : [quality];
+  const failedTargets = identities
+    .filter((item) => ['revise', 'outline_underfilled'].includes(String((item || {}).status || '')))
+    .map((item) => String((item || {}).outline_path || ''))
+    .filter(Boolean);
+  const advanced = advanceTask(task, result, root, taskTemplate, { trustResult: false });
+  advanced.detail_outline_review_failure = {
+    status: 'recorded',
+    result_packet_path: failedResultPacket,
+    failed_targets: failedTargets,
+    outline_paths: failedTargets,
+  };
+  const autoStart = maybeAutoStartInternalStage(root, advanced, taskTemplate);
+  const revisionScopeConfigured = configureDetailOutlineRevisionExecutionScope(root, advanced);
+  if (revisionScopeConfigured) attachLongStageExecutionGuidance(root, advanced, advanced.current_stage);
+  if (autoStart.started) autoStart.stageExecution = advanced.stage_execution;
+  writeTaskState(root, advanced);
+  if (advanced.task_family_id) ensureTaskFamily(root, advanced, { write: true, projectLockHeld: true });
+  appendHistory(root, 'detail_outline_review_failed', {
+    workflow_id: advanced.workflow_id,
+    workflow_type: advanced.workflow_type,
+    stage_id: result.stage_id,
+    result_packet_path: failedResultPacket,
+  });
+  const continuation = autoStart.started ? runningStageResume(advanced, root) : null;
+  const visibleResponse = continuation
+    ? continuation.visible_response
+    : pendingActionVisibleResponse(advanced, root, result.handoff_summary || '阶段细纲审阅未通过，已返回当前细纲修订。');
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: autoStart.started ? 'stage_started' : 'advanced',
+    task: advanced,
+    current_stage: advanced.current_stage,
+    remaining_stages: advanced.machine.remaining_stages,
+    stage_execution: autoStart.stageExecution || null,
+    pending_action: continuation ? null : refreshedVisibleMenu(advanced, root),
+    next_candidates: continuation ? [] : (visibleResponse.options || []),
+    visible_response: visibleResponse && typeof visibleResponse === 'object'
+      ? { ...visibleResponse, failed_targets: failedTargets }
+      : visibleResponse,
+    interaction_contract: continuation ? 'continue_confirmed_internal_stage' : 'render_visible_response_text_verbatim',
+  };
+}
+
+function configureDetailOutlineRevisionExecutionScope(root, task) {
+  const failure = (task || {}).detail_outline_review_failure || {};
+  const execution = (task || {}).stage_execution || null;
+  const failedTargets = normalizedUniquePaths(failure.failed_targets || []);
+  if (String((task || {}).workflow_type || '') !== 'long_write'
+      || String((task || {}).current_stage || '') !== 'stage_detail_outline'
+      || !execution
+      || String(execution.stage_id || '') !== 'stage_detail_outline'
+      || String(execution.status || '') !== 'running'
+      || failedTargets.length === 0) return false;
+  const expectedResultPacket = String(execution.expected_result_packet || '');
+  // Strict-policy longform planning revisions never expose the canonical
+  // outline targets as direct host writes. Instead each failed target is
+  // paired with one exact staged candidate under 追踪/workflow/staging, the
+  // host edits only the staged candidates, and a focused finalizer commits
+  // the frozen canonical targets through one accepted chapter-commit
+  // transaction. This helper owns the single staged/canonical pair contract
+  // shared by fresh review-failure returns and runtime reconciliation.
+  const expectedStaged = failedTargets.map((target, index) => longPlanningStagedPath(task, execution, index, target));
+  const expectedPairs = failedTargets.map((target, index) => ({ canonical: target, staged: expectedStaged[index] }));
+  const alreadyScoped = Array.isArray(execution.planning_targets)
+    && execution.planning_targets.length === expectedPairs.length
+    && expectedPairs.every((pair, index) => {
+      const actual = execution.planning_targets[index] || {};
+      return String(actual.canonical || '') === pair.canonical && String(actual.staged || '') === pair.staged;
+    })
+    && sameContractValue(execution.canonical_write_set || [], failedTargets)
+    && sameContractValue(execution.write_set || [], expectedStaged)
+    && sameContractValue(execution.revision_targets || [], failedTargets)
+    && String(execution.planning_stage_attempt_id || '') === String(execution.stage_attempt_id || '')
+    && String(execution.execution_command || '').includes('long-planning-stage-finalize.js')
+    && validStageWriteSnapshot(execution.write_snapshot, expectedStaged);
+  if (alreadyScoped) return false;
+  for (const pair of expectedPairs) seedLongPlanningCandidate(root, pair.staged, pair.canonical);
+  execution.planning_targets = expectedPairs;
+  execution.planning_stage_attempt_id = String(execution.stage_attempt_id || '');
+  execution.canonical_write_set = failedTargets;
+  execution.write_set = expectedStaged;
+  execution.revision_targets = failedTargets;
+  execution.execution_command = `node scripts/long-planning-stage-finalize.js --project-root . --workflow-id ${shellQuote(task.workflow_id)} --apply --json`;
+  execution.write_snapshot = captureStageWriteSnapshot(root, task, expectedResultPacket);
+  const baseline = captureCanonicalBaseline(root, task);
+  if (baseline.declared_write_set.length > 0) task.canonical_write_baseline = baseline;
+  else delete task.canonical_write_baseline;
+  return true;
+}
+
+function configureConfirmedLongPlanningRevision(root, task, targetStage, selectedAt) {
+  const reviewStage = planningReviewForProducer(targetStage);
+  const revision = (task || {}).planning_revision || {};
+  const plan = revision.plan && typeof revision.plan === 'object' ? revision.plan : null;
+  const execution = (task || {}).stage_execution || null;
+  const planningReturn = ['master_outline', 'volume_outline'].includes(String(targetStage || ''))
+    && (String((((task || {}).machine || {}).last_transition) || '') === 'review_failed_return_to_asset'
+      || Boolean((task || {}).planning_revision));
+  if (!planningReturn) return { status: 'not_applicable' };
+  if (!reviewStage
+      || String(revision.status || '') !== 'awaiting_author_confirmation'
+      || !plan
+      || String(plan.producer_stage || '') !== String(targetStage || '')
+      || !execution
+      || String(execution.stage_id || '') !== String(targetStage || '')) {
+    return failClosedPlanningRevision(execution, '当前规划回炉缺少作者已确认的精确修订方案。');
+  }
+  const actualDigest = longPlanningRevisionDigest(plan);
+  if (!actualDigest || actualDigest !== String(revision.plan_digest || '')) {
+    return failClosedPlanningRevision(execution, '已展示的规划修订方案与当前冻结摘要不一致，不能启动写入。');
+  }
+  const authority = authoritativePlanningTargets(root, task, targetStage);
+  const targets = arrayOrEmpty(plan.targets).map((item) => String(item || ''));
+  if (authority.status !== 'ready' || !sameContractValue(authority.targets, targets)) {
+    return failClosedPlanningRevision(execution, '已展示的规划修订目标不再匹配可信阶段目标，不能启动写入。');
+  }
+  const staged = targets.map((target, index) => longPlanningStagedPath(task, execution, index, target));
+  for (let index = 0; index < targets.length; index += 1) seedLongPlanningCandidate(root, staged[index], targets[index]);
+  execution.planning_targets = targets.map((canonical, index) => ({ canonical, staged: staged[index] }));
+  execution.planning_stage_attempt_id = String(execution.stage_attempt_id || '');
+  execution.planning_revision_digest = actualDigest;
+  execution.canonical_write_set = targets;
+  execution.write_set = staged;
+  execution.revision_targets = targets;
+  execution.success_transition = { action: 'advance', target: reviewStage };
+  execution.execution_command = `node scripts/long-planning-stage-finalize.js --project-root . --workflow-id ${shellQuote(task.workflow_id)} --apply --json`;
+  execution.resume_hint = `只修改暂存规划文件 ${staged.join('、')}，逐条落实已确认方案。完成后逐字运行 execution_command，由内部事务提交正式规划并生成阶段结果；不得直接修改正式大纲、手写 result packet 或自行决定 lifecycle transition。`;
+  revision.status = 'accepted_for_execution';
+  revision.accepted_at = String(selectedAt || new Date().toISOString());
+  revision.accepted_plan_digest = actualDigest;
+  task.planning_revision = revision;
+  return { status: 'configured' };
+}
+
+function failClosedPlanningRevision(execution, reason) {
+  if (execution && typeof execution === 'object') {
+    execution.write_set = [];
+    execution.canonical_write_set = [];
+    execution.revision_targets = [];
+    execution.planning_targets = [];
+    delete execution.execution_command;
+    execution.context_packet_warning = reason;
+  }
+  return { status: 'blocked', reason };
+}
+
+// Longform planning revisions expose two distinct path sets: the exact staged
+// candidates the host edits (write_set / snapshot authorized_write_set) and
+// the exact frozen canonical targets the finalizer commits through the
+// transaction store (canonical_write_set). Snapshot capture and write-set
+// validation treat both sets as authorized longform paths, but file-diff
+// accounting excludes only the exact staged candidate paths so the host's
+// intermediate candidate edits are never mistaken for canonical creative
+// writes. The staging root glob itself is never whitelisted.
+function longStageAuthorizedWriteSet(task) {
+  const execution = (task || {}).stage_execution || {};
+  return normalizedUniquePaths([
+    ...(execution.write_set || []),
+    ...(execution.canonical_write_set || []),
+  ]);
+}
+
+function longPlanningStagedPaths(task) {
+  const execution = (task || {}).stage_execution || {};
+  if (!Array.isArray(execution.planning_targets)) return [];
+  return execution.planning_targets
+    .map((pair) => normalizeWriteSetPath((pair || {}).staged))
+    .filter(Boolean);
+}
+
+function longPlanningStagedPath(task, execution, index, canonical) {
+  const attempt = safeLongPathSegment(String((execution || {}).stage_attempt_id || 'attempt'));
+  const workspaceId = crypto.createHash('sha256')
+    .update(`${String((task || {}).workflow_id || '')}\0${String((execution || {}).stage_id || 'long-planning')}\0${attempt}`)
+    .digest('hex')
+    .slice(0, 12);
+  const basename = path.posix.basename(String(canonical || ''));
+  return `追踪/workflow/staging/${workspaceId}/${String(index + 1).padStart(3, '0')}-${basename}`;
+}
+
+function seedLongPlanningCandidate(root, staged, canonical) {
+  const stagedFile = path.join(root, staged);
+  if (fs.existsSync(stagedFile)) {
+    if (!fs.statSync(stagedFile).isFile()) throw new Error(`long planning staged candidate is not a regular file: ${staged}`);
+    return;
+  }
+  const formalFile = path.join(root, canonical);
+  const seed = fs.existsSync(formalFile) && fs.statSync(formalFile).isFile()
+    ? fs.readFileSync(formalFile, 'utf8')
+    : '';
+  atomicWriteText(stagedFile, seed);
+}
+
+function safeLongPathSegment(value) {
+  return String(value || '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'attempt-pending';
 }
 
 function validateShortSectionAcceptanceResult(projectRoot, task, result) {
@@ -7454,15 +10423,11 @@ function projectShortQualityRevision(projectRoot, task, result, options = {}) {
   if (!findings.length) return { status: 'not_applicable' };
   const sectionIndex = Number(declared.section_index || result.current_section_index || 0);
   const scopeSnapshot = String(declared.scope_snapshot || (Number.isInteger(sectionIndex) && sectionIndex > 0 ? `第${sectionIndex}节` : task.scope || '当前节'));
-  const findingText = findings.map((finding) => {
-    const code = String((finding || {}).code || 'quality_revision');
-    const message = String((finding || {}).message || '需要修订');
-    return `${code}：${message}`;
-  }).join('；');
+  const findingText = renderQualityFindings(findings);
   const text = [
     `${scopeSnapshot}质量门要求回炉。`,
     String(declared.summary || result.handoff_summary || '').trim(),
-    `未通过项：${findingText}`,
+    `需要处理：${findingText}`,
   ].filter(Boolean).join('\n');
   return enqueueShortFeedback(projectRoot, task, text, {
     classification: 'current_artifact_feedback',
@@ -7474,6 +10439,43 @@ function projectShortQualityRevision(projectRoot, task, result, options = {}) {
     previousStage: stageId,
     sourceKind: stageId,
   });
+}
+
+function normalizePendingShortQualityFeedback(task) {
+  const pending = task.pending_feedback && typeof task.pending_feedback === 'object' ? task.pending_feedback : null;
+  if (!pending) return false;
+  const qualityItems = (Array.isArray(pending.items) ? pending.items : [])
+    .filter(item => ['quality_gate', 'story_value_gate'].includes(String((item || {}).source_kind || '')));
+  if (!qualityItems.length) return false;
+  let changed = false;
+  const normalizedPending = normalizeLegacyQualityFeedbackText(pending.text);
+  if (normalizedPending && normalizedPending !== String(pending.text || '')) {
+    pending.text = normalizedPending;
+    changed = true;
+  }
+  for (const item of qualityItems) {
+    const normalized = normalizeLegacyQualityFeedbackText(item.text);
+    if (normalized && normalized !== String(item.text || '')) {
+      item.text = normalized;
+      changed = true;
+    }
+  }
+  const proposal = task.proposed_plan && typeof task.proposed_plan === 'object' ? task.proposed_plan : null;
+  if (proposal && String(proposal.feedback_id || '') === String(pending.feedback_id || '')) {
+    const summary = normalizeLegacyQualityFeedbackText(proposal.summary);
+    if (summary && summary !== String(proposal.summary || '')) {
+      proposal.summary = summary;
+      changed = true;
+    }
+    for (const requirement of Array.isArray(proposal.requirements) ? proposal.requirements : []) {
+      const normalized = normalizeLegacyQualityFeedbackText(requirement.text);
+      if (normalized && normalized !== String(requirement.text || '')) {
+        requirement.text = normalized;
+        changed = true;
+      }
+    }
+  }
+  return changed;
 }
 
 function archiveAcceptedResultPacket(projectRoot, task, result) {
@@ -7530,7 +10532,26 @@ function maybeAutoStartInternalStage(root, task, taskTemplate) {
   if (!task || !['running', 'paused_after_step'].includes(String(task.status || ''))) {
     return { started: false, stageExecution: null };
   }
+  const planningReviewReturn = longformReviewReturnWaitingProducer(task);
+  if (planningReviewReturn) {
+    preservePreviousStageAttempt(task, '', new Date().toISOString());
+    delete task.stage_execution;
+    return { started: false, stageExecution: null };
+  }
   const tpl = taskTemplate || (resolvedTemplateForTask(task).template);
+  const confirmedRevisionAction = confirmedShortFeedbackRevisionDraftAction(task);
+  if (confirmedRevisionAction) {
+    const selectedAt = new Date().toISOString();
+    task.pending_action = null;
+    return maybeStartStageExecution(root, task, {
+      action_id: 'auto_recheck_confirmed_feedback_revision',
+      selected_number: 0,
+      target_stage: 'section_machine_gate',
+      target_scope: `第${confirmedRevisionAction.section_index}节`,
+      risk_level: 'medium',
+      execution_contract: { completion_boundary: 'section_reaccepted' },
+    }, selectedAt, null);
+  }
   const stageDef = findStage(tpl, task.current_stage);
   if (!stageDef || stageDef.requires_user_confirm) return { started: false, stageExecution: null };
   const selectedAt = new Date().toISOString();
@@ -7542,6 +10563,39 @@ function maybeAutoStartInternalStage(root, task, taskTemplate) {
     risk_level: stageDef.risk_level || 'medium',
     execution_contract: { completion_boundary: 'stage_completed' },
   }, selectedAt, null);
+}
+
+function longformReviewReturnWaitingProducer(task) {
+  return String((task || {}).workflow_type || '') === 'long_write'
+    && ['master_outline', 'volume_outline', 'stage_detail_outline', 'chapter_brief'].includes(String((task || {}).current_stage || ''))
+    && String((((task || {}).machine || {}).last_transition) || '') === 'review_failed_return_to_asset';
+}
+
+function longformReviewReturnIntro(task) {
+  if (!longformReviewReturnWaitingProducer(task)) return '';
+  const messages = arrayOrEmpty((((task || {}).machine || {}).last_blocking_findings))
+    .map((finding) => String((finding || {}).message || finding || '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return messages.length > 0
+    ? `上一轮审阅未通过：${messages.join('；')}`
+    : '上一轮审阅未通过，已返回当前规划资产修订。';
+}
+
+function confirmedShortFeedbackRevisionDraftAction(task) {
+  if (!task || !['draft_first_section', 'draft_section', 'draft_next_section'].includes(String(task.current_stage || ''))) return null;
+  const queue = activeShortFeedbackRevision(task);
+  if (!queue) return null;
+  const sectionIndex = Number(queue.current_section_index || 0);
+  const item = (Array.isArray(queue.items) ? queue.items : [])
+    .find(candidate => Number((candidate || {}).section_index || 0) === sectionIndex);
+  if (!item || String(item.prose_status || '') !== 'pending_recheck') return null;
+  const acceptedPlan = task.accepted_plan && typeof task.accepted_plan === 'object' ? task.accepted_plan : {};
+  if (!String(acceptedPlan.plan_id || '')
+      || String(acceptedPlan.proposal_id || '') !== String(((task.proposed_plan || {}).proposal_id) || '')
+      || String(acceptedPlan.feedback_id || '') !== String(queue.feedback_id || acceptedPlan.feedback_id || '')
+      || String(acceptedPlan.projection_status || '') !== 'completed') return null;
+  return { section_index: sectionIndex, queue_item: item };
 }
 
 function blockTerminalCanonicalAudit(task, audit, result, resultFile, phase = 'terminal') {
@@ -7584,6 +10638,207 @@ function stageCanonicalWriteSet(result) {
     ...arrayOrEmpty((result || {}).created_files),
   ];
   return Array.from(new Set(candidates.map(item => String(item || '').trim()).filter(Boolean)));
+}
+
+function detailOutlineTargetsFromResult(root, result) {
+  return stageCanonicalWriteSet(result)
+    .map((item) => normalizeWriteSetPath(item))
+    .filter((item) => item && /(^|\/)细纲[^/]*\.md$/i.test(item))
+    .map((outlinePath) => {
+      const file = resolveSafeProjectFile(root, outlinePath);
+      return file && fs.existsSync(file)
+        ? { outline_path: outlinePath, outline_sha256: normalizeContentHash(hashFile(file)) }
+        : null;
+    })
+    .filter(Boolean);
+}
+
+function detailOutlineTargetKey(target) {
+  if (!target || typeof target !== 'object') return '';
+  const targetId = String(target.target_id || '');
+  if (targetId) return `target_id:${targetId}`;
+  const outlinePath = String(target.outline_path || '');
+  const outlineSha256 = String(target.outline_sha256 || '');
+  return outlinePath && outlineSha256 ? `${outlinePath}\n${outlineSha256}` : '';
+}
+
+function pendingDetailOutlineTargets(task) {
+  const consumed = new Set(arrayOrEmpty((task || {}).consumed_detail_outline_targets)
+    .map(detailOutlineTargetKey)
+    .filter(Boolean));
+  return arrayOrEmpty((task || {}).accepted_detail_outline_targets)
+    .filter((target) => {
+      const key = detailOutlineTargetKey(target);
+      return key && !consumed.has(key);
+    });
+}
+
+function ensureActiveChapterTarget(task) {
+  const active = (task || {}).active_chapter_target;
+  const activeKey = detailOutlineTargetKey(active);
+  const pending = pendingDetailOutlineTargets(task);
+  if (activeKey && pending.some((target) => detailOutlineTargetKey(target) === activeKey)) return active;
+  const next = pending[0] || null;
+  task.active_chapter_target = next ? { ...next } : null;
+  return task.active_chapter_target;
+}
+
+function synchronizeLongChapterScope(task, target = null) {
+  if (String((task || {}).workflow_type || '') !== 'long_write') return '';
+  const chapterTarget = target || ((task.stage_execution || {}).chapter_target) || task.active_chapter_target;
+  const scope = formatLongChapterDisplay(chapterTarget);
+  if (!scope) return '';
+  task.scope = scope;
+  if (task.lifecycle && typeof task.lifecycle === 'object') task.lifecycle.scope = scope;
+  if (task.unit_lifecycle && typeof task.unit_lifecycle === 'object') task.unit_lifecycle.current_scope = scope;
+  const execution = task.stage_execution;
+  if (execution && typeof execution === 'object') {
+    execution.work_unit_scope = scope;
+    if (execution.stage_id) execution.work_unit_id = stageWorkUnitId(task, execution.stage_id, scope);
+    if (execution.confirmation_context && typeof execution.confirmation_context === 'object') {
+      execution.confirmation_context.target_scope = scope;
+    }
+  }
+  return scope;
+}
+
+function consumeActiveChapterTarget(task, result) {
+  const active = ensureActiveChapterTarget(task);
+  const key = detailOutlineTargetKey(active);
+  if (!key) return;
+  // For V2 active targets, the echoed chapter_target.target_id must match
+  // the active target_id exactly. Without this check, a host could finish a
+  // commit whose echoed target differs from the frozen target and still
+  // advance the chapter loop.
+  if (active && active.target_id) {
+    const echoed = (((result || {}).chapter_target || {}).target_id) || '';
+    if (String(echoed) !== String(active.target_id)) return;
+  }
+  const consumed = arrayOrEmpty(task.consumed_detail_outline_targets).slice();
+  if (!consumed.some((target) => detailOutlineTargetKey(target) === key)) {
+    consumed.push({
+      ...active,
+      consumed_at: new Date().toISOString(),
+      accepted_commit_id: String((((result || {}).chapter_commit || {}).accepted_commit_id) || ''),
+      result_packet_path: String((result || {}).result_packet_path || ''),
+    });
+  }
+  task.consumed_detail_outline_targets = consumed;
+  task.active_chapter_target = null;
+}
+
+// Echo gate for the five long chapter stages. Runs BEFORE any
+// accepted-result history, writes, or stage advance so a tampered/missing
+// echoed target blocks without mutating task state. The frozen execution
+// target and the active task target must both equal the echoed
+// result.chapter_target exactly (V2 full equality on stable fields).
+function validateLongChapterEcho(projectRoot, task, result) {
+  if (String(task.workflow_type || '') !== 'long_write') return null;
+  if (!LONG_CHAPTER_STAGES.has(String(task.current_stage || ''))) return null;
+
+  const frozen = ((task.stage_execution || {}).chapter_target) || null;
+  const active = task.active_chapter_target || null;
+  const echoed = result.chapter_target;
+
+  if (!echoed || typeof echoed !== 'object') {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'blocked_chapter_target_echo_missing',
+      findings: [{
+        field: 'chapter_target',
+        message: `长篇阶段 ${task.current_stage} 的 result packet 必须回显完整 chapter_target，禁止只回显字段子集。`,
+        expected: 'long_chapter_target_v2',
+        actual: echoed ? Object.keys(echoed).join(',') : 'missing',
+      }],
+    };
+  }
+
+  const targetValidationOptions = { projectRoot, workflowId: String(task.workflow_id || '') };
+  const echoedValidation = validateLongChapterTargetV2(echoed, targetValidationOptions);
+  if (!echoedValidation.ok) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'blocked_chapter_target_echo_mismatch',
+      findings: echoedValidation.missing_fields.map((field) => ({
+        field: `chapter_target.${field}`,
+        message: `echoed chapter_target 缺少或格式错误：${field}`,
+      })),
+    };
+  }
+
+  if (frozen) {
+    const frozenValidation = validateLongChapterTargetV2(frozen, targetValidationOptions);
+    if (!frozenValidation.ok) {
+      return {
+        schemaVersion: SCHEMA_VERSION,
+        status: 'blocked_chapter_target_echo_mismatch',
+        findings: [{
+          field: 'stage_execution.chapter_target',
+          message: 'frozen execution chapter_target 不完整，禁止继续 apply。',
+          missing_fields: frozenValidation.missing_fields,
+        }],
+      };
+    }
+    const check = assertTargetsEqual(frozen, echoed);
+    if (!check.ok) {
+      return {
+        schemaVersion: SCHEMA_VERSION,
+        status: check.error.status,
+        diff: check.error.diff,
+        findings: [{
+          field: 'chapter_target',
+          message: `frozen 与 echoed chapter_target 不一致：${check.error.diff.join(', ')}`,
+        }],
+      };
+    }
+  } else {
+    // No frozen execution target — block, do not synthesize.
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'blocked_chapter_target_frozen_missing',
+      findings: [{
+        field: 'stage_execution.chapter_target',
+        message: '阶段开始前必须在 stage_execution.chapter_target 冻结完整 V2 目标，禁止从 scope/active 临时合成。',
+      }],
+    };
+  }
+
+  if (!active) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'blocked_chapter_target_active_missing',
+      findings: [{
+        field: 'active_chapter_target',
+        message: '长篇章节阶段缺少 durable active_chapter_target，禁止仅凭 execution/result 继续。',
+      }],
+    };
+  }
+  const activeValidation = validateLongChapterTargetV2(active, targetValidationOptions);
+  if (!activeValidation.ok) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'blocked_chapter_target_echo_mismatch',
+      findings: [{
+        field: 'active_chapter_target',
+        message: 'active chapter_target 不完整或已与 schema/outline 漂移。',
+        missing_fields: activeValidation.missing_fields,
+      }],
+    };
+  }
+  const check = assertTargetsEqual(active, echoed);
+  if (!check.ok) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: check.error.status,
+      diff: check.error.diff,
+      findings: [{
+        field: 'chapter_target',
+        message: `active 与 echoed chapter_target 不一致：${check.error.diff.join(', ')}`,
+      }],
+    };
+  }
+
+  return null;
 }
 
 function arrayOrEmpty(value) {
@@ -7647,6 +10902,44 @@ function normalizeContentHash(value) {
   return String(value || '').replace(/^sha256:/, '');
 }
 
+function normalizeLongChapterBriefReviewBudget(root, task, result, resultFile) {
+  if (String((task || {}).workflow_type || '') !== 'long_write'
+      || String((task || {}).current_stage || '') !== 'brief_review'
+      || String((result || {}).step_status || '') !== 'completed'
+      || !LONG_WRITE_ACCEPTED_REVIEW_RESULTS.has(String((result || {}).verification_result || '').trim().toLowerCase())) return null;
+  const target = ((task || {}).stage_execution || {}).chapter_target || task.active_chapter_target;
+  const briefFile = resolveInsideProject(root, String((target || {}).contract_path || ''));
+  if (!briefFile || !fs.existsSync(briefFile) || !fs.statSync(briefFile).isFile()) return null;
+  const quality = inspectLongChapterBriefBudget(fs.readFileSync(briefFile, 'utf8'));
+  if (quality.status !== 'revise') return quality;
+  const findings = Array.isArray(quality.findings) ? quality.findings : [];
+  result.step_status = 'blocked';
+  result.verification_result = 'rejected';
+  result.review_decision = 'rejected';
+  result.blocking_findings = [
+    ...(Array.isArray(result.blocking_findings) ? result.blocking_findings : []),
+    ...findings,
+  ];
+  result.checkpoint_state = {
+    ...((result.checkpoint_state && typeof result.checkpoint_state === 'object') ? result.checkpoint_state : {}),
+    current_stage: 'brief_review',
+    completed_range: '',
+    remaining_range: '修正当前章 Brief 的预算或紧凑度问题后重新审阅',
+    resume_from: 'chapter_brief',
+  };
+  result.next_stage_id = 'chapter_brief';
+  result.next_recommendation = findings.map((item) => item.message).filter(Boolean).join('；');
+  result.handoff_summary = result.next_recommendation;
+  result.asset_revision = { status: 'revision_required', asset_id: String((((task || {}).stage_execution || {}).asset_target || {}).id || 'current-chapter') };
+  result.lifecycle_transition_request = { action: 'return', target: 'chapter_brief' };
+  result.changed_files = [];
+  result.result_write_set = [];
+  result.memory_updates = [];
+  result.memory_update_omission_reason = 'Brief 预算或紧凑度存在确定性问题，拒绝投影本轮审查建议。';
+  atomicWriteJson(resultFile, result);
+  return quality;
+}
+
 function validateResultAgainstTask(task, result, projectRoot, resultFile, taskTemplate) {
   const findings = [];
   for (const field of ['workflow_id', 'workflow_type', 'stage_id', 'step_id', 'step_status']) {
@@ -7678,6 +10971,16 @@ function validateResultAgainstTask(task, result, projectRoot, resultFile, taskTe
     });
   }
   if (findings.length > 0) return { schemaVersion: SCHEMA_VERSION, status: 'blocked_result_packet_invalid', findings };
+  const detailOutlineTargetValidation = validateDetailOutlineTargetEnrichment(projectRoot, task, result);
+  if (detailOutlineTargetValidation) return detailOutlineTargetValidation;
+  const detailOutlineQualityValidation = WORKFLOW_TRANSITIONS.validateDetailOutlineQualityResult(result, task, projectRoot);
+  if (detailOutlineQualityValidation.status === 'identity_missing'
+      || detailOutlineQualityValidation.status === 'invalid') {
+    return blocked(`blocked_${detailOutlineQualityValidation.code}`, [{
+      field: 'outputs.detail_outline_quality',
+      message: '阶段细纲质量回执未完整绑定当前目标清单，不能接纳该结果。',
+    }]);
+  }
   if (Number(task.result_contract_version || 1) >= 2) {
     const requiredV2 = RESULT_CONTRACT_V2_FIELDS;
     const missingV2 = requiredV2.filter((field) => result[field] === undefined || result[field] === null);
@@ -7692,13 +10995,15 @@ function validateResultAgainstTask(task, result, projectRoot, resultFile, taskTe
     if (executionValidation) return executionValidation;
     const unitBindingValidation = validateResultPacketUnitBinding(task, result);
     if (unitBindingValidation) return { schemaVersion: SCHEMA_VERSION, ...unitBindingValidation };
+    const managedRunnerContractValidation = validateManagedRunnerContract(task, result, projectRoot);
+    if (managedRunnerContractValidation) return managedRunnerContractValidation;
     const managedMemoryValidation = validateManagedRunnerMemoryReceipt(task, result, projectRoot);
     if (managedMemoryValidation) return managedMemoryValidation;
     const interactiveLongMemoryValidation = validateInteractiveLongMemoryReceipt(task, result, projectRoot);
     if (interactiveLongMemoryValidation) return interactiveLongMemoryValidation;
     const shortMemoryValidation = validateShortResultMemoryReceipt(task, result, projectRoot);
     if (shortMemoryValidation) return shortMemoryValidation;
-    const longformContractValidation = validateLongformResultContract(task, result);
+    const longformContractValidation = validateLongformResultContract(task, result, projectRoot);
     if (longformContractValidation) return longformContractValidation;
     if (task.workflow_type === 'long_write') {
       const missingLongform = LONG_WRITE_RESULT_FIELDS.filter((field) => result[field] === undefined || result[field] === null);
@@ -7712,6 +11017,10 @@ function validateResultAgainstTask(task, result, projectRoot, resultFile, taskTe
     }
     const longformWriteSetValidation = validateLongformWriteSet(task, result, projectRoot);
     if (longformWriteSetValidation) return longformWriteSetValidation;
+    const longChapterEchoValidation = validateLongChapterEcho(projectRoot, task, result);
+    if (longChapterEchoValidation) return longChapterEchoValidation;
+    const longChapterLengthValidation = validateLongChapterLengthAcceptance(projectRoot, task, result);
+    if (longChapterLengthValidation) return longChapterLengthValidation;
   }
   const role = currentUnitRole((tpl && tpl.unit_lifecycle_contract) || unitLifecycle('workflow_batch', {}), task.current_stage);
   const reviewValidation = validateLongformReviewAcceptance(task, result, stageDef);
@@ -7733,6 +11042,184 @@ function validateResultAgainstTask(task, result, projectRoot, resultFile, taskTe
   const evidenceScanValidation = validateEvidenceScanReceipt(task, result, projectRoot);
   if (evidenceScanValidation) return evidenceScanValidation;
   return { schemaVersion: SCHEMA_VERSION, status: 'ok', findings: [] };
+}
+
+function validateDetailOutlineTargetEnrichment(projectRoot, task, result) {
+  if (String(task.workflow_type || '') !== 'long_write'
+      || String(task.current_stage || '') !== 'detail_outline_review'
+      || String(result.step_status || '') !== 'completed'
+      || !detailOutlineReviewAccepted(result)) return null;
+  const quality = (((result || {}).outputs || {}).detail_outline_quality) || {};
+  const reviewTargets = arrayOrEmpty((task.stage_execution || {}).review_targets);
+  const identities = reviewTargets.length > 0
+    ? reviewTargets
+    : String(quality.version || '') === 'detail_outline_quality_v2'
+      ? arrayOrEmpty(quality.identities)
+      : [quality];
+  const enrichment = enrichAcceptedOutlineTargets(projectRoot, identities.map((item) => ({
+    outline_path: String((item || {}).outline_path || ''),
+    outline_sha256: String((item || {}).outline_sha256 || ''),
+  })), String(task.workflow_id || ''));
+  if (!enrichment.errors.length && enrichment.targets.length === identities.length && enrichment.targets.length > 0) return null;
+  return blocked('blocked_detail_outline_review_schema_unresolved', [
+    ...enrichment.errors.map((item) => ({
+      field: 'detail_outline_review.targets',
+      status: item.status,
+      reason_code: item.reason_code,
+      outline_path: item.outline_path,
+    })),
+    ...(enrichment.targets.length === identities.length && enrichment.targets.length > 0 ? [] : [{
+      field: 'detail_outline_review.targets',
+      message: '细纲审阅目标未能完整映射为 V2 chapter targets。',
+      expected_count: identities.length,
+      actual_count: enrichment.targets.length,
+    }]),
+  ]);
+}
+
+function detailOutlineReviewAccepted(result) {
+  const quality = (((result || {}).outputs || {}).detail_outline_quality) || {};
+  return ['pass', 'pass_with_advisory'].includes(String(quality.status || ''));
+}
+
+function validateManagedRunnerContract(task, result, projectRoot) {
+  if (String(result.step_status || '') !== 'completed') return null;
+  const execution = task.stage_execution && typeof task.stage_execution === 'object'
+    ? task.stage_execution
+    : {};
+  const guard = task.runtime_guard || {};
+  const activeLease = guard.runner_lease || {};
+  const lastAttempt = guard.last_runner_attempt || {};
+  const relevant = (binding) => String((binding || {}).stage_id || '') === String(result.stage_id || '')
+    && String((binding || {}).expected_result_packet || '') === String(execution.expected_result_packet || '');
+  const activeLeasePresent = Object.keys(activeLease).length > 0;
+  const durableBinding = activeLeasePresent ? activeLease : relevant(lastAttempt) ? lastAttempt : null;
+  const boundAttempt = Boolean(durableBinding)
+    && relevant(durableBinding)
+    && Boolean(String(durableBinding.run_id || ''))
+    && Boolean(String(durableBinding.stage_attempt_id || ''))
+    && String(durableBinding.stage_attempt_id || '') === String(execution.stage_attempt_id || '')
+    && Boolean(String(durableBinding.work_unit_id || ''))
+    && String(durableBinding.work_unit_id || '') === String(execution.work_unit_id || '');
+  const declaredRunnerPath = String(result.runner_packet_path || '');
+  if (durableBinding && !boundAttempt) {
+    return blocked('blocked_managed_runner_receipt_scope_mismatch', [{
+      field: 'runner_packet_path',
+      message: '当前活动或最近 runner 绑定不属于本阶段 attempt/work unit。',
+    }]);
+  }
+  const runnerRel = durableBinding ? String(durableBinding.runner_packet_path || '') : declaredRunnerPath;
+  if (!runnerRel) return null;
+  if (String(result.host_execution_mode || '') !== 'managed_runner'
+      || (boundAttempt && declaredRunnerPath !== runnerRel)) {
+    return blocked('blocked_managed_runner_execution_mode_mismatch', [{
+      field: 'host_execution_mode',
+      message: '当前阶段已经由托管 runner 执行，结果不能降级成协作模式或绕过已绑定的 runner packet。',
+      expected_runner_packet: runnerRel,
+      actual_runner_packet: declaredRunnerPath,
+    }]);
+  }
+  const runnerFile = resolveSafeProjectFile(projectRoot, runnerRel);
+  if (!runnerFile || !fs.existsSync(runnerFile)) {
+    return blocked('blocked_managed_runner_receipt_missing', [{
+      field: 'runner_packet_path',
+      message: '托管执行回执缺少可核验的 runner packet，不能接受该阶段结果。',
+    }]);
+  }
+  const runner = readJson(runnerFile);
+  if (!runner || runner.__error
+      || String(runner.workflow_id || '') !== String(task.workflow_id || '')
+      || String(runner.stage_id || '') !== String(result.stage_id || '')
+      || String(runner.expected_result_packet || '') !== String(execution.expected_result_packet || '')
+      || (durableBinding && String(runner.run_id || '') !== String(durableBinding.run_id || ''))
+      || !String(execution.stage_attempt_id || '')
+      || String(runner.stage_attempt_id || '') !== String(execution.stage_attempt_id || '')
+      || !String(execution.work_unit_id || '')
+      || String(runner.work_unit_id || '') !== String(execution.work_unit_id || '')
+      || (String(result.stage_attempt_id || '')
+        && String(result.stage_attempt_id || '') !== String(execution.stage_attempt_id || ''))
+      || (String(result.work_unit_id || '')
+        && String(result.work_unit_id || '') !== String(execution.work_unit_id || ''))) {
+    return blocked('blocked_managed_runner_receipt_scope_mismatch', [{
+      field: 'runner_packet_path',
+      message: 'runner packet 与当前 workflow、stage、attempt、work unit 或唯一结果路径不一致。',
+    }]);
+  }
+  const contract = runner.stage_contract && typeof runner.stage_contract === 'object'
+    ? runner.stage_contract
+    : {};
+  const hostAuthorized = Array.isArray(contract.write_set)
+    ? contract.write_set.map(normalizeWriteSetPath)
+    : null;
+  if (!hostAuthorized) {
+    return blocked('blocked_managed_runner_contract_invalid', [{
+      field: 'stage_contract.write_set',
+      message: 'runner packet 缺少可信的阶段写集。',
+    }]);
+  }
+  const canonicalAuthorized = Array.isArray(contract.canonical_write_set)
+    ? contract.canonical_write_set.map(normalizeWriteSetPath)
+    : [];
+  const effectiveRevalidationPolicy = effectiveLegacyRevalidationPolicy(
+    task,
+    result.stage_id,
+    execution.write_set,
+    execution.canonical_write_set,
+  );
+  const expectedHost = effectiveRevalidationPolicy.write_set.map(normalizeWriteSetPath);
+  const expectedCanonical = effectiveRevalidationPolicy.canonical_write_set.map(normalizeWriteSetPath);
+  if (!sameContractValue(hostAuthorized, expectedHost)
+      || !sameContractValue(canonicalAuthorized, expectedCanonical)
+      || (canonicalAuthorized.length > 0 && !planningReviewForProducer(result.stage_id))) {
+    return blocked('blocked_managed_runner_contract_invalid', [{
+      field: 'stage_contract.canonical_write_set',
+      message: 'runner packet 的暂存写集或事务正式目标与当前阶段冻结合同不一致。',
+      runner_write_set: hostAuthorized,
+      runner_canonical_write_set: canonicalAuthorized,
+      expected_write_set: expectedHost,
+      expected_canonical_write_set: expectedCanonical,
+    }]);
+  }
+  const authorized = normalizedUniquePaths([...hostAuthorized, ...canonicalAuthorized]);
+  const receiptPath = normalizeWriteSetPath(execution.expected_result_packet);
+  const withoutReceipt = (values) => normalizedUniquePaths(values).filter((file) => file !== receiptPath);
+  const declared = withoutReceipt(result.result_write_set);
+  const changed = withoutReceipt(result.changed_files);
+  const actual = actualStageFileChanges(projectRoot, execution.write_snapshot);
+  const canonicalChanges = [...declared, ...changed, ...actual]
+    .filter((file) => canonicalAuthorized.some((entry) => writeSetEntryAllows(entry, file)));
+  const chapterCommit = result.chapter_commit && typeof result.chapter_commit === 'object'
+    ? result.chapter_commit
+    : null;
+  if (canonicalChanges.length > 0
+      && (!chapterCommit
+        || String(chapterCommit.mode || '') !== 'transactional'
+        || !String(chapterCommit.accepted_commit_id || ''))) {
+    return blocked('blocked_canonical_transaction_required', [{
+      field: 'chapter_commit',
+      message: '托管阶段声明正式规划资产变更时，必须携带已接受的内部事务回执。',
+      canonical_changes: [...new Set(canonicalChanges)].sort(),
+    }]);
+  }
+  const outsideRunnerContract = [...declared, ...changed, ...actual]
+    .filter((file) => !authorized.some((entry) => writeSetEntryAllows(entry, file)));
+  if (outsideRunnerContract.length > 0) {
+    const readOnly = authorized.length === 0;
+    return blocked(readOnly
+      ? 'blocked_managed_runner_read_only_canonical_write'
+      : 'blocked_managed_runner_write_set_violation', [{
+      field: readOnly ? 'stage_contract.write_set' : 'result_write_set',
+      message: readOnly
+        ? '当前 runner 合同为只读，不能写入任何创作资产。'
+        : '托管结果声明或实际修改了 runner 阶段写集以外的文件。',
+      runner_write_set: authorized,
+      declared_result_write_set: declared,
+      declared_changed_files: changed,
+      actual_changed_files: actual,
+      unauthorized_files: [...new Set(outsideRunnerContract)].sort(),
+    }]);
+  }
+  return null;
 }
 
 function validateManagedRunnerMemoryReceipt(task, result, projectRoot) {
@@ -7871,15 +11358,30 @@ function validateLongformWriteSet(task, result, projectRoot) {
   const symlinkValidation = validateLongformProjectTreeSymlinks(projectRoot);
   if (symlinkValidation) return symlinkValidation;
   const stageDef = findStage(templates().long_write, task.current_stage) || {};
-  const authorized = Array.isArray(stageDef.write_set) ? stageDef.write_set : [];
+  const templateAuthorized = Array.isArray(stageDef.write_set) ? stageDef.write_set : [];
   const executionWriteSet = (task.stage_execution || {}).write_set;
+  const authorized = Array.isArray(executionWriteSet) ? executionWriteSet : [];
   const findings = [];
-  if (!Array.isArray(executionWriteSet) || !sameContractValue(executionWriteSet, authorized)) {
+  if (LONG_CHAPTER_STAGES.has(String(task.current_stage || '')) && task.active_chapter_target) {
+    const expectedExact = expectedLongChapterWriteSet(task.current_stage, task.active_chapter_target);
+    const actualExact = authorized.map(normalizeWriteSetPath);
+    if (!Array.isArray(expectedExact) || !sameContractValue(actualExact, expectedExact.map(normalizeWriteSetPath))) {
+      return blocked('blocked_long_chapter_write_set_mismatch', [{
+        field: 'stage_execution.write_set',
+        message: '长篇章节阶段写集必须与冻结 chapter_target 的当前阶段目标完全一致。',
+        expected: expectedExact,
+        actual: executionWriteSet,
+      }]);
+    }
+  }
+  const executionEscapesTemplate = authorized.filter((entry) => !templateAuthorized.some((templateEntry) => writeSetEntryAllows(templateEntry, normalizeWriteSetPath(entry))));
+  if (!Array.isArray(executionWriteSet) || executionEscapesTemplate.length > 0) {
     findings.push({
       field: 'stage_execution.write_set',
-      message: 'long_write 活动阶段写集必须匹配不可变模板授权。',
-      expected: authorized,
+      message: 'long_write 活动阶段写集必须是模板授权的相等或更窄子集。',
+      expected: templateAuthorized,
       actual: executionWriteSet,
+      escapes_template: executionEscapesTemplate,
     });
   }
   if (!Array.isArray(result.result_write_set)) {
@@ -7902,10 +11404,18 @@ function validateLongformWriteSet(task, result, projectRoot) {
   const declared = withoutReceipt(result.result_write_set);
   const changed = withoutReceipt(result.changed_files);
   const actual = actualStageFileChanges(projectRoot, snapshot);
-  const invalidDeclared = declared.filter((file) => !file || !authorized.some((entry) => writeSetEntryAllows(entry, file)));
-  const invalidChanged = changed.filter((file) => !file
-    || !authorized.some((entry) => writeSetEntryAllows(entry, file)));
-  const invalidActual = actual.filter((file) => !authorized.some((entry) => writeSetEntryAllows(entry, file)));
+  // Longform planning revisions split authorization: the host edits only the
+  // exact staged candidates (snapshot authorized_write_set), while the focused
+  // finalizer commits the exact frozen canonical targets through the
+  // transaction store. The declared result writes are the canonical targets,
+  // and the actual file diff excludes the staged candidates (intermediate
+  // artifacts). Membership checks therefore admit both the staged candidates
+  // and the frozen canonical targets as authorized longform paths.
+  const membershipAuthorized = longStageAuthorizedWriteSet(task);
+  const membershipAllows = (file) => membershipAuthorized.some((entry) => writeSetEntryAllows(entry, file));
+  const invalidDeclared = declared.filter((file) => !file || !membershipAllows(file));
+  const invalidChanged = changed.filter((file) => !file || !membershipAllows(file));
+  const invalidActual = actual.filter((file) => !membershipAllows(file));
   const declarationsMatchActual = sameContractValue(declared, actual) && sameContractValue(changed, actual);
   if (invalidDeclared.length > 0 || invalidChanged.length > 0 || invalidActual.length > 0 || !declarationsMatchActual) {
     return blocked('blocked_result_write_set_violation', [{
@@ -7917,24 +11427,95 @@ function validateLongformWriteSet(task, result, projectRoot) {
       actual_changed_files: actual,
       declared_result_write_set: declared,
       declared_changed_files: changed,
-      authorized_write_set: authorized,
+      authorized_write_set: membershipAuthorized,
     }]);
   }
   return null;
 }
 
+// Canonical chapter-commit transactions record internal evidence under
+// 追踪/story-system (transaction workspace, accepted commit manifests, projection
+// log). Those files are written by the runner after a long_write stage starts
+// and are never part of the author's creative write set, so both fresh snapshot
+// capture and old persisted snapshots must always ignore them. Other 追踪 paths
+// (settings, body, outline, notes, etc.) remain user-visible writes.
+const CANONICAL_TRANSACTION_INTERNAL_PATHS = [
+  '追踪/story-system/transactions',
+  '追踪/story-system/commits',
+  '追踪/story-system/projection-log.jsonl',
+];
+
+const MANAGED_RUNTIME_INTERNAL_PATHS = [
+  '.claude/hooks',
+  '.claude/rules',
+  '.claude/agents',
+  '.claude/agent-references/novel-assistant',
+  '.claude/settings.local.json',
+  '.claude/.agents-pending-restart',
+  'AGENTS.md',
+  '.story-deployed',
+  '.story-runtime-managed.json',
+  'scripts',
+  '追踪/runtime-snapshots',
+  '追踪/workflow/task-index.json',
+  '追踪/workflow/update-environment-choice.json',
+];
+
+function isCanonicalTransactionInternalPath(relativePath) {
+  const normalized = normalizeWriteSetPath(relativePath);
+  if (!normalized) return false;
+  return CANONICAL_TRANSACTION_INTERNAL_PATHS.some((base) => {
+    const prefixed = normalizeWriteSetPath(base);
+    return normalized === prefixed || normalized.startsWith(`${prefixed}/`);
+  });
+}
+
+function isManagedRuntimeInternalPath(relativePath) {
+  const normalized = normalizeWriteSetPath(relativePath);
+  if (!normalized) return false;
+  return MANAGED_RUNTIME_INTERNAL_PATHS.some((base) => {
+    const prefixed = normalizeWriteSetPath(base);
+    return normalized === prefixed || normalized.startsWith(`${prefixed}/`);
+  });
+}
+
+function isWorkflowAuditInternalPath(relativePath) {
+  const normalized = normalizeWriteSetPath(relativePath);
+  return /^追踪\/workflow\/tasks\/[^/]+\/audit(?:\/|$)/.test(normalized);
+}
+
+function isWorkflowDiagnosticInternalPath(relativePath) {
+  const normalized = normalizeWriteSetPath(relativePath);
+  return /^追踪\/workflow\/tasks\/[^/]+\/artifacts\/chapter-[0-9]+-machine-gate\.json$/.test(normalized);
+}
+
 function captureStageWriteSnapshot(projectRoot, task, expectedResultPacket) {
   const authorized = ((task.stage_execution || {}).write_set || []).map(normalizeWriteSetPath);
   const excludedPaths = normalizedUniquePaths([
+    // Longform planning revisions edit only exact staged candidates under
+    // 追踪/workflow/staging. Those candidate edits are intermediate artifacts
+    // the finalizer later commits through the transaction store, not creative
+    // canonical writes. Exclude the exact staged paths from file-diff
+    // accounting so they are never mistaken for canonical stage output. The
+    // staging root glob is intentionally NOT excluded — only exact pairs.
+    ...longPlanningStagedPaths(task),
     // Runner-owned observability/context artifacts are written after a stage
     // starts. They must never be mistaken for the author's stage write set.
     '.novel-assistant/evaluation-prompts',
+    '.claude/.agents-pending-restart',
+    ...CANONICAL_TRANSACTION_INTERNAL_PATHS,
+    ...MANAGED_RUNTIME_INTERNAL_PATHS,
     '追踪/context-pack',
     '追踪/workflow/.workflow.lock',
     '追踪/workflow/current-task.json',
     '追踪/workflow/current-task.md',
     '追踪/workflow/history.jsonl',
     '追踪/workflow/entry-guard.json',
+    // The runtime task inbox and entry/update check rewrite these projections
+    // after a stage snapshot is captured. They are runtime-owned metadata,
+    // not author output, and must not enter creative write-set accounting.
+    '追踪/workflow/task-index.json',
+    '追踪/workflow/update-environment-choice.json',
     '追踪/workflow/session-registry.json',
     '追踪/workflow/task-family-index.json',
     '追踪/workflow/families',
@@ -7949,13 +11530,16 @@ function captureStageWriteSnapshot(projectRoot, task, expectedResultPacket) {
     `${task.task_dir}/canonical-write-baseline.json`,
     `${task.task_dir}/context-packets`,
     `${task.task_dir}/runner-events`,
+    `${task.task_dir}/runner-output`,
     `${task.task_dir}/runner-packets`,
     `${task.task_dir}/runner-recovery`,
+    `${task.task_dir}/tool-events.jsonl`,
     // Stage-local diagnostics are workflow-owned evidence, not creative
     // assets. They must not be reported as formal stage writes.
     `${task.task_dir}/work`,
     `${task.task_dir}/memory-projection`,
     `${task.task_dir}/memory-quarantine`,
+    `${task.task_dir}/audit`,
     expectedResultPacket,
   ]);
   return {
@@ -7978,8 +11562,17 @@ function validStageWriteSnapshot(snapshot, authorized) {
 function actualStageFileChanges(projectRoot, snapshot) {
   const before = snapshot.files;
   const after = snapshotProjectFiles(projectRoot, snapshot.excluded_paths);
+  // Strip canonical transaction internal evidence from both sides: snapshots
+  // persisted before that exclusion rule was added may list these paths in
+  // `files` and have an `excluded_paths` list that omits them. Treating them
+  // as creative writes would block every accepted long-form stage whose
+  // snapshot pre-dates this fix.
   return Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
     .filter(file => before[file] !== after[file])
+    .filter(file => !isCanonicalTransactionInternalPath(file))
+    .filter(file => !isManagedRuntimeInternalPath(file))
+    .filter(file => !isWorkflowAuditInternalPath(file))
+    .filter(file => !isWorkflowDiagnosticInternalPath(file))
     .sort();
 }
 
@@ -8068,7 +11661,67 @@ function writeSetEntryAllows(entry, file) {
   return file === rule;
 }
 
-function validateLongformResultContract(task, result) {
+function validateLongChapterLengthAcceptance(projectRoot, task, result) {
+  if (String((task || {}).workflow_type || '') !== 'long_write'
+      || String((task || {}).current_stage || '') !== 'prose_acceptance'
+      || String((result || {}).step_status || '') !== 'completed') return null;
+  const target = (((task || {}).stage_execution || {}).chapter_target) || task.active_chapter_target || {};
+  const contractFile = resolveSafeProjectFile(projectRoot, String(target.contract_path || ''));
+  const draftFile = resolveSafeProjectFile(projectRoot, String(target.candidate_draft_path || ''));
+  const contractSource = contractFile && fs.existsSync(contractFile) && fs.statSync(contractFile).isFile()
+    ? fs.readFileSync(contractFile, 'utf8') : '';
+  const proseSource = draftFile && fs.existsSync(draftFile) && fs.statSync(draftFile).isFile()
+    ? fs.readFileSync(draftFile, 'utf8') : '';
+  const length = evaluateLongChapterLength(contractSource, proseSource);
+  if (length.status === 'pass') return null;
+  return blocked('blocked_long_chapter_length_contract', [{
+    field: 'chapter_length',
+    code: length.reason_code,
+    message: length.message,
+    target: length.target,
+    allowed_min: length.min,
+    allowed_max: length.max,
+    actual_cjk_chars: length.cjk_chars,
+    contract_path: String(target.contract_path || ''),
+    draft_path: String(target.candidate_draft_path || ''),
+  }]);
+}
+
+function stampLongChapterProseBinding(projectRoot, task, result, resultFile) {
+  if (String((task || {}).workflow_type || '') !== 'long_write'
+      || !['prose', 'prose_acceptance'].includes(String((task || {}).current_stage || ''))
+      || String((result || {}).step_status || '') !== 'completed') return null;
+  const target = (((task || {}).stage_execution || {}).chapter_target) || task.active_chapter_target || {};
+  const contractFile = resolveSafeProjectFile(projectRoot, String(target.contract_path || ''));
+  const candidateFile = resolveSafeProjectFile(projectRoot, String(target.candidate_draft_path || ''));
+  if (!contractFile || !candidateFile || !fs.existsSync(contractFile) || !fs.existsSync(candidateFile)) {
+    return blocked('blocked_long_chapter_acceptance_binding_missing', [{
+      field: 'chapter_prose_acceptance',
+      message: '正文验收无法绑定章节 Brief 与候选正文的不可变证据。',
+    }]);
+  }
+  const binding = buildLongChapterAcceptanceBinding(
+    fs.readFileSync(contractFile, 'utf8'),
+    fs.readFileSync(candidateFile, 'utf8'),
+    String(target.candidate_draft_path || ''),
+  );
+  if (binding.status !== 'bound') {
+    return blocked('blocked_long_chapter_length_contract', [{
+      field: 'chapter_prose_acceptance.length_contract',
+      code: binding.reason_code,
+      message: String(((binding || {}).length_contract || {}).message || '正文长度合同未通过。'),
+    }]);
+  }
+  const bindingField = String(task.current_stage || '') === 'prose'
+    ? 'chapter_prose_candidate'
+    : 'chapter_prose_acceptance';
+  result[bindingField] = binding;
+  normalizeLongChapterLengthEvidence(result, binding);
+  atomicWriteJson(resultFile, result);
+  return null;
+}
+
+function validateLongformResultContract(task, result, projectRoot = '') {
   if (task.workflow_type !== 'long_write') return null;
   const tpl = templates().long_write;
   const graph = task.lifecycle_graph || {};
@@ -8116,6 +11769,21 @@ function validateLongformResultContract(task, result) {
   } else if (transitionRequest.requested_next && transitionRequest.requested_next !== lifecycleNodeId) {
     result.next_stage_id = transitionRequest.requested_next;
   }
+  if (lifecycleNodeId === 'milestone_review'
+      && transitionRequest.status === 'valid'
+      && transitionRequest.requested_next === 'volume_acceptance'
+      && projectRoot) {
+    const laterTargets = laterCanonicalOutlineTargets(projectRoot, task);
+    if (laterTargets.length > 0) {
+      findings.push({
+        field: 'lifecycle_transition_request.target',
+        code: 'premature_volume_acceptance',
+        message: '当前卷仍有后续章节细纲，里程碑复盘不能提前进入卷级验收。',
+        later_outline_paths: laterTargets.map(item => item.outline_path),
+        required_target: 'detail_outline_review',
+      });
+    }
+  }
   return findings.length > 0 ? blocked('blocked_longform_result_contract_mismatch', findings) : null;
 }
 
@@ -8125,6 +11793,7 @@ function validateLongformReviewAcceptance(task, result, stageDef) {
   const stepStatus = String(result.step_status || '').trim().toLowerCase();
   const reviewResult = String(result.verification_result || '').trim().toLowerCase();
   if (stepStatus === 'completed' && LONG_WRITE_ACCEPTED_REVIEW_RESULTS.has(reviewResult)) return null;
+  if (validateReviewRevisionReturn(stageDef, String(task.current_stage || ''), result).valid) return null;
   const explicitFailure = ['blocked', 'failed'].includes(stepStatus)
     || (stepStatus === 'completed' && (WORKFLOW_TRANSITIONS.normalizeBlockingFindings(result).length > 0
       || /(blocking|blocked|fail|failed|reject|rejected|hard_blocker|error)/.test(reviewResult)));
@@ -8389,6 +12058,35 @@ function validateChapterCommit(projectRoot, task, result) {
       findings: [{ field: 'chapter_commit.accepted_commit_id', message: 'commit 文件与 result packet 不一致，或不是有效 accepted commit。' }],
     };
   }
+  const activeIdentity = activeChapterTargetIdentity(task.active_chapter_target);
+  if (activeIdentity) {
+    const commitChapter = normalizedChapterIdentity(commit.chapter);
+    const commitVolume = normalizedVolumeIdentity(commit.volume);
+    const targetFindings = [];
+    if (commitChapter !== activeIdentity.chapter) {
+      targetFindings.push({
+        field: 'commit.chapter',
+        message: 'accepted commit 的卷内章节号必须匹配 active_chapter_target 路径。',
+        expected: activeIdentity.chapter,
+        actual: commitChapter,
+      });
+    }
+    if (commitVolume !== activeIdentity.volume) {
+      targetFindings.push({
+        field: 'commit.volume',
+        message: 'accepted commit 的卷身份必须匹配 active_chapter_target 路径。',
+        expected: activeIdentity.volume,
+        actual: commitVolume,
+      });
+    }
+    if (targetFindings.length > 0) {
+      return {
+        schemaVersion: SCHEMA_VERSION,
+        status: 'blocked_chapter_commit_target_mismatch',
+        findings: targetFindings,
+      };
+    }
+  }
   const driftedArtifact = commit.artifacts.find((artifact) => {
     const target = resolveInsideProject(projectRoot, String((artifact && artifact.target) || ''));
     const expected = String((artifact && artifact.after_hash) || '');
@@ -8410,6 +12108,22 @@ function validateChapterCommit(projectRoot, task, result) {
       findings: [{ field: 'chapter_commit.workflow_id', message: 'accepted commit 不属于当前 workflow。' }],
     };
   }
+  if (strictCanonicalTargets.targets.length > 0) {
+    const expectedAttemptId = String((((task || {}).stage_execution || {}).stage_attempt_id) || '');
+    const commitAttemptId = String((((commit || {}).provenance || {}).stage_attempt_id) || '');
+    if (!expectedAttemptId || commitAttemptId !== expectedAttemptId) {
+      return {
+        schemaVersion: SCHEMA_VERSION,
+        status: 'blocked_canonical_transaction_attempt_mismatch',
+        findings: [{
+          field: 'chapter_commit.provenance.stage_attempt_id',
+          message: '正式资产事务必须由当前阶段尝试创建；禁止复用同 workflow 的旧 accepted commit。',
+          expected: expectedAttemptId,
+          actual: commitAttemptId,
+        }],
+      };
+    }
+  }
   const committedTargets = new Set(commit.artifacts.map((artifact) => String((artifact && artifact.target) || '')));
   const missingCanonicalTarget = strictCanonicalTargets.targets.find((target) => !committedTargets.has(target));
   if (missingCanonicalTarget) {
@@ -8427,7 +12141,182 @@ function validateChapterCommit(projectRoot, task, result) {
       findings: [{ field: 'chapter_commit.projection_status', message: '记忆投影债务未关闭，必须 replay 后才能进入下一章。' }],
     };
   }
+  if (isLongformCommit) {
+    const v2CommitCheck = validateChapterCommitV2Identity(projectRoot, task, result, commit);
+    if (v2CommitCheck) return v2CommitCheck;
+  }
   return null;
+}
+
+// V2-specific commit checks: schema maps the target to the global chapter,
+// and staged/canonical artifacts include the active target's candidate +
+// draft paths. Only runs for chapter_commit on long_write.
+function validateChapterCommitV2Identity(projectRoot, task, result, commit) {
+  const active = task.active_chapter_target;
+  if (!active || typeof active !== 'object' || !active.target_id) {
+    // No V2 active target — the echo gate has already blocked for the 5
+    // stages, so reaching here means legacy mode. Do not block.
+    return null;
+  }
+  const findings = [];
+
+  // 1. Schema must map this outline to a global chapter that equals
+  //    active_target.global_chapter_no. Catches tampered global_chapter_no.
+  const join = joinSchemaByOutlinePath(projectRoot, active.outline_path);
+  if (join.status !== 'ok') {
+    findings.push({
+      field: 'chapter_commit.schema_join',
+      status: join.status,
+      outline_path: active.outline_path,
+      message: `active target 的 outline_path 无法在 schema 中唯一解析：${join.status}`,
+    });
+  } else {
+    const schemaGlobal = Number(join.row.global_chapter_no) || 0;
+    const targetGlobal = Number(active.global_chapter_no) || 0;
+    if (schemaGlobal !== targetGlobal) {
+      findings.push({
+        field: 'chapter_commit.schema_global_chapter_mismatch',
+        expected: targetGlobal,
+        actual: schemaGlobal,
+        message: 'schema 将该 outline 映射到的全局章节号与 active_target.global_chapter_no 不一致。',
+      });
+    }
+  }
+
+  // 2. Active target's target_id must equal the echoed commit's target_id.
+  const echoedTarget = result.chapter_target || {};
+  if (String(echoedTarget.target_id || '') !== String(active.target_id || '')) {
+    findings.push({
+      field: 'chapter_commit.target_id',
+      expected: active.target_id,
+      actual: echoedTarget.target_id || '',
+      message: 'accepted commit 对应的 echoed chapter_target.target_id 与 active 不一致，禁止消费。',
+    });
+  }
+
+  // 3. The accepted commit records only the canonical target. The prepared
+  //    transaction records the candidate source_staged -> canonical target
+  //    mapping and is the authority for staged provenance.
+  const artifacts = Array.isArray(commit && commit.artifacts) ? commit.artifacts : [];
+  const artifactTargets = new Set(artifacts.map((a) => String((a && a.target) || '')));
+  if (!artifactTargets.has(String(active.draft_path || ''))) {
+    findings.push({
+      field: 'chapter_commit.missing_artifact',
+      expected: active.draft_path,
+      message: `accepted commit 制品未覆盖 active target 正式正文：${active.draft_path}`,
+    });
+  }
+  const transactionId = String(commit.transaction_id || '');
+  const transactionFile = transactionId
+    ? resolveInsideProject(projectRoot, `追踪/story-system/transactions/${transactionId}/transaction.json`)
+    : null;
+  const transaction = transactionFile && fs.existsSync(transactionFile) ? readJson(transactionFile) : null;
+  const transactionArtifacts = arrayOrEmpty((transaction || {}).artifacts);
+  const matchingTransactionArtifact = transactionArtifacts.find((artifact) => (
+    String((artifact || {}).source_staged || '') === String(active.candidate_draft_path || '')
+      && String((artifact || {}).target || '') === String(active.draft_path || '')
+  ));
+  const matchingCommitArtifact = artifacts.find((artifact) => (
+    String((artifact || {}).target || '') === String(active.draft_path || '')
+  ));
+  const expectedProvenance = {
+    workflow_id: String(task.workflow_id || ''),
+    task_family_id: String(task.task_family_id || ''),
+    branch_id: String(task.branch_id || task.workflow_id || ''),
+    stage_attempt_id: String(((task || {}).stage_execution || {}).stage_attempt_id || ''),
+  };
+  const transactionProvenance = (transaction || {}).provenance || {};
+  const commitProvenance = (commit || {}).provenance || {};
+  const provenanceFields = Object.keys(expectedProvenance);
+  const provenanceMatches = provenanceFields.every((field) => (
+    expectedProvenance[field]
+      && String(transactionProvenance[field] || '') === expectedProvenance[field]
+      && String(commitProvenance[field] || '') === expectedProvenance[field]
+  ));
+  const archivedStagedFile = matchingTransactionArtifact
+    ? resolveInsideProject(projectRoot, String(matchingTransactionArtifact.staged || ''))
+    : null;
+  const archivedStagedHash = archivedStagedFile && fs.existsSync(archivedStagedFile) && fs.statSync(archivedStagedFile).isFile()
+    ? `sha256:${crypto.createHash('sha256').update(fs.readFileSync(archivedStagedFile)).digest('hex')}`
+    : '';
+  const transactionHash = String((matchingTransactionArtifact || {}).content_hash || '').toLowerCase();
+  const commitHash = String((matchingCommitArtifact || {}).after_hash || '').toLowerCase();
+  const transactionTrusted = transaction
+    && String(transaction.status || '') === 'accepted'
+    && String(transaction.transaction_id || '') === transactionId
+    && String(transaction.commit_id || '') === String(commit.commit_id || '')
+    && String(transaction.workflow_id || '') === String(task.workflow_id || '')
+    && String(commit.transaction_id || '') === transactionId
+    && String(commit.workflow_id || '') === String(task.workflow_id || '')
+    && normalizedVolumeIdentity(transaction.volume) === normalizedVolumeIdentity(active.volume)
+    && normalizedChapterIdentity(transaction.chapter) === normalizedChapterIdentity(active.volume_chapter_no)
+    && provenanceMatches
+    && matchingTransactionArtifact
+    && matchingCommitArtifact
+    && transactionHash
+    && transactionHash === commitHash
+    && transactionHash === archivedStagedHash.toLowerCase();
+  if (!transactionTrusted) {
+    findings.push({
+      field: 'chapter_commit.transaction_artifact',
+      transaction_id: transactionId,
+      expected_source_staged: active.candidate_draft_path,
+      expected_target: active.draft_path,
+      message: 'accepted transaction 缺少与当前 workflow、stage attempt、commit 和候选正文一致的持久化证据。',
+    });
+  }
+
+  if (findings.length) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      status: 'blocked_chapter_commit_target_mismatch',
+      findings,
+    };
+  }
+  return null;
+}
+
+function activeChapterTargetIdentity(target) {
+  const outlinePath = String((target || {}).outline_path || '').replace(/\\/g, '/');
+  if (!outlinePath) return null;
+  const volumeMatch = outlinePath.match(/(?:^|\/)第\s*([0-9一二三四五六七八九十百]+)\s*卷(?:\/|$)/);
+  const chapterMatch = outlinePath.match(/第\s*0*(\d+)\s*章/);
+  if (!volumeMatch || !chapterMatch) return null;
+  return {
+    volume: normalizedVolumeIdentity(volumeMatch[1]),
+    chapter: normalizedChapterIdentity(chapterMatch[1]),
+  };
+}
+
+function normalizedVolumeIdentity(value) {
+  const raw = String(value || '').replace(/\s+/g, '');
+  const match = raw.match(/^第([0-9一二三四五六七八九十百]+)卷$/)
+    || raw.match(/^卷([0-9一二三四五六七八九十百]+)$/)
+    || raw.match(/^([0-9一二三四五六七八九十百]+)$/);
+  if (!match) return '';
+  if (/^\d+$/.test(match[1])) return String(Number(match[1]));
+  const number = chineseNumeralValue(match[1]);
+  return number > 0 ? String(number) : '';
+}
+
+function chineseNumeralValue(value) {
+  const digits = { 零: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const units = { 十: 10, 百: 100 };
+  let total = 0;
+  let current = 0;
+  for (const char of String(value || '')) {
+    if (Object.prototype.hasOwnProperty.call(digits, char)) current = digits[char];
+    else if (units[char]) {
+      total += (current || 1) * units[char];
+      current = 0;
+    } else return 0;
+  }
+  return total + current;
+}
+
+function normalizedChapterIdentity(value) {
+  const match = String(value || '').trim().match(/^(?:第\s*)?0*(\d+)\s*(?:章)?$/);
+  return match ? Number(match[1]) : 0;
 }
 
 function strictCanonicalResultTargets(projectRoot, result) {
@@ -8476,7 +12365,7 @@ function resolveSafeProjectFile(projectRoot, filePath) {
   return file;
 }
 
-function advanceTask(task, result, projectRoot, taskTemplate) {
+function advanceTask(task, result, projectRoot, taskTemplate, options = {}) {
   const tpl = taskTemplate;
   const machine = normalizeMachine(task, tpl);
   const now = new Date().toISOString();
@@ -8511,8 +12400,10 @@ function advanceTask(task, result, projectRoot, taskTemplate) {
   if (task.workflow_type === 'long_write') {
     task.lifecycle_graph = advanceLongformLifecycleGraph(task, tpl, stageId, nextStageId, transition, result);
   }
+  const trustResult = options.trustResult !== false;
   task.unit_lifecycle = advanceUnitLifecycleState(task.unit_lifecycle, tpl, nextStageId ? findStage(tpl, nextStageId) : null, result, now, {
     completeCurrentStage: transition.complete_current_stage,
+    trustResult,
   });
   if (isShortWritingWorkflow(task) && ['section_plan_lock', 'short_structure_impact_audit', 'hook_retention_gate', 'hook_value_gate', 'full_story_assembly', 'full_story_review', 'short_deslop', 'deslop', 'final_check'].includes(nextStageId)) {
     synchronizeShortWholeStoryScope(task, nextStageId);
@@ -8522,23 +12413,33 @@ function advanceTask(task, result, projectRoot, taskTemplate) {
     task.lifecycle.completed_at = now;
   }
   machine.last_transition = transition.reason || (nextStageId ? 'stage_completed' : 'workflow_completed');
-  machine.last_result_packet = result.result_packet_path || '';
+  if (machine.last_transition === 'review_failed_return_to_asset') {
+    machine.last_execution_event = 'awaiting_review_repair';
+  }
+  if (trustResult) machine.last_result_packet = result.result_packet_path || '';
+  else machine.last_failed_result_packet = result.result_packet_path || '';
   machine.last_blocking_findings = transition.blocked ? WORKFLOW_TRANSITIONS.normalizeBlockingFindings(result) : [];
   machine.next_stop_reason = nextStageId ? nextStopReason(task, findStage(tpl, nextStageId)) : 'completed';
   machine.allowed_actions = nextStageId ? ['continue_next_stage', 'pause'] : [];
   task.machine = machine;
-  const trustedResult = String(result.result_packet_path || trustedArtifactFromResult(result) || '');
+  const trustedResult = trustResult ? String(result.result_packet_path || trustedArtifactFromResult(result) || '') : '';
   task.stage_execution = {
     ...(task.stage_execution || {}),
     status: 'completed',
     completed_at: now,
-    result_packet: trustedResult,
+    ...(trustResult ? { result_packet: trustedResult, accepted_result_packet: trustedResult } : {
+      result_packet: '',
+      accepted_result_packet: '',
+      failed_result_packet: String(result.result_packet_path || ''),
+    }),
   };
   task.runtime_guard = task.runtime_guard || {};
   task.runtime_guard.heartbeat = {
     ...(task.runtime_guard.heartbeat || {}),
     updated_at: now,
-    latest_trusted_artifact: trustedResult || ((task.runtime_guard.heartbeat || {}).latest_trusted_artifact || ''),
+    latest_trusted_artifact: trustResult
+      ? (trustedResult || ((task.runtime_guard.heartbeat || {}).latest_trusted_artifact || ''))
+      : (((task.runtime_guard.heartbeat || {}).latest_trusted_artifact) || ''),
     current_batch: nextStageId || stageId,
     workflow_id: task.workflow_id || '',
   };
@@ -9001,13 +12902,69 @@ function advanceUnitLifecycleState(existing, tpl, nextStageDef, result, now, opt
     current_role: nextStageId ? currentUnitRole(contract, nextStageId) : 'handoff_and_next',
     completed_roles: completedRoles,
     last_quality_gate: completeCurrentStage && completedRole === 'quality_gate' ? (result.verification_result || result.output_health_result || 'completed') : (state.last_quality_gate || ''),
-    last_trusted_artifact: completeCurrentStage ? (trustedArtifactFromResult(result) || state.last_trusted_artifact || '') : (state.last_trusted_artifact || ''),
+    last_trusted_artifact: completeCurrentStage && (!options || options.trustResult !== false)
+      ? (trustedArtifactFromResult(result) || state.last_trusted_artifact || '')
+      : (state.last_trusted_artifact || ''),
   };
 }
 
 function print(result, json) {
   if (json) console.log(JSON.stringify(result, null, 2));
   else console.log(`${result.status || 'ok'}`);
+}
+
+// V2 remains a read-only compatibility shell for short writing. This guard
+// runs before dispatch and before the V2 project lock, so neither a V2 nor a
+// migrated V3 short task can reach legacy code that may write packets, focus
+// pointers or task state. The sole exception is the gateway-backed migration
+// facade below; the gateway owns its own lock and durable task mutation.
+function frozenShortWriteMutation(args, mutating) {
+  if (!mutating || args.command === 'migrate-short-lean-workflow') return null;
+  if (['create', 'switch-intent'].includes(args.command)
+      && isShortWorkflowType(args.workflowType)) {
+    if (args.command === 'switch-intent') {
+      const root = path.resolve(args.projectRoot);
+      const existing = readFocusedAuthority(root);
+      if (existing && !existing.__error) {
+        const reviewPlanValidation = validateTaskReviewPlan(root, existing);
+        if (reviewPlanValidation.blocked) return reviewPlanValidation.blocked;
+        if (reviewPlanValidation.legacy) return blockedLegacyReviewPlan(existing);
+      }
+    }
+    return blocked(
+      'blocked_v2_short_write_frozen',
+      'V2 短篇写入口已冻结；新短篇必须通过 workflow-v3.js create-short 创建。',
+    );
+  }
+
+  const root = path.resolve(args.projectRoot);
+  let resolved = null;
+  if (args.workflowId) {
+    resolved = resolveTaskAuthority(root, args.workflowId);
+  } else {
+    const focused = readFocusedTask(root);
+    resolved = focused && focused.authority;
+  }
+  if (!resolved || resolved.status !== 'ok' || !isShortWorkflowType((resolved.task || {}).workflow_type)) {
+    return null;
+  }
+  const task = resolved.task;
+  const isV3 = Number(task.engine_version) === 3
+    && Number(task.task_schema_version) === 3
+    && Number(task.workflow_contract_version) === 3;
+  if (isV3) {
+    return blocked(
+      'blocked_v3_task_requires_v3_engine',
+      '当前短篇任务已迁移到 V3；旧状态机不得写入，请通过 workflow-v3.js 继续。',
+    );
+  }
+  const terminal = ['completed', 'completed_verified', 'done', 'closed']
+    .includes(String(task.status || '').toLowerCase());
+  if (args.command === 'reconcile-runtime' && terminal) return null;
+  return blocked(
+    'blocked_v2_short_task_migration_required',
+    `当前短篇仍是只读 V2 任务；请先运行 node scripts/workflow-state-machine.js migrate-short-lean-workflow --project-root . --workflow-id ${String(task.workflow_id || '')} --json 预览迁移。`,
+  );
 }
 
 function main() {
@@ -9019,31 +12976,39 @@ function main() {
   let release = null;
   const mutating = isMutatingCommand(args.command)
     && (args.command !== 'migrate-legacy' || args.write);
+  const gatewayOwnsLock = args.command === 'migrate-short-lean-workflow';
   try {
-    if (mutating) release = acquireProjectLock(path.resolve(args.projectRoot), `workflow-state-machine:${args.command}`);
-    result = dispatchCommand(args.command, {
-      templates: () => commandTemplates(),
-      create: () => createTask(args),
-      inspect: () => inspectTask(args),
-      'task-overview': () => taskOverview(args),
-      'resolve-action': () => resolveAction(args),
-      'apply-result': () => applyResult(args),
-      'next-candidates': () => nextCandidates(args),
-      'switch-intent': () => switchIntent(args),
-      activate: () => activateTask(args),
-      'migrate-legacy': () => migrateLegacyWorkflows(args),
-      'migrate-longform-successor': () => migrateLegacyLongformSuccessor(args),
-      'reset-incompatible-review-batches': () => resetIncompatibleReviewBatches(args),
-      'continue-review-with-legacy-evidence': () => continueReviewWithLegacyEvidence(args),
-      'restore-incomplete-workflow': () => restoreIncompleteWorkflow(args),
-      'reset-unmanaged-review-repair': () => resetUnmanagedReviewRepair(args),
-      'reconcile-runtime': () => reconcileRuntime(args),
-      'refresh-short-title-lock': () => refreshShortTitleLock(args),
-      'resume-pending-short-feedback': () => resumePendingShortFeedback(args),
-      'discard-short-feedback-item': () => discardShortFeedbackAndReconcile(args),
-      'reclassify-short-feedback-item': () => reclassifyShortFeedbackAndReconcile(args),
-      'migrate-short-lean-workflow': () => migrateShortLeanWorkflow(args),
-    });
+    const frozen = frozenShortWriteMutation(args, mutating);
+    if (frozen) {
+      result = frozen;
+    } else {
+      if (mutating && !gatewayOwnsLock) release = acquireProjectLock(path.resolve(args.projectRoot), `workflow-state-machine:${args.command}`);
+      result = dispatchCommand(args.command, {
+        templates: () => commandTemplates(),
+        create: () => createTask(args),
+        inspect: () => inspectTask(args),
+        'task-overview': () => taskOverview(args),
+        'resolve-action': () => resolveAction(args),
+        'apply-result': () => applyResult(args),
+        'next-candidates': () => nextCandidates(args),
+        'switch-intent': () => switchIntent(args),
+        activate: () => activateTask(args),
+        'migrate-legacy': () => migrateLegacyWorkflows(args),
+        'migrate-longform-successor': () => migrateLegacyLongformSuccessor(args),
+        'reset-incompatible-review-batches': () => resetIncompatibleReviewBatches(args),
+        'continue-review-with-legacy-evidence': () => continueReviewWithLegacyEvidence(args),
+        'restore-incomplete-workflow': () => restoreIncompleteWorkflow(args),
+        'reset-unmanaged-review-repair': () => resetUnmanagedReviewRepair(args),
+        'restart-rejected-stage': () => restartRejectedManagedStage(args),
+        'reconcile-runtime': () => reconcileRuntime(args),
+        'refresh-short-title-lock': () => refreshShortTitleLock(args),
+        'resume-pending-short-feedback': () => resumePendingShortFeedback(args),
+        'register-short-brief-overload': () => registerShortBriefOverload(args),
+        'discard-short-feedback-item': () => discardShortFeedbackAndReconcile(args),
+        'reclassify-short-feedback-item': () => reclassifyShortFeedbackAndReconcile(args),
+        'migrate-short-lean-workflow': () => migrateShortLeanWorkflow(args),
+      });
+    }
   } catch (error) {
     if (error && error.code === 'WORKFLOW_LOCKED') {
       result = blocked('blocked_workflow_locked', error.message);
@@ -9061,9 +13026,11 @@ function main() {
   }
 
   if (args.compact && args.command === 'activate') result = compactActivatedResult(result);
+  if (args.compact && args.command === 'inspect') result = compactInspectResult(result);
   if (args.compact && args.command === 'apply-result') result = compactApplyResult(result);
   if (args.compact && args.command === 'task-overview') result = compactTaskOverviewResult(result);
   if (args.compact && args.command === 'next-candidates') result = compactNextCandidatesResult(result);
+  if (args.compact && args.command === 'resolve-action') result = compactResolveActionResult(result);
   print(result, args.json);
   process.exitCode = isConsoleErrorStatus(result.status) ? 2 : 0;
 }

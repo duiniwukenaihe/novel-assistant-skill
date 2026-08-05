@@ -6,7 +6,7 @@ const path = require('path');
 const { evaluateDetailOutline, mergeSemanticReview, normalizeChapterPosition } = require('./lib/detail-outline-quality');
 
 const PROTOCOL_VERSION = '2.0.0';
-const USAGE = 'Usage: node scripts/detail-outline-quality-check.js --project-root <book-dir> --outline <relative-path> [--workflow-id <id>] [--stage-id detail_outline_review] [--chapter-position <position>] [--semantic-review <workflow-relative-path>] [--write-result <relative-path> --reuse-result] --json';
+const USAGE = 'Usage: node scripts/detail-outline-quality-check.js --project-root <book-dir> --outline <relative-path> [--outline <relative-path> ...] [--workflow-id <id>] [--stage-id detail_outline_review] [--chapter-position <position>] [--semantic-review <workflow-relative-path> ...] [--write-result <relative-path> --reuse-result] --json';
 
 let args = errorArgs(process.argv.slice(2));
 try {
@@ -16,31 +16,44 @@ try {
     process.exit(0);
   }
   const root = realRoot(args.projectRoot);
-  const outlineFile = containedPath(root, args.outline, true, 'outline');
-  const text = fs.readFileSync(outlineFile, 'utf8');
-  const relativeOutline = path.relative(root, outlineFile).split(path.sep).join('/');
-  let quality = evaluateDetailOutline({
-    text,
-    workflowId: args.workflowId,
-    stageId: args.stageId,
-    outlinePath: relativeOutline,
-    chapterPosition: args.chapterPosition,
-    workflowMetadata: args.workflowMetadata,
-  });
-  if (args.semanticReview) {
-    const semanticFile = workflowSemanticReviewPath(root, args.semanticReview, args.workflowId);
-    quality = mergeSemanticReview(quality, readSemanticReview(semanticFile));
-  } else if (accepted(quality.status)) {
-    quality = awaitingSemanticReview(quality);
+  if (args.semanticReviews.length > 0 && args.semanticReviews.length !== args.outlines.length) {
+    throw protocolError('semantic_review_count_mismatch', 'repeated --semantic-review count must match repeated --outline count');
   }
-  let packet = buildEnvelope(relativeOutline, quality, args);
+  const evaluated = args.outlines.map((outline, index) => {
+    const outlineFile = containedPath(root, outline, true, 'outline');
+    const text = fs.readFileSync(outlineFile, 'utf8');
+    const relativeOutline = path.relative(root, outlineFile).split(path.sep).join('/');
+    let quality = evaluateDetailOutline({
+      text,
+      workflowId: args.workflowId,
+      stageId: args.stageId,
+      outlinePath: relativeOutline,
+      chapterPosition: args.chapterPosition,
+      workflowMetadata: args.workflowMetadata,
+    });
+    if (args.semanticReviews[index]) {
+      const semanticFile = workflowSemanticReviewPath(root, args.semanticReviews[index], args.workflowId);
+      quality = mergeSemanticReview(quality, readSemanticReview(semanticFile));
+    } else if (accepted(quality.status)) {
+      quality = awaitingSemanticReview(quality);
+    }
+    return { relativeOutline, quality };
+  });
+  const relativeOutline = evaluated[0].relativeOutline;
+  const quality = evaluated[0].quality;
+  let packet = evaluated.length === 1
+    ? buildEnvelope(relativeOutline, quality, args)
+    : buildBatchEnvelope(evaluated, args);
   let reused = false;
   if (args.writeResult) {
     const resultFile = workflowResultPath(root, args.writeResult, args.workflowId);
     const resultPath = path.relative(root, resultFile).split(path.sep).join('/');
     if (fs.existsSync(resultFile)) {
       const existing = readResultPacket(resultFile);
-      validateExistingOutline(existing, relativeOutline);
+      validateExistingOutlines(existing, evaluated.map((item) => item.relativeOutline));
+      if (args.reuseResult && evaluated.length > 1) {
+        throw protocolError('batch_reuse_unsupported', '--reuse-result is not supported for repeated --outline targets');
+      }
       if (args.reuseResult && validateReusableResult(existing, args, quality, relativeOutline)) {
         packet = reusedPacket(existing);
         reused = true;
@@ -50,22 +63,32 @@ try {
     atomicWritePacket(resultFile, packet);
   }
   process.stdout.write(`${JSON.stringify(packet, null, 2)}\n`);
-  process.exit(accepted(packet.outputs.detail_outline_quality.status) ? 0 : 2);
+  const outputQuality = packet.outputs.detail_outline_quality;
+  const passed = String(outputQuality.version || '') === 'detail_outline_quality_v2'
+    ? outputQuality.identities.every((item) => accepted(item.status))
+    : accepted(outputQuality.status);
+  process.exit(passed ? 0 : 2);
 } catch (error) {
   process.stdout.write(`${JSON.stringify(blockedErrorEnvelope(args, error), null, 2)}\n`);
   process.exit(2);
 }
 
 function parseArgs(argv) {
-  const out = { projectRoot: '', outline: '', workflowId: '', stageId: 'detail_outline_review', chapterPosition: '', semanticReview: '', writeResult: '', reuseResult: false, json: false, helpRequested: false };
+  const out = { projectRoot: '', outline: '', outlines: [], workflowId: '', stageId: 'detail_outline_review', chapterPosition: '', semanticReview: '', semanticReviews: [], writeResult: '', reuseResult: false, json: false, helpRequested: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--project-root') out.projectRoot = argv[++index] || '';
-    else if (arg === '--outline') out.outline = argv[++index] || '';
+    else if (arg === '--outline') {
+      out.outline = argv[++index] || '';
+      out.outlines.push(out.outline);
+    }
     else if (arg === '--workflow-id') out.workflowId = argv[++index] || '';
     else if (arg === '--stage-id') out.stageId = argv[++index] || 'detail_outline_review';
     else if (arg === '--chapter-position') out.chapterPosition = argv[++index] || '';
-    else if (arg === '--semantic-review') out.semanticReview = argv[++index] || '';
+    else if (arg === '--semantic-review') {
+      out.semanticReview = argv[++index] || '';
+      out.semanticReviews.push(out.semanticReview);
+    }
     else if (arg === '--write-result') out.writeResult = argv[++index] || '';
     else if (arg === '--reuse-result') out.reuseResult = true;
     else if (arg === '--json') out.json = true;
@@ -76,9 +99,9 @@ function parseArgs(argv) {
     }
   }
   if (out.helpRequested) return out;
-  if (!out.projectRoot || !out.outline) throw protocolError('missing_required_args', 'missing --project-root or --outline');
-  if (path.isAbsolute(out.outline)) throw protocolError('outline_path_invalid', 'outline must be a relative path');
-  if (out.semanticReview && path.isAbsolute(out.semanticReview)) throw protocolError('semantic_review_path_invalid', 'semantic-review must be a relative path');
+  if (!out.projectRoot || out.outlines.length === 0 || out.outlines.some((item) => !item)) throw protocolError('missing_required_args', 'missing --project-root or --outline');
+  if (out.outlines.some((item) => path.isAbsolute(item))) throw protocolError('outline_path_invalid', 'outline must be a relative path');
+  if (out.semanticReviews.some((item) => path.isAbsolute(item))) throw protocolError('semantic_review_path_invalid', 'semantic-review must be a relative path');
   if (out.writeResult && path.isAbsolute(out.writeResult)) throw protocolError('result_packet_path_invalid', 'write-result must be a relative path');
   if (out.reuseResult && !out.writeResult) throw protocolError('reuse_requires_result', '--reuse-result requires --write-result');
   if (out.writeResult && !out.workflowId) throw protocolError('workflow_id_missing', 'workflow_id missing while --write-result is present');
@@ -87,15 +110,15 @@ function parseArgs(argv) {
 }
 
 function errorArgs(argv) {
-  const out = { projectRoot: '', outline: '', workflowId: '', stageId: 'detail_outline_review', chapterPosition: '', semanticReview: '', writeResult: '', reuseResult: false, json: false, helpRequested: false };
+  const out = { projectRoot: '', outline: '', outlines: [], workflowId: '', stageId: 'detail_outline_review', chapterPosition: '', semanticReview: '', semanticReviews: [], writeResult: '', reuseResult: false, json: false, helpRequested: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--project-root') out.projectRoot = argv[++index] || '';
-    else if (arg === '--outline') out.outline = argv[++index] || '';
+    else if (arg === '--outline') { out.outline = argv[++index] || ''; out.outlines.push(out.outline); }
     else if (arg === '--workflow-id') out.workflowId = argv[++index] || '';
     else if (arg === '--stage-id') out.stageId = argv[++index] || 'detail_outline_review';
     else if (arg === '--chapter-position') out.chapterPosition = argv[++index] || '';
-    else if (arg === '--semantic-review') out.semanticReview = argv[++index] || '';
+    else if (arg === '--semantic-review') { out.semanticReview = argv[++index] || ''; out.semanticReviews.push(out.semanticReview); }
     else if (arg === '--write-result') out.writeResult = argv[++index] || '';
     else if (arg === '--reuse-result') out.reuseResult = true;
     else if (arg === '--json') out.json = true;
@@ -201,9 +224,12 @@ function readResultPacket(file) {
   }
 }
 
-function validateExistingOutline(packet, outlinePath) {
+function validateExistingOutlines(packet, outlinePaths) {
   const quality = packet && packet.outputs && packet.outputs.detail_outline_quality;
-  if (!quality || quality.outline_path !== outlinePath) {
+  const existingPaths = quality && String(quality.version || '') === 'detail_outline_quality_v2'
+    ? (Array.isArray(quality.identities) ? quality.identities : []).map((item) => String((item || {}).outline_path || ''))
+    : quality ? [String(quality.outline_path || '')] : [];
+  if (!quality || JSON.stringify(existingPaths) !== JSON.stringify(outlinePaths)) {
     throw protocolError('reuse_outline_path_mismatch', 'existing result outline_path mismatch');
   }
 }
@@ -311,6 +337,47 @@ function buildEnvelope(relativeOutline, quality, args) {
     heartbeat_update: {},
     budget_usage: {},
   };
+}
+
+function buildBatchEnvelope(evaluated, args) {
+  const identities = evaluated.map((item) => item.quality);
+  const reviewComplete = identities.every((item) => accepted(item.status)
+    || item.status === 'revise'
+    || item.status === 'outline_underfilled');
+  const needsRevision = identities.some((item) => item.status === 'revise' || item.status === 'outline_underfilled');
+  const aggregateStatus = needsRevision
+    ? 'revise'
+    : identities.some((item) => item.status === 'pass_with_advisory')
+      ? 'pass_with_advisory'
+      : reviewComplete ? 'pass' : 'revise';
+  const packet = buildEnvelope(evaluated[0].relativeOutline, evaluated[0].quality, args);
+  packet.step_status = reviewComplete ? 'completed' : 'blocked';
+  packet.outputs = {
+    detail_outline_quality: {
+      version: 'detail_outline_quality_v2',
+      workflow_id: args.workflowId,
+      stage_id: args.stageId,
+      status: aggregateStatus,
+      identities,
+    },
+  };
+  packet.evidence = evaluated.map((item) => ({
+    type: 'detail_outline',
+    path: item.relativeOutline,
+    outline_sha256: item.quality.outline_sha256,
+  }));
+  packet.verification_result = needsRevision ? 'revise' : reviewComplete ? 'pass' : 'blocked';
+  packet.blocking_reason = reviewComplete ? '' : 'detail_outline_quality_review_incomplete';
+  packet.next_recommendation = needsRevision ? '仅修订未通过的细纲后重新检查。' : '当前目标清单已完成整体审阅。';
+  packet.handoff_summary = needsRevision ? '目标清单审阅已完成，其中部分阶段细纲需要修订。' : '阶段细纲目标清单质量门已完成。';
+  packet.asset_revision = { status: 'verified', asset_id: 'current-story-stage' };
+  packet.review_decision = needsRevision ? 'revise' : reviewComplete ? 'accepted' : 'pending';
+  packet.lifecycle_transition_request = needsRevision
+    ? { action: 'return', target: 'stage_detail_outline' }
+    : { action: reviewComplete ? 'advance' : 'pause', target: args.stageId };
+  packet.checkpoint_state = { stage_id: args.stageId, outline_paths: evaluated.map((item) => item.relativeOutline) };
+  packet.resume_hint = needsRevision ? '仅修订未通过的细纲后重新运行整批质量检查。' : reviewComplete ? '从章节 Brief 阶段继续。' : '补齐语义审阅后重新运行整批质量检查。';
+  return packet;
 }
 
 function blockedErrorEnvelope(errorArgs, error) {

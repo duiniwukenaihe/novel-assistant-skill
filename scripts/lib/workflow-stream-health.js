@@ -27,6 +27,7 @@ const PROVIDER_FAILURE_PATTERNS = [
 ];
 
 const TERMINAL_RUN_PATTERNS = [
+  { pattern: /error_max_turns/gi, reason: 'max_turns_exhausted' },
   { pattern: /error_max_budget_usd/gi, reason: 'budget_exhausted' },
   { pattern: /max budget(?:\s+has)?\s+been reached/gi, reason: 'budget_exhausted' },
 ];
@@ -90,7 +91,10 @@ function createStreamHealthMonitor(overrides = {}) {
 
   function scanFailures(text) {
     for (const terminal of TERMINAL_RUN_PATTERNS) {
-      if (!stopReason && matchCount(text, terminal.pattern) > 0) {
+      // Structured host result events may be split across stdout chunks.
+      // The bounded rolling window preserves enough context to classify the
+      // terminal subtype without depending on chunk boundaries.
+      if (!stopReason && matchCount(window, terminal.pattern) > 0) {
         stop(terminal.reason, { host_signal: terminal.reason });
       }
     }

@@ -11,7 +11,7 @@ const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { appendIntegrationEvent } = require('./lib/integration-outbox');
-const { readShortProjectState, shortStateFile } = require('./lib/short-project-state');
+const { readShortProjectState, resolveShortProjectTitle, shortStateFile } = require('./lib/short-project-state');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -21,6 +21,7 @@ function main() {
   const authority = resolveTaskAuthority(root, workflowId);
   if (authority.status !== 'ok') return finish({ status: authority.status, workflow_id: workflowId }, 0, args.json);
   const task = authority.task;
+  if (Number(task.engine_version) === 3) return finish({ status: 'v3_engine_apply_required', workflow_id: workflowId, instruction: 'V3 任务必须调用全篇收束共享 service，并通过 V3 Engine 应用 StageResult。' }, 2, args.json);
   const execution = task.stage_execution || {};
   if (String(task.current_stage || '') !== 'final_check' || String(execution.status || '') !== 'running' || String(execution.stage_id || '') !== 'final_check') {
     return finish({ status: 'stage_action_not_applicable', expected: 'final_check', actual: task.current_stage || '', instruction: '读取当前 execution_command，不要重试旧阶段命令。' }, 0, args.json);
@@ -29,7 +30,7 @@ function main() {
   if (!fs.existsSync(proseFile)) return finish({ status: 'short_final_prose_missing', instruction: '返回全文组装阶段恢复 正文.md。' }, 0, args.json);
   const text = fs.readFileSync(proseFile, 'utf8');
   const plan = resolvePlannedSectionCount({ projectState: readShortProjectState(root) || {}, titleLock: readJson(shortStateFile(root, 'section-title-lock.json')) || {}, outlineText: readText(path.join(root, '小节大纲.md')) });
-  const headings = [...text.matchAll(/^##\s+第\s*0*(\d+)\s*节\b/gmu)].map((match) => Number(match[1]));
+  const headings = [...text.matchAll(/^##\s+第\s*0*(\d+)\s*节(?:\s+[^\n]*)?$/gmu)].map((match) => Number(match[1]));
   const expected = plan.status === 'locked' ? Array.from({ length: plan.count }, (_, index) => index + 1) : [];
   const deslop = readJson(path.join(root, `${task.task_dir}/result-packets/short_deslop.result.json`))
     || readJson(path.join(root, `${task.task_dir}/result-packets/deslop.result.json`))
@@ -74,7 +75,7 @@ function main() {
         event_type: 'story_completed',
         workflow_id: workflowId,
         project_id: String(projectState.project_id || ''),
-        project_title: String(projectState.project_title || projectState.title || ''),
+        project_title: resolveShortProjectTitle(projectState, path.basename(root)),
         artifact_path: '正文.md',
         artifact_digest: `sha256:${actualHash}`,
         summary: `短篇已完成最终检查，共 ${plan.count} 节。`,

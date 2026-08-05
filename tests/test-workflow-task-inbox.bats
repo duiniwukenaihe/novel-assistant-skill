@@ -4,6 +4,7 @@
 setup() {
     REPO="$BATS_TEST_DIRNAME/.."
     SCRIPT="$REPO/scripts/workflow-task-inbox.js"
+    CLI="$REPO/scripts/workflow-v3.js"
     WORKFLOW="$REPO/src/internal-skills/story-workflow/SKILL.md"
     ROUTER="$REPO/src/internal-skills/story/SKILL.md"
     ENTRY="$REPO/skills/novel-assistant/SKILL.md"
@@ -190,14 +191,14 @@ JSONL
 
 @test "short task inbox uses the bound project identity instead of a generic new-short label" {
     mkdir -p "$TMP_DIR/book/追踪/workflow" "$TMP_DIR/book/追踪/private-short-extension"
-    write_focused_task "wf-fruit-short" <<'JSON'
+    write_focused_task "wf-archive-short" <<'JSON'
 {
   "schemaVersion":"1.0.0",
   "state_version":1,
-  "workflow_id":"wf-fruit-short",
+  "workflow_id":"wf-archive-short",
   "workflow_type":"private_short_startup",
   "status":"running",
-  "task_dir":"追踪/workflow/tasks/wf-fruit-short",
+  "task_dir":"追踪/workflow/tasks/wf-archive-short",
   "user_goal":"新开短篇",
   "current_stage":"platform_genre_lock",
   "lifecycle":{"status":"active","user_goal":"新开短篇"},
@@ -213,12 +214,12 @@ JSON
     cat > "$TMP_DIR/book/追踪/private-short-extension/project-state.json" <<'JSON'
 {
   "schema_version":"1.0.0",
-  "project_id":"short-fruit-001",
-  "workflow_id":"wf-fruit-short",
+  "project_id":"short-archive-001",
+  "workflow_id":"wf-archive-short",
   "status":"design_draft_pending_confirmation",
   "current_stage":"platform_genre_lock",
-  "selected_material":{"card_id":"hot_nfc_001","label":"NFC果汁事件"},
-  "working_title":"我在集团溯源直播里发现车间没有水果",
+  "selected_material":{"card_id":"hot_archive_001","label":"档案复核分歧"},
+  "working_title":"我在部门溯源复核里发现档案缺失",
   "platform":"番茄短篇"
 }
 JSON
@@ -230,9 +231,9 @@ const fs=require('fs');
 const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 if(out.candidateCount!==1 || out.task_cards.length!==1) throw new Error(JSON.stringify(out));
 const card=out.task_cards[0];
-if(card.title!=='我在集团溯源直播里发现车间没有水果') throw new Error(JSON.stringify(card));
-if(card.project_id!=='short-fruit-001') throw new Error(JSON.stringify(card));
-if(card.selected_material_label!=='NFC果汁事件') throw new Error(JSON.stringify(card));
+if(card.title!=='我在部门溯源复核里发现档案缺失') throw new Error(JSON.stringify(card));
+if(card.project_id!=='short-archive-001') throw new Error(JSON.stringify(card));
+if(card.selected_material_label!=='档案复核分歧') throw new Error(JSON.stringify(card));
 if(card.visible_stage!=='设定与人物') throw new Error(JSON.stringify(card));
 if(out.workflow_groups.length!==1 || out.workflow_groups[0].workflow_type!=='short_write') throw new Error(JSON.stringify(out.workflow_groups));
 if(out.workflow_groups[0].label!=='短篇创作') throw new Error(JSON.stringify(out.workflow_groups[0]));
@@ -381,10 +382,10 @@ JSON
     cat > "$TMP_DIR/book/追踪/private-short-extension/project-state.json" <<'JSON'
 {
   "schema_version":"1.0.0",
-  "project_id":"short-nfc-fruit",
+  "project_id":"short-archive-stale",
   "workflow_id":"wf-stale-packet",
-  "working_title":"我替家里直播鲜榨工厂，镜头里却一颗水果都没有",
-  "selected_material":{"card_id":"hot_nfc","label":"大型果汁集团溯源直播事件"},
+  "working_title":"我在部门溯源复核里发现档案缺失，责任人却要公开掩盖",
+  "selected_material":{"card_id":"hot_archive","label":"大型部门溯源复核事件"},
   "status":"section_006_quality_gate"
 }
 JSON
@@ -443,9 +444,9 @@ if(card.status!=='blocked_stale_result_packet_scope') throw new Error(JSON.strin
 if(card.next_actions[0].action_id!=='regenerate_current_result_packet') throw new Error(JSON.stringify(card));
 if(JSON.stringify(out).includes('继续检查故事质量')) throw new Error(JSON.stringify(out));
 if(!JSON.stringify(out).includes('上一小节同名 result packet')) throw new Error(JSON.stringify(out));
-if(!JSON.stringify(out).includes('当前作品：我替家里直播鲜榨工厂，镜头里却一颗水果都没有')) throw new Error(JSON.stringify(out));
-if(!JSON.stringify(out).includes('已选素材：大型果汁集团溯源直播事件')) throw new Error(JSON.stringify(out));
-if(card.working_title!=='我替家里直播鲜榨工厂，镜头里却一颗水果都没有') throw new Error(JSON.stringify(card));
+if(!JSON.stringify(out).includes('当前作品：我在部门溯源复核里发现档案缺失，责任人却要公开掩盖')) throw new Error(JSON.stringify(out));
+if(!JSON.stringify(out).includes('已选素材：大型部门溯源复核事件')) throw new Error(JSON.stringify(out));
+if(card.working_title!=='我在部门溯源复核里发现档案缺失，责任人却要公开掩盖') throw new Error(JSON.stringify(card));
 NODE
 }
 
@@ -1428,7 +1429,10 @@ NODE
     grep -q "entry-runtime-contract.md" "$ROUTER"
 }
 
-@test "workflow entry guard lets explicit new user intent bypass legacy task inbox" {
+@test "workflow entry guard hits the write-policy migration gate before the inbox even for explicit intent" {
+    # Defensive cleanup: the missing-policy assertion below must hold even if a
+    # future shared fixture pre-populates strict write-policy metadata.
+    rm -rf "$TMP_DIR/book/追踪/story-system"
     mkdir -p "$TMP_DIR/book/正文/第1卷"
     mkdir -p "$TMP_DIR/book/大纲/第1卷"
     printf '# 第001章\n' > "$TMP_DIR/book/正文/第1卷/第001章.md"
@@ -1439,19 +1443,22 @@ NODE
         --user-intent "/novel-assistant 请做当前短篇的反馈影响链检查" \
         --json > "$TMP_DIR/entry-explicit.json"
 
-    grep -q '"status":"pass"' "$TMP_DIR/entry-explicit.json"
-    grep -q '"recommended_next":"business_routing_allowed"' "$TMP_DIR/entry-explicit.json"
-    grep -q '"user_intent_present":true' "$TMP_DIR/entry-explicit.json"
-    grep -q '"task_inbox_deferred_for_explicit_intent":true' "$TMP_DIR/entry-explicit.json"
-    grep -q '"candidateCount":1' "$TMP_DIR/entry-explicit.json"
+    # Task 3 gate ordering: even an explicit business intent cannot bypass
+    # the write-policy migration when the project lacks a strict policy.
+    grep -q '"status":"write_policy_migration_required"' "$TMP_DIR/entry-explicit.json"
+    grep -q '"recommended_next":"preview_or_confirm_write_policy_migration"' "$TMP_DIR/entry-explicit.json"
+    grep -q '"business_routing_allowed":false' "$TMP_DIR/entry-explicit.json"
+    # The original intent must be preserved in the visible preview command.
+    grep -q "book-write-policy-migrate.js" "$TMP_DIR/entry-explicit.json"
+    grep -q '请做当前短篇的反馈影响链检查' "$TMP_DIR/entry-explicit.json"
 
     node "$REPO/scripts/workflow-entry-guard.js" \
         --project-root "$TMP_DIR/book" \
         --user-intent "1" \
         --json > "$TMP_DIR/entry-short.json"
 
-    grep -q '"status":"task_inbox_ready"' "$TMP_DIR/entry-short.json"
-    grep -q '"recommended_next":"show_task_inbox_only"' "$TMP_DIR/entry-short.json"
+    grep -q '"status":"write_policy_migration_required"' "$TMP_DIR/entry-short.json"
+    grep -q '"recommended_next":"preview_or_confirm_write_policy_migration"' "$TMP_DIR/entry-short.json"
 }
 
 @test "workflow entry guard shows new project onboarding for uninitialized directory" {
@@ -1546,5 +1553,87 @@ NODE
 const out=JSON.parse(require('fs').readFileSync(process.argv[2],'utf8'));
 const card=(out.task_cards||[])[0];
 if(!card||card.status!=='paused') throw new Error(JSON.stringify(card));
+NODE
+}
+
+@test "focused V3 whole-story revision opens its full overview without calling the V2 state machine" {
+    # A V3 short_write task whose whole-story revision queue is running makes
+    # task_overview_required=true. There is no pending_action, so workflow-v3
+    # show renders interaction=null. The inbox must surface the full revision
+    # overview and a V3 continuation command, never a V2 activate command.
+    write_focused_task wf-v3-overview <<'JSON'
+{
+  "schemaVersion":"1.0.0",
+  "state_version":3,
+  "workflow_id":"wf-v3-overview",
+  "workflow_type":"short_write",
+  "engine_version":3,
+  "task_schema_version":3,
+  "workflow_contract_version":3,
+  "status":"running",
+  "task_dir":"追踪/workflow/tasks/wf-v3-overview",
+  "user_goal":"整篇回炉",
+  "scope":"全篇",
+  "current_stage":"section_repair_loop",
+  "current_step":"section_repair_loop",
+  "feedback_revision_queue":{
+    "status":"running",
+    "current_section_index":1,
+    "items":[
+      {"section_index":1,"title":"第一节","status":"pending"},
+      {"section_index":2,"title":"第二节","status":"pending"}
+    ]
+  },
+  "runtime_guard":{"heartbeat":{"updated_at":"2026-07-18T00:00:00.000Z"},"stall_policy":{"heartbeat_timeout_minutes":999999},"checkpoint_policy":{"resume_from":"section_repair_loop"}}
+}
+JSON
+
+    node "$SCRIPT" --project-root "$TMP_DIR/book" --json --action show_unfinished_tasks > "$TMP_DIR/out.json"
+
+    node - "$TMP_DIR/out.json" <<'NODE'
+const fs=require('fs');
+const out=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+if(out.status!=='workflow_task_overview') throw new Error(JSON.stringify(out));
+if(!Array.isArray(out.options)||out.options.length!==4) throw new Error(JSON.stringify(out.options));
+if(out.options[0].action_id!=='open_current_v3_subtask') throw new Error(JSON.stringify(out.options));
+if(!String(out.options[0].execution_command||'').includes('workflow-entry-guard.js')) throw new Error(JSON.stringify(out.options[0]));
+if(String(out.options[0].execution_command||'').includes('workflow-state-machine.js')) throw new Error(JSON.stringify(out.options[0]));
+if(!String(out.visible_response||'').includes('总进度：')) throw new Error(out.visible_response||'');
+if(!String(out.visible_response||'').includes('当前子任务：')) throw new Error(out.visible_response||'');
+if(/resume_unique_v3_checkpoint/.test(JSON.stringify(out))) throw new Error('null v3_interaction suppressed the task overview');
+NODE
+}
+
+@test "show_unfinished_tasks forwards a real committed V3 interaction verbatim without rebuilding numbers" {
+    # Build a real V3 task with a pending author choice via the engine, so the
+    # committed interaction envelope is authoritative. task_overview_required is
+    # false (no revision queue). Contract 3: the inbox must forward that
+    # envelope byte-for-byte in show_unfinished_tasks and never renumber.
+    mkdir -p "$TMP_DIR/book"
+    node "$CLI" create-short --project-root "$TMP_DIR/book" --profile public \
+        --user-goal "中性短篇目标" --json > "$TMP_DIR/create.json"
+    local wfid
+    wfid="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).task.workflow_id)" "$TMP_DIR/create.json")"
+    printf '%s\n' '{"kind":"needs_author_choice","code":"pick_direction","stage_id":"creative_entry","question":"请选择下一步方向","options":[{"action_id":"proceed","label":"继续推进"},{"action_id":"adjust","label":"调整方向"}]}' > "$TMP_DIR/result.json"
+    node "$CLI" apply-result --project-root "$TMP_DIR/book" --workflow-id "$wfid" \
+        --expected-version 1 --result-file "$TMP_DIR/result.json" --json > "$TMP_DIR/apply.json"
+
+    node "$CLI" show --project-root "$TMP_DIR/book" --workflow-id "$wfid" --json > "$TMP_DIR/show.json"
+
+    node "$SCRIPT" --project-root "$TMP_DIR/book" --json --action show_unfinished_tasks > "$TMP_DIR/out.json"
+
+    node - "$TMP_DIR/show.json" "$TMP_DIR/out.json" <<'NODE'
+const fs=require('fs');
+const [showFile, outFile] = process.argv.slice(2);
+const show = JSON.parse(fs.readFileSync(showFile, 'utf8'));
+const out = JSON.parse(fs.readFileSync(outFile, 'utf8'));
+if (out.status !== 'current_v3_task') throw new Error(JSON.stringify(out));
+if (out.selection_contract !== 'v3_committed_binding') throw new Error(JSON.stringify(out));
+// visible_response must be the SAME envelope object, byte-for-byte text and the
+// four-field binding; the inbox must not renumber or paraphrase.
+if (!out.visible_response) throw new Error('visible_response was null for a real V3 interaction');
+if (out.visible_response.text !== show.interaction.text) throw new Error('inbox changed the V3 text');
+if (JSON.stringify(out.visible_response.binding) !== JSON.stringify(show.interaction.binding)) throw new Error('inbox changed the V3 binding');
+if (Array.isArray(out.visible_response.options)) throw new Error('inbox rebuilt a V3 options array');
 NODE
 }

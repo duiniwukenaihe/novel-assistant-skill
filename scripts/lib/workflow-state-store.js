@@ -265,13 +265,29 @@ function acquireNamedProjectLock(projectRoot, options) {
     if (!error || error.code !== 'EEXIST') throw error;
     const lock = readLock(lockDir);
     if (!isStaleLock(lock, options.ttlMs)) {
-      const locked = new Error(`${options.errorLabel} is held by ${lock.owner || 'another process'}`);
-      locked.code = options.errorCode;
-      locked.lock = lock;
-      throw locked;
+      throw namedLockConflict(options, lock);
     }
-    fs.rmSync(lockDir, { recursive: true, force: true });
-    fs.mkdirSync(lockDir);
+    const staleDir = `${lockDir}.stale-${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+    try {
+      // rename is the atomic stale-lock claim. Only one contender can move the
+      // observed stale directory; every loser must retry against the new owner.
+      fs.renameSync(lockDir, staleDir);
+    } catch (renameError) {
+      if (renameError && renameError.code === 'ENOENT') {
+        return acquireNamedProjectLock(projectRoot, options);
+      }
+      throw renameError;
+    }
+    try {
+      fs.mkdirSync(lockDir);
+    } catch (claimError) {
+      if (claimError && claimError.code === 'EEXIST') {
+        throw namedLockConflict(options, readLock(lockDir));
+      }
+      throw claimError;
+    } finally {
+      fs.rmSync(staleDir, { recursive: true, force: true });
+    }
   }
 
   const token = crypto.randomBytes(16).toString('hex');
@@ -290,6 +306,13 @@ function acquireNamedProjectLock(projectRoot, options) {
     if (current.token && current.token !== token) return;
     fs.rmSync(lockDir, { recursive: true, force: true });
   };
+}
+
+function namedLockConflict(options, lock) {
+  const locked = new Error(`${options.errorLabel} is held by ${lock.owner || 'another process'}`);
+  locked.code = options.errorCode;
+  locked.lock = lock;
+  return locked;
 }
 
 function readLock(lockDir) {

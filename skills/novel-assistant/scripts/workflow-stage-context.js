@@ -14,6 +14,8 @@
 //     --project-root <book> [--workflow-id <id>] [--stage <stage_id>] --json
 //   node scripts/workflow-stage-context.js read-current \
 //     --project-root <book> --workflow-id <id>
+//   node scripts/workflow-stage-context.js build-and-read \
+//     --project-root <book> --workflow-id <id> [--stage <stage_id>] --json
 //
 // If --workflow-id is omitted, the focused task (追踪/workflow/current-task.json)
 // is resolved. If --stage is omitted, the task's current_stage is used.
@@ -35,11 +37,15 @@ const USAGE = `Usage: node scripts/workflow-stage-context.js <command> [options]
 
 Commands:
   build   Build the minimal section-context packet for drafting one short section.
+  build-and-read   Build the current packet and return its content in one command.
   read-current   Print the authoritative current stage packet without copying its path.
   refresh-current   Rebuild and atomically bind the current running stage packet.
 
 build:
   build --project-root <book> [--workflow-id <id>] [--stage <stage_id>] --json
+
+build-and-read:
+  build-and-read --project-root <book> [--workflow-id <id>] [--stage <stage_id>] [--json]
 
 read-current:
   read-current --project-root <book> --workflow-id <id> [--json]
@@ -125,6 +131,39 @@ function build(args) {
   return result;
 }
 
+function buildAndRead(args) {
+  const root = path.resolve(args.projectRoot);
+  const task = readTask(root, args.workflowId);
+  if (!task) return { status: 'blocked_task_not_found', workflow_id: String(args.workflowId || '') };
+  const stage = String(args.stage || task.current_stage || '');
+  const packet = buildStageContextPacket({ projectRoot: root, task, stage });
+  if (packet.status !== 'assembled') return packet;
+  const packetRel = String(packet.packet_md || '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const packetFile = path.resolve(root, packetRel);
+  if (!packetRel || (packetFile !== root && !packetFile.startsWith(`${root}${path.sep}`))) {
+    return { status: 'blocked_stage_context_path_unsafe', workflow_id: String(task.workflow_id || ''), stage_id: stage };
+  }
+  if (!fs.existsSync(packetFile) || !fs.statSync(packetFile).isFile()) {
+    return {
+      status: 'blocked_stage_context_file_missing',
+      workflow_id: String(task.workflow_id || ''),
+      stage_id: stage,
+      packet_md: packetRel,
+    };
+  }
+  return {
+    status: 'stage_context_ready',
+    workflow_id: String(task.workflow_id || ''),
+    stage_id: stage,
+    packet_md: packetRel,
+    packet_json: String(packet.packet_json || ''),
+    memory_read_receipt: packet.memory_read_receipt || null,
+    token_budget: Number(packet.token_budget || 0),
+    estimated_tokens: Number(packet.estimated_tokens || 0),
+    content: `# 当前阶段上下文\n\n${fs.readFileSync(packetFile, 'utf8')}`,
+  };
+}
+
 function readCurrent(args) {
   const root = path.resolve(args.projectRoot);
   const task = readTask(root, args.workflowId);
@@ -177,7 +216,7 @@ function readCurrent(args) {
 
 function main() {
   const args = parseArgs(process.argv);
-  if (!['build', 'read-current', 'refresh-current'].includes(args.command)) {
+  if (!['build', 'build-and-read', 'read-current', 'refresh-current'].includes(args.command)) {
     process.stderr.write(`${USAGE}\n`);
     process.exit(1);
   }
@@ -189,13 +228,15 @@ function main() {
   try {
     result = args.command === 'read-current'
       ? readCurrent(args)
+      : args.command === 'build-and-read'
+        ? buildAndRead(args)
       : args.command === 'refresh-current'
         ? refreshCurrentStageContext(path.resolve(args.projectRoot), args.workflowId || String((readFocusedTask(path.resolve(args.projectRoot)) || {}).workflow_id || ''))
         : build(args);
   } catch (error) {
     result = { status: 'error', message: error.message };
   }
-  if (args.command === 'read-current' && !args.json && result.status === 'stage_context_ready') {
+  if (['read-current', 'build-and-read'].includes(args.command) && !args.json && result.status === 'stage_context_ready') {
     process.stdout.write(result.content);
   } else if (args.json) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

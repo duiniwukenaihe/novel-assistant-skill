@@ -38,13 +38,13 @@ function countCjkAndAsciiStoryChars(text) {
 }
 
 function toleranceFor(target, unit) {
-  const lowerPercent = unit === 'short' ? 0.10 : 0.08;
-  const upperPercent = unit === 'short' ? 0.12 : 0.08;
-  const hardPercent = unit === 'short' ? 0.22 : 0.25;
+  const lowerPercent = ['short', 'section', 'chapter'].includes(unit) ? 0.10 : 0.08;
+  const upperPercent = unit === 'section' || unit === 'chapter' ? 0.20 : unit === 'short' ? 0.12 : 0.08;
+  const hardPercent = unit === 'short' ? 0.22 : ['section', 'chapter'].includes(unit) ? 0.10 : 0.25;
   return {
     lower: Math.max(120, Math.ceil(target * lowerPercent)),
     upper: Math.max(150, Math.ceil(target * upperPercent)),
-    hardShortfall: Math.max(300, Math.ceil(target * hardPercent)),
+    hardShortfall: Math.ceil(target * hardPercent),
   };
 }
 
@@ -53,6 +53,7 @@ function evaluate(actual, target, unit) {
   const lowerBand = Math.max(0, target - tolerance.lower);
   const upperBand = target + tolerance.upper;
   const hardFloor = Math.max(0, target - tolerance.hardShortfall);
+  const hardCeiling = upperBand;
   const delta = actual - target;
 
   const base = {
@@ -64,16 +65,20 @@ function evaluate(actual, target, unit) {
     lower_tolerance: tolerance.lower,
     upper_tolerance: tolerance.upper,
     hard_floor: hardFloor,
+    hard_ceiling: hardCeiling,
   };
 
   if (actual < hardFloor) {
+    const isChapter = unit === 'chapter';
     return {
       ...base,
       status: 'blocking',
-      verdict: 'under_hard_floor',
+      verdict: 'under_target_repair_required',
       blocking: true,
-      recommended_action: 'add_story_events_or_redesign_section',
-      note: '明显低于硬底线：先补真实子事件、对话冲突、选择代价或重构小节，不要用空描写凑字。',
+      recommended_action: isChapter ? 'add_story_events_or_redesign_chapter' : 'add_story_events_or_redesign_section',
+      note: isChapter
+        ? '章节低于目标 10% 下限：自动补真实子事件、对话冲突、选择代价或重构章节，不要让作者确认欠写，也不要用空描写凑字。'
+        : '小节低于目标 10% 下限：自动补真实子事件、对话冲突、选择代价或重构小节，不要让作者确认欠写，也不要用空描写凑字。',
     };
   }
 
@@ -98,6 +103,20 @@ function evaluate(actual, target, unit) {
       blocking: false,
       recommended_action: 'keep_narrative_shape',
       note: '处于目标容忍带内：保持叙事形态，不要为了贴合精确字数机械压缩或扩写。',
+    };
+  }
+
+  if (unit === 'section' || unit === 'chapter') {
+    const isChapter = unit === 'chapter';
+    return {
+      ...base,
+      status: 'blocking',
+      verdict: 'over_target_repair_required',
+      blocking: true,
+      recommended_action: isChapter ? 'remove_repetition_or_split_overloaded_chapter' : 'remove_repetition_or_split_overloaded_section',
+      note: isChapter
+        ? '章节超过目标 20% 上限：自动删除重复和无功能段落；承担项过载时回到规划拆解。'
+        : '小节超过目标 20% 上限：自动删除重复和无功能段落；承担项过载时回到规划拆解。',
     };
   }
 

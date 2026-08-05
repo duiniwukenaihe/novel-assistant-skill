@@ -34,11 +34,17 @@
 const fs = require('fs');
 const path = require('path');
 
-const { buildEffectiveTemplates, resolveTemplateForTask } = require('./workflow-template-registry');
+const {
+  RESULT_CONTRACT_V2_FIELDS,
+  buildEffectiveTemplates,
+  resolveTemplateForTask,
+} = require('./workflow-template-registry');
 const { createWorkflowTransitionService } = require('./workflow-transition-service');
+const { buildPendingAction } = require('./workflow-action-renderer');
 const authority = require('./workflow-task-authority');
 const store = require('./workflow-state-store');
 const { ensureTaskFamily } = require('./task-family-store');
+const { validateInteractiveMemoryReceipt } = require('./workflow-interactive-memory-receipt');
 
 // The transition service needs the same lifecycle helpers the state machine
 // wires up. We provide minimal implementations sufficient for stage routing:
@@ -97,6 +103,60 @@ function trustedArtifactFromResult(result) {
   const changed = Array.isArray(result.changed_files) ? result.changed_files : [];
   const firstProse = changed.find((candidate) => /\.md$/i.test(String(candidate)) && !/Brief| brief /i.test(String(candidate)));
   return firstProse || '';
+}
+
+function validateResultContract(task, result) {
+  const findings = [];
+  for (const field of ['workflow_id', 'workflow_type', 'stage_id', 'step_id', 'step_status']) {
+    if (result[field] === undefined || result[field] === null || String(result[field]) === '') {
+      findings.push({ field, message: 'result packet 缺少必填字段。' });
+    }
+  }
+  if (String(result.workflow_id || '') !== String(task.workflow_id || '')) {
+    findings.push({ field: 'workflow_id', message: 'result packet workflow_id 与当前任务不一致。' });
+  }
+  if (String(result.workflow_type || '') !== String(task.workflow_type || '')) {
+    findings.push({ field: 'workflow_type', message: 'result packet workflow_type 与当前任务不一致。' });
+  }
+  if (String(result.stage_id || '') !== String(task.current_stage || '')) {
+    findings.push({ field: 'stage_id', message: 'result packet stage_id 与当前阶段不一致。' });
+  }
+  if (!['completed', 'blocked', 'failed', 'skipped'].includes(String(result.step_status || ''))) {
+    findings.push({ field: 'step_status', message: 'result packet step_status 非法。' });
+  }
+  if (findings.length > 0) return validationBlock('blocked_result_packet_invalid', findings);
+  if (Number(task.result_contract_version || 1) < 2) return null;
+
+  const missing = RESULT_CONTRACT_V2_FIELDS.filter((field) => result[field] === undefined || result[field] === null);
+  if (missing.length > 0) {
+    return validationBlock('blocked_result_packet_incomplete', missing.map((field) => ({
+      field,
+      message: 'v2 result packet 缺少必填字段。',
+    })));
+  }
+  const execution = task.stage_execution && typeof task.stage_execution === 'object'
+    ? task.stage_execution
+    : {};
+  if (String(execution.status || '') !== 'running') {
+    return validationBlock('blocked_stage_execution_required', [{
+      field: 'stage_execution.status',
+      message: 'v2 result packet 只能应用到当前 running stage_execution。',
+    }]);
+  }
+  if (String(execution.stage_id || '') !== String(task.current_stage || '')
+      || String(result.stage_id || '') !== String(execution.stage_id || '')
+      || String(execution.step_id || '') !== String(task.current_step || '')
+      || String(result.step_id || '') !== String(execution.step_id || '')) {
+    return validationBlock('blocked_stage_execution_mismatch', [{
+      field: 'stage_execution',
+      message: 'result packet 必须匹配当前 running stage_execution 的 stage_id 与 step_id。',
+    }]);
+  }
+  return null;
+}
+
+function validationBlock(status, findings) {
+  return { status, findings };
 }
 
 function workflowDir(root) {
@@ -231,7 +291,9 @@ function applyTransitionToTask(task, tpl, transition, result, now) {
     resume_from: nextStageId || stageId,
     expected_result_packet: '',
   };
-  if (!nextStageId) task.pending_action = null;
+  task.pending_action = nextStageId
+    ? buildPendingAction(tpl, (tpl.stages || []).find((stage) => String((stage || {}).stage_id || '') === nextStageId))
+    : null;
   return task;
 }
 
@@ -374,6 +436,20 @@ function advanceStage(input) {
   if (!result || result.__error) {
     return { status: 'blocked_invalid_result_packet', workflow_id: workflowId, recovery_count: 0, message: result ? result.__error : 'missing result packet' };
   }
+  const declaredPath = String(result.result_packet_path || '').trim();
+  if (declaredPath) {
+    const declaredAbsolute = path.isAbsolute(declaredPath)
+      ? path.resolve(declaredPath)
+      : path.resolve(root, declaredPath);
+    if (!isInsideProject(root, declaredAbsolute)) {
+      return { status: 'blocked_result_packet_path_unsafe', workflow_id: workflowId, recovery_count: 0 };
+    }
+    if (declaredAbsolute !== resultPath) {
+      return { status: 'blocked_result_packet_path_mismatch', workflow_id: workflowId, recovery_count: 0 };
+    }
+  } else {
+    result.result_packet_path = path.relative(root, resultPath).split(path.sep).join('/');
+  }
   if (String(result.workflow_id || '') !== workflowId) {
     return { status: 'blocked_result_task_scope_conflict', workflow_id: workflowId, recovery_count: 0 };
   }
@@ -399,6 +475,43 @@ function advanceStage(input) {
   } else {
     // Authority missing is non-recoverable.
     return { status: firstAuthority.status, workflow_id: workflowId, recovery_count: 0, message: firstAuthority.message || 'durable task snapshot is unavailable' };
+  }
+  const resultDirectory = path.resolve(root, String(firstTask.task_dir || ''), 'result-packets');
+  if (!isInsideProject(root, resultDirectory)
+      || path.dirname(resultPath) !== resultDirectory
+      || !/\.result\.json$/u.test(path.basename(resultPath))) {
+    return { status: 'blocked_result_packet_path_mismatch', workflow_id: workflowId, recovery_count: 0 };
+  }
+  const expectedPacket = String((((firstTask || {}).stage_execution || {}).expected_result_packet) || '').trim();
+  if (expectedPacket) {
+    const expectedAbsolute = path.isAbsolute(expectedPacket)
+      ? path.resolve(expectedPacket)
+      : path.resolve(root, expectedPacket);
+    if (!isInsideProject(root, expectedAbsolute)) {
+      return { status: 'blocked_result_packet_path_unsafe', workflow_id: workflowId, recovery_count: 0 };
+    }
+    if (expectedAbsolute !== resultPath) {
+      return { status: 'blocked_result_packet_path_mismatch', workflow_id: workflowId, recovery_count: 0 };
+    }
+  }
+  const resultValidation = validateResultContract(firstTask, result);
+  if (resultValidation) {
+    return {
+      status: resultValidation.status,
+      workflow_id: workflowId,
+      recovery_count: 0,
+      findings: resultValidation.findings || [],
+    };
+  }
+  const memoryValidation = validateInteractiveMemoryReceipt(root, firstTask, result);
+  if (memoryValidation) {
+    return {
+      status: memoryValidation.status,
+      workflow_id: workflowId,
+      recovery_count: 0,
+      message: memoryValidation.message || '',
+      findings: memoryValidation.findings || [],
+    };
   }
 
   let firstResult;

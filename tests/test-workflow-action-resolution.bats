@@ -146,3 +146,29 @@ NODE
         [[ "$output" != *'"selection_status":"resolved"'* ]]
     done
 }
+
+@test "longform review menu names the actual review action instead of repeating the author phase" {
+    run node - "$REPO" <<'NODE'
+const repo = process.argv[2];
+const { buildPendingAction } = require(`${repo}/scripts/lib/workflow-action-renderer`);
+const { BASE_TEMPLATES } = require(`${repo}/scripts/lib/workflow-template-registry`);
+const expected = {
+  chapter_brief: '继续生成当前章节 Brief（推荐）',
+  brief_review: '继续审阅当前章节 Brief（推荐）',
+  prose_acceptance: '继续验收当前章节正文（推荐）',
+  chapter_commit: '继续提交当前章节事实与记忆（推荐）',
+  milestone_review: '继续复盘当前章节（推荐）',
+  volume_acceptance: '继续验收当前卷并生成交接（推荐）',
+  book_acceptance: '继续验收全书（推荐）',
+};
+for (const [stageId, label] of Object.entries(expected)) {
+  const stage = BASE_TEMPLATES.long_write.stages.find(item => item.stage_id === stageId);
+  const pending = buildPendingAction(BASE_TEMPLATES.long_write, stage);
+  if (pending.options[0].label !== label) {
+    throw new Error(`ambiguous ${stageId} label: ${pending.options[0].label}`);
+  }
+}
+NODE
+
+    [ "$status" -eq 0 ]
+}

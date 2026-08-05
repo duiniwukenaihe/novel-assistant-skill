@@ -1,0 +1,19 @@
+{
+  "workflow_id": "wf-neutral-brief",
+  "workflow_type": "short_write",
+  "workflow_contract_version": 3,
+  "task_dir": "追踪/workflow/tasks/wf-neutral-brief",
+  "status": "running",
+  "current_stage": "draft_next_section",
+  "current_step": "draft_next_section",
+  "state_version": 12,
+  "scope": "第2节",
+  "stage_execution": {
+    "status": "running",
+    "stage_id": "draft_next_section",
+    "step_id": "draft_next_section",
+    "stage_attempt_id": "sa-neutral-brief",
+    "expected_result_packet": "追踪/workflow/tasks/wf-neutral-brief/result-packets/draft_next_section.section-002.result.json"
+  },
+  "lifecycle": { "status": "active" }
+}

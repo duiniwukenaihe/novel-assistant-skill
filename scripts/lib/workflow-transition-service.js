@@ -20,6 +20,44 @@ function validateDetailOutlineQualityResult(result, task, projectRoot = '') {
   const code = 'detail_outline_quality_identity_missing';
   if (!quality || typeof quality !== 'object' || Array.isArray(quality)) return { status: 'identity_missing', code };
 
+  if (String(quality.version || '') === 'detail_outline_quality_v2') {
+    const identities = Array.isArray(quality.identities) ? quality.identities : [];
+    const expectedTargets = Array.isArray(((task || {}).stage_execution || {}).review_targets)
+      ? task.stage_execution.review_targets
+      : [];
+    const expectedPaths = new Set(expectedTargets.map((item) => String((item || {}).outline_path || '')).filter(Boolean));
+    const actualPaths = identities.map((item) => String((item || {}).outline_path || '')).filter(Boolean);
+    if (expectedPaths.size === 0 || identities.length === 0) {
+      return { status: 'identity_missing', code: 'detail_outline_quality_coverage_missing' };
+    }
+    if (new Set(actualPaths).size !== actualPaths.length) {
+      return { status: 'invalid', code: 'detail_outline_quality_identity_duplicate' };
+    }
+    if (actualPaths.some((outlinePath) => !expectedPaths.has(outlinePath))) {
+      return { status: 'invalid', code: 'detail_outline_quality_target_unexpected' };
+    }
+    if (actualPaths.length !== expectedPaths.size || [...expectedPaths].some((outlinePath) => !actualPaths.includes(outlinePath))) {
+      return { status: 'identity_missing', code: 'detail_outline_quality_coverage_missing' };
+    }
+    let reviewFailed = null;
+    for (const identity of identities) {
+      const expected = expectedTargets.find((item) => String((item || {}).outline_path || '') === String((identity || {}).outline_path || ''));
+      if (expected && String(expected.outline_sha256 || '') !== String((identity || {}).outline_sha256 || '')) {
+        return { status: 'invalid', code: 'detail_outline_quality_outline_sha256_mismatch' };
+      }
+      const validation = validateDetailOutlineQualityIdentity(identity, result, task, projectRoot);
+      if (validation.status === 'identity_missing' || validation.status === 'invalid') return validation;
+      if (validation.status === 'review_failed') reviewFailed = validation;
+    }
+    return reviewFailed || { status: 'accepted', code: '' };
+  }
+
+  return validateDetailOutlineQualityIdentity(quality, result, task, projectRoot);
+}
+
+function validateDetailOutlineQualityIdentity(quality, result, task, projectRoot = '') {
+  const code = 'detail_outline_quality_identity_missing';
+
   const outlinePath = String(quality.outline_path || '');
   const outlineSha256 = String(quality.outline_sha256 || '');
   const sameWorkflow = String(quality.workflow_id || '') === String(task.workflow_id || '');
@@ -134,6 +172,7 @@ function validateLifecycleTransitionRequest(stageDef = {}, currentStage = '', re
   const target = String(request.target || '').trim();
   const allowedNext = Array.isArray(stageDef.allowed_next) ? stageDef.allowed_next.map(String) : [];
   const failureReturn = String((((stageDef || {}).review_requirement || {}).failure_return) || '');
+  const failureReturns = failureReturnTargets(stageDef);
   const blocked = transitionResultIsBlocked(result);
   const explicitNext = String(result.next_stage_id || result.next_stage || result.target_stage || '').trim();
 
@@ -152,10 +191,14 @@ function validateLifecycleTransitionRequest(stageDef = {}, currentStage = '', re
     return { status: 'valid', code: '', action, target, requested_next: requestedNext || explicitNext };
   }
   if (action === 'return') {
-    if (!blocked || !failureReturn || target !== failureReturn) {
-      return { status: 'invalid', code: 'lifecycle_transition_return_invalid', action, target, failure_return: failureReturn, requested_next: '' };
+    if (target && explicitNext && target !== explicitNext) {
+      return { status: 'invalid', code: 'lifecycle_transition_target_conflict', action, target, explicit_next: explicitNext, requested_next: '' };
     }
-    return { status: 'valid', code: '', action, target, requested_next: failureReturn };
+    const requestedReturn = explicitNext || target || failureReturn;
+    if (!blocked || !requestedReturn || !failureReturns.includes(requestedReturn) || !allowedNext.includes(requestedReturn)) {
+      return { status: 'invalid', code: 'lifecycle_transition_return_invalid', action, target, failure_return: failureReturn, failure_returns: failureReturns, requested_next: '' };
+    }
+    return { status: 'valid', code: '', action, target: target || requestedReturn, requested_next: requestedReturn };
   }
   if (!blocked || (target && target !== currentStage)) {
     return { status: 'invalid', code: 'lifecycle_transition_stay_invalid', action, target, requested_next: '' };
@@ -163,13 +206,39 @@ function validateLifecycleTransitionRequest(stageDef = {}, currentStage = '', re
   return { status: 'valid', code: '', action, target: target || currentStage, requested_next: currentStage };
 }
 
+function failureReturnTargets(stageDef = {}) {
+  const fallback = String((((stageDef || {}).review_requirement || {}).failure_return) || '');
+  const scopedReturns = ((stageDef || {}).transition_contract || {}).failure_returns;
+  const scoped = Array.isArray(scopedReturns)
+    ? stageDef.transition_contract.failure_returns.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  return Array.from(new Set([...(fallback ? [fallback] : []), ...scoped]));
+}
+
 function transitionResultIsBlocked(result = {}) {
   if (['blocked', 'failed'].includes(String(result.step_status || '').toLowerCase())) return true;
+  if (['revise', 'rejected', 'blocked', 'failed'].includes(String(result.review_decision || '').toLowerCase())) return true;
+  const detailOutlineStatus = String(((((result || {}).outputs || {}).detail_outline_quality || {}).status) || '').toLowerCase();
+  if (['revise', 'outline_underfilled'].includes(detailOutlineStatus)) return true;
   for (const field of ['blocking_findings', 'blockingFindings', 'hard_blockers', 'hardBlockers']) {
     if (Array.isArray(result[field]) && result[field].length > 0) return true;
   }
   return ['verification_result', 'output_health_result', 'machine_gate_result', 'gate_result']
     .some((field) => /(blocking|blocked|fail|failed|reject|rejected|hard_blocker|error)/.test(String(result[field] || '').toLowerCase()));
+}
+
+function validateReviewRevisionReturn(stageDef = {}, currentStage = '', result = {}) {
+  const stepStatus = String(result.step_status || '').trim().toLowerCase();
+  const qualityStatus = String(((((result || {}).outputs || {}).detail_outline_quality || {}).status) || '').trim().toLowerCase();
+  if (stepStatus !== 'completed' || !['revise', 'outline_underfilled'].includes(qualityStatus)) {
+    return { valid: false, reason: 'not_completed_revision_result' };
+  }
+  const transition = validateLifecycleTransitionRequest(stageDef, currentStage, result);
+  return {
+    valid: transition.status === 'valid' && transition.action === 'return',
+    reason: transition.status === 'valid' && transition.action === 'return' ? '' : transition.code,
+    transition,
+  };
 }
 
 // Pure stage-transition rules. The state-machine facade owns validation and
@@ -249,9 +318,10 @@ function createWorkflowTransitionService(deps) {
     const baseValidation = validateLifecycleTransition(from, to);
     if (baseValidation.allowed) return { ...baseValidation, rule: 'canonical_lifecycle_transition' };
     const requirement = (stageDef || {}).review_requirement || {};
+    const failureReturns = failureReturnTargets(stageDef);
     const allowedReviewRollback = requestedRule === 'required_review_failure_return'
       && requirement.required === true
-      && String(requirement.failure_return || '') === String(to || '');
+      && failureReturns.includes(String(to || ''));
     return {
       allowed: allowedReviewRollback,
       from,
@@ -265,9 +335,11 @@ function createWorkflowTransitionService(deps) {
     const ordered = tpl.stages.map((item) => item.stage_id);
     const allowed = stageDef && Array.isArray(stageDef.allowed_next) ? stageDef.allowed_next : [];
     const failureReturn = String((((stageDef || {}).review_requirement || {}).failure_return) || '');
+    const failureReturns = failureReturnTargets(stageDef);
 
     if (blocked && failureReturn) {
-      const validation = validateLongformLifecycleTransition(stageDef, stageId, failureReturn, 'required_review_failure_return');
+      const requestedReturn = explicitNext && failureReturns.includes(explicitNext) ? explicitNext : failureReturn;
+      const validation = validateLongformLifecycleTransition(stageDef, stageId, requestedReturn, 'required_review_failure_return');
       if (!validation.allowed) {
         return {
           next_stage_id: stageId,
@@ -278,10 +350,10 @@ function createWorkflowTransitionService(deps) {
           lifecycle_validation: validation,
         };
       }
-      const rollbackIndex = ordered.indexOf(failureReturn);
-      const invalidatedNodes = rollbackIndex >= 0 ? ordered.slice(rollbackIndex) : [failureReturn];
+      const rollbackIndex = ordered.indexOf(requestedReturn);
+      const invalidatedNodes = rollbackIndex >= 0 ? ordered.slice(rollbackIndex) : [requestedReturn];
       return {
-        next_stage_id: failureReturn,
+        next_stage_id: requestedReturn,
         complete_current_stage: false,
         remaining_stages: invalidatedNodes.slice(),
         invalidated_nodes: invalidatedNodes,
@@ -541,4 +613,9 @@ function createWorkflowTransitionService(deps) {
   };
 }
 
-module.exports = { createWorkflowTransitionService, validateDetailOutlineQualityResult, validateLifecycleTransitionRequest };
+module.exports = {
+  createWorkflowTransitionService,
+  validateDetailOutlineQualityResult,
+  validateLifecycleTransitionRequest,
+  validateReviewRevisionReturn,
+};

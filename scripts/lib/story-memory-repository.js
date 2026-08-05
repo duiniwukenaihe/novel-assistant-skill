@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { assertStorageBackend } = require('./storage-backend-contract');
 const { LocalStorageBackend } = require('./local-storage-backend');
+const { resolveShortProjectTitle } = require('./short-project-state');
 
 // Only content sources participate in a writing snapshot revision. Auxiliary
 // ledgers are visible to the control plane, but changes there must not make an
@@ -69,7 +70,7 @@ class StoryMemoryRepository {
     const semantic = {
       project_id: String(state.project_id || ''),
       project_instance_id: String(identity.project_instance_id || ''),
-      project_title: String(state.project_title || state.working_title || state.title || ''),
+      project_title: resolveShortProjectTitle(state),
       plan_revision: Number(state.plan_revision || 0),
       plan_digest: String(state.plan_digest || ''),
       planned_sections: Number(state.planned_sections || ((state.narrative || {}).planned_sections) || 0),

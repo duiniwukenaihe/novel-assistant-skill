@@ -49,18 +49,23 @@ function prepareMemoryContext(root, task, execution, policy, contextRunId = '') 
   }
   const identity = resolveProjectIdentity(root, task);
   const memoryRevision = normalizeDigest(parsed.packetDigest || '');
+  const attemptId = String(execution.stage_attempt_id || '').trim();
+  const workUnitId = String(execution.work_unit_id || '').trim();
+  const querySpec = {
+    project_id: identity.project_id,
+    project_instance_id: identity.project_instance_id,
+    workflow_id: String(task.workflow_id || ''),
+    workflow_type: String(task.workflow_type || ''),
+    stage_id: String(execution.stage_id || task.current_stage || ''),
+    owner_module: String(execution.owner_module || task.workflow_owner || ''),
+    scope: { target },
+    needs: memoryNeedsFor(task.workflow_type),
+    query_text: `${taskName}\n${target}`,
+  };
+  if (attemptId) querySpec.stage_attempt_id = attemptId;
+  if (workUnitId) querySpec.work_unit_id = workUnitId;
   const contract = createMemoryContract({
-    query: {
-      project_id: identity.project_id,
-      project_instance_id: identity.project_instance_id,
-      workflow_id: String(task.workflow_id || ''),
-      workflow_type: String(task.workflow_type || ''),
-      stage_id: String(execution.stage_id || task.current_stage || ''),
-      owner_module: String(execution.owner_module || task.workflow_owner || ''),
-      scope: { target },
-      needs: memoryNeedsFor(task.workflow_type),
-      query_text: `${taskName}\n${target}`,
-    },
+    query: querySpec,
     provider: 'story-memory',
     memoryRevision,
     packetPath: relativeProjectPath(root, parsed.packetJson),

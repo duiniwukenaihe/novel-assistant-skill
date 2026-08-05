@@ -181,6 +181,7 @@ const finding = report.findings.find(f => f.type === 'short-paragraph-fragmentat
 if (!finding) throw new Error(`missing short-paragraph-fragmentation: ${JSON.stringify(report.findings)}`);
 if (finding.severity !== 'advisory') throw new Error(`short paragraph fragmentation should be advisory, got ${finding.severity}`);
 if (!finding.message.includes('连续短段')) throw new Error(`message should mention 连续短段: ${finding.message}`);
+if (finding.message.includes('短篇')) throw new Error(`shared prose diagnostic must not claim the text is shortform: ${finding.message}`);
 NODE
 }
 
