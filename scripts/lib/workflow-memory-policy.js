@@ -26,19 +26,19 @@ const POLICIES = Object.freeze({
 });
 
 const SHORT_STAGE_CONTEXT_ONLY = new Set([
+  'first_section_brief',
+  'section_brief',
+  'next_section_brief',
   'draft_first_section',
   'draft_section',
   'draft_next_section',
   'section_repair_loop',
-  'section_machine_gate',
   'quality_gate',
   'story_value_gate',
   'section_accept_anchor',
-  'full_story_assembly',
+  'feedback_impact_sync',
+  'feedback_apply_patch',
   'full_story_review',
-  'short_deslop',
-  'deslop',
-  'final_check',
 ]);
 
 const SHORT_NO_MEMORY_STAGES = new Set([
@@ -49,6 +49,11 @@ const SHORT_NO_MEMORY_STAGES = new Set([
   'info_source_selection',
   'material_learning',
   'project_seed',
+  'section_machine_gate',
+  'full_story_assembly',
+  'short_deslop',
+  'deslop',
+  'final_check',
 ]);
 
 function required(tokenBudget, acceptsUpdates) {

@@ -72,6 +72,8 @@ const USAGE = `Usage:
   node scripts/memory-recommender.js --project-root <dir> --confirm <suggestion-id-or-entry-id> --decision apply|reject --json
   node scripts/memory-recommender.js --project-root <dir> --status --json`;
 
+const VISIBLE_STATUSES = new Set(['active']);
+
 try {
   const args = parseArgs(process.argv);
   if (!args.projectRoot) throw failure('blocked_invalid_argument', '--project-root is required');
@@ -162,7 +164,7 @@ function runStatus(memoryDir) {
   }
 
   const recentLearned = lorebook
-    .filter(entry => entry && entry.status !== 'archived')
+    .filter(entry => entry && VISIBLE_STATUSES.has(String(entry.status || 'active').toLowerCase()))
     .slice(-5)
     .reverse()
     .map(entry => ({
@@ -173,10 +175,16 @@ function runStatus(memoryDir) {
       updatedAt: entry.updatedAt || '',
     }));
 
+  const visibilitySummary = lorebook.reduce((acc, entry) => {
+    const status = String(entry.status || 'active').toLowerCase();
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
+
   return {
     status: 'memory_status',
     lorebookCount: lorebook.length,
-    activeEntries: lorebook.filter(entry => entry && entry.status !== 'archived').length,
+    activeEntries: lorebook.filter(entry => entry && VISIBLE_STATUSES.has(String(entry.status || 'active').toLowerCase())).length,
     pendingSuggestions: suggestions.length,
     autoApplicable,
     confirmationRequired: pendingConfirmations.length,
@@ -190,6 +198,7 @@ function runStatus(memoryDir) {
       auditFile,
     },
     auditEvents: audit.length,
+    visibilitySummary,
   };
 }
 

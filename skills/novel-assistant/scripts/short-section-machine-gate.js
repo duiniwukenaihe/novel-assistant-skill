@@ -3,8 +3,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
+const { invokeApplyResult } = require('./lib/workflow-state-machine-invoke');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { inferShortSectionIndex } = require('./lib/short-workflow-state');
@@ -117,10 +117,7 @@ function main() {
   if (!args.apply) {
     return finish({ status: passed ? 'packet_ready' : 'revision_required', workflow_id: workflowId, section_index: sectionIndex, result_packet: packetRel, evidence: evidenceRel, length_policy: lengthPolicy }, 0, args.json);
   }
-  const applied = spawnSync(process.execPath, [
-    path.join(__dirname, 'workflow-state-machine.js'),
-    'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json',
-  ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId, resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   let applyResult = outcome.result;
   const lengthChoice = outcome.applied && lengthChoiceRequired

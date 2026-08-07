@@ -10,6 +10,7 @@ const { countCjkCharacters, validateLongChapterAcceptanceBinding } = require('./
 const { assertTargetsEqual, validateLongChapterTargetV2 } = require('./lib/long-chapter-target');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { atomicWriteJson, atomicWriteText } = require('./lib/workflow-state-store');
+const { invokeApplyResult, invokeResolveAction } = require('./lib/workflow-state-machine-invoke');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -190,7 +191,7 @@ function buildResultPacket(root, task, preflight, commit, recovery) {
 }
 
 function applyResult(root, task, resultRel) {
-  const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', task.workflow_id, '--result', safeFile(root, resultRel), '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  const run = invokeApplyResult({ projectRoot: root, workflowId: task.workflow_id, resultFile: safeFile(root, resultRel) });
   const result = parseJson(run.stdout) || { status: 'blocked_apply_result_unreadable', stdout: String(run.stdout || '').slice(-1000), stderr: String(run.stderr || '').slice(-1000) };
   return { applied: run.status === 0 && !String(result.status || '').startsWith('blocked_'), exitCode: run.status || 0, result };
 }

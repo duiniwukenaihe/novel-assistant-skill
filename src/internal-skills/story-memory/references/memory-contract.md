@@ -106,6 +106,17 @@ active memory 只接受正式接受且仍有效的来源。`acceptance_status !=
 
 建议使用稳定 `suggestionId`，状态为 `pending -> applied | rejected | superseded | stale`。低风险新增可自动应用；高风险建议必须通过 `--confirm <id> --decision apply|reject` 处理。应用操作向 lorebook 追加新版本并写审计事件；不得让旧 pending 在下一次运行中再次应用或反复请求确认。
 
+### 记忆条目状态语义
+
+| 状态 | 含义 | 作者可见 | 可恢复 |
+|---|---|---|---|
+| active | 当前权威，注入上下文 | recentLearned 可见 | — |
+| superseded | 被新版本替代，保留历史 | visibilitySummary 可见计数 | 新提交会产生新版本 |
+| archived | 作者显式归档 | visibilitySummary 可见计数 | 可重新提出 |
+| rejected | 建议未采纳 | visibilitySummary 可见计数 | 可重新提出 |
+
+关于"隔离"：代码中 `isActive` 的判定黑名单含 `quarantined`，但当前没有任何记忆条目会被写入此状态。证据失效走的是 `memory_debts` 阻断 + `blocked_memory_evidence_stale`，而非把 status 改为 quarantined。污染检测命中的条目进入 packet 的 `quarantined` 数组（装配层概念），与记忆条目 status 是两套独立机制。
+
 所有会改变 `追踪/memory/` 的显式迁移与 canonical 投影都必须取得书目级写入租约；章节事务已经持锁时通过内部 `leaseHeld` 传递所有权，禁止同一进程重复加锁。
 
 ## Domain Ownership

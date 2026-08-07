@@ -102,3 +102,53 @@ NODE
     [[ "$output" == *'当前作品记忆快照'* ]]
     [[ "$output" == *'第1节故事合同'* ]]
 }
+
+@test "stage context packet markdown includes recall explanation block" {
+  local tmp
+  tmp="$BATS_TEST_TMPDIR/recall-block"
+  mkdir -p "$tmp/追踪/memory" "$tmp/追踪/private-short-extension" "$tmp/正文" "$tmp/追踪/workflow/tasks/w1"
+  printf '%s\n' '{"project_id":"recall-test","project_title":"召回说明书","plan_revision":1,"current_section_index":1,"accepted_sections":[],"narrative":{"planned_sections":3}}' > "$tmp/追踪/private-short-extension/project-state.json"
+  cat > "$tmp/小节大纲.md" <<'EOF'
+# 小节大纲
+
+## 第1节：公开复核
+- 结构功能：开篇建立可核验冲突
+- 情绪目标：疑惑转为警觉
+- 因果链：发现重复编号 -> 拒绝撤回 -> 保留复核记录
+- 场景动作：主角在评审会上展示重复编号
+- 角色选择：主角拒绝删除记录
+- 可见阻力：主管要求立即撤回记录
+- 本节兑现：重复编号第一次被公开展示
+- 关系变化：主角与主管从配合转为公开分歧
+- 代价升级：主角可能失去复核权限
+- 核心承诺兑现：异常编号进入公开核验
+- 决定性行动：主角保存扫描回放
+- 即时代价：主管当场暂停她的操作权限
+- 子事件：
+  1. 主角发现两个批次编号重复
+  2. 主管要求撤回，主角拒绝
+- 节尾钩子：旧批次记录仍未公开
+## 第2节：升级
+## 第3节：反转
+EOF
+  printf '%s\n' '# 设定' '第一人称，主角负责档案复核。' > "$tmp/设定.md"
+  printf '%s\n' '# 素材卡' '以公开记录推动责任落地。' > "$tmp/素材卡.md"
+
+  run node - "$REPO/scripts/lib/workflow-stage-context-packet.js" "$tmp" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const mod = process.argv[2];
+const projectRoot = process.argv[3];
+const { buildStageContextPacket } = require(mod);
+const packet = buildStageContextPacket({
+  projectRoot,
+  task: { workflow_id: 'w1', workflow_type: 'short_write', current_stage: 'section_brief', task_dir: '追踪/workflow/tasks/w1', current_section_index: 1, stage_execution: { stage_id: 'section_brief', stage_attempt_id: 'sa-recall' } },
+  stage: 'section_brief',
+});
+if (packet.status !== 'assembled') throw new Error(`expected assembled, got: ${JSON.stringify(packet)}`);
+const markdown = fs.readFileSync(path.join(projectRoot, packet.packet_md), 'utf8');
+process.stdout.write(markdown);
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"本次召回说明"* ]]
+}

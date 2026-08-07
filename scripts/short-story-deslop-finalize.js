@@ -19,6 +19,8 @@ const {
   resolveShortStateRelative,
   shortStateFile,
 } = require('./lib/short-project-state');
+const { invokeApplyResult, invokeResolveAction } = require('./lib/workflow-state-machine-invoke');
+const { readJson, parseJson } = require('./lib/cli-utils');
 
 const VOLUME = '短篇发布稿';
 
@@ -210,12 +212,11 @@ function splitSections(text) {
 }
 function runJson(root, script, argv) { const run = spawnSync(process.execPath, [path.join(__dirname, script), ...argv], { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }); return parseJson(run.stdout) || { status: 'checker_failed', findings: [{ type: script, message: String(run.stderr || '').trim().slice(0, 500) }] }; }
 function matchingCommit(root, workflowId, text) { const commit = (inspectChapter(root, VOLUME, 1) || {}).latest_commit; if (!commit || String(commit.workflow_id || '') !== workflowId) return null; const hash = hashText(text); const artifact = (commit.artifacts || []).find((item) => String(item.target || '') === '正文.md'); return artifact && normalizeHash(artifact.after_hash || artifact.content_hash) === hash && fs.existsSync(path.join(root, '正文.md')) && hashFile(path.join(root, '正文.md')) === hash ? commit : null; }
-function applyResult(root, workflowId, packetFile, packetRel, json) { const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }); const outcome = classifyWorkflowApply(run); const result = outcome.result; return finish({ status: outcome.applied ? 'applied' : 'apply_blocked', workflow_status: outcome.workflowStatus, workflow_id: workflowId, result_packet: packetRel, next_stage: String(result.current_stage || ((result.task || {}).current_stage) || ''), ...outcome.presentation, ...(outcome.applied ? {} : { recovery: result }) }, outcome.exitCode, json); }
+function applyResult(root, workflowId, packetFile, packetRel, json) { const run = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile }); const outcome = classifyWorkflowApply(run); const result = outcome.result; return finish({ status: outcome.applied ? 'applied' : 'apply_blocked', workflow_status: outcome.workflowStatus, workflow_id: workflowId, result_packet: packetRel, next_stage: String(result.current_stage || ((result.task || {}).current_stage) || ''), ...outcome.presentation, ...(outcome.applied ? {} : { recovery: result }) }, outcome.exitCode, json); }
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file !== root && file.startsWith(`${root}${path.sep}`) ? file : ''; }
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
+
 function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch (_) { return ''; } }
-function parseJson(value) { try { return JSON.parse(String(value || '').trim()); } catch (_) { return null; } }
 function hashText(value) { return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex'); }
 function hashFile(file) { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); }
 function normalizeHash(value) { return String(value || '').replace(/^sha256:/u, ''); }

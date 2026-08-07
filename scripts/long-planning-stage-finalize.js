@@ -4,19 +4,20 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const {
   acceptTransaction,
   prepareTransaction,
   rollbackPreparedTransaction,
 } = require('./lib/chapter-commit-store');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
+const { invokeApplyResult } = require('./lib/workflow-state-machine-invoke');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const {
   authoritativePlanningTargets,
   planDigest,
   planningReviewForProducer,
 } = require('./lib/long-planning-revision');
+const { readJson, parseJson } = require('./lib/cli-utils');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -463,17 +464,10 @@ function acceptedPlanningArtifactsMatch(root, packet, commit) {
 }
 
 function applyResult(root, task, resultRel) {
-  const run = spawnSync(process.execPath, [
-    path.join(__dirname, 'workflow-state-machine.js'),
-    'apply-result', '--project-root', root,
-    '--workflow-id', task.workflow_id,
-    '--result', safeFile(root, resultRel),
-    '--compact', '--json',
-  ], { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
-  const result = parseJson(run.stdout) || {
+  const run = invokeApplyResult({ projectRoot: root, workflowId: task.workflow_id, resultFile: safeFile(root, resultRel) });
+  const result = run.result || {
     status: 'blocked_apply_result_unreadable',
-    stdout: String(run.stdout || '').slice(-1000),
-    stderr: String(run.stderr || '').slice(-1000),
+    stderr: String(run.stderr || run.stdout || '').slice(0, 500),
   };
   return {
     applied: run.status === 0 && !String(result.status || '').startsWith('blocked_'),
@@ -535,8 +529,7 @@ function stableAttemptNumber(value) {
 function safeSegment(value) { return String(value || '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'attempt'; }
 function hashFile(file) { return `sha256:${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`; }
 function relativePosix(root, file) { return path.relative(root, file).split(path.sep).join('/'); }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
-function parseJson(value) { try { return JSON.parse(String(value || '').trim()); } catch (_) { return null; } }
+
 function block(status, detail, extra = {}) { return { status, detail, ...extra, host_started: false }; }
 function failure(status, message) { const error = new Error(message); error.status = status; return error; }
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : `${value.status}\n`}\n`); return code; }

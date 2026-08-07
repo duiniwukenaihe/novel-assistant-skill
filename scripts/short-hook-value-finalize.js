@@ -8,6 +8,8 @@ const { spawnSync } = require('child_process');
 const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
+const { invokeApplyResult, invokeResolveAction } = require('./lib/workflow-state-machine-invoke');
+const { readJson } = require('./lib/cli-utils');
 
 const STAGES = new Set(['hook_value_gate', 'hook_retention_gate']);
 const CHECKS = [
@@ -76,7 +78,7 @@ function main() {
     handoff_summary: String(card.summary || ''), memory_updates: [], result_packet_path: packetRel,
   });
   if (!args.apply) return finish({ status: 'short_hook_value_ready', decision, result_packet: packetRel }, 0, args.json);
-  const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', String(task.workflow_id || ''), '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const run = invokeApplyResult({ projectRoot: root, workflowId: String(task.workflow_id || ''), resultFile: packetFile });
   const outcome = classifyWorkflowApply(run);
   return finish({ status: outcome.applied ? 'short_hook_value_completed' : 'short_hook_value_apply_blocked', decision, workflow_status: outcome.workflowStatus, ...outcome.presentation, ...(outcome.applied ? {} : { recovery: outcome.result }) }, outcome.exitCode, args.json);
 }
@@ -114,7 +116,7 @@ function validateCard(card, evidence) {
   if (String(card.decision || '') === 'revise' && !['section_outline', 'short_setting'].includes(String(card.repair_layer || ''))) findings.push({ field: 'repair_layer', message: '需要回炉时必须明确回设定或小节大纲。' });
   return findings;
 }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
+
 function safeSegment(value) { return String(value || '').replace(/[^A-Za-z0-9._-]/g, '_') || 'unknown'; }
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file !== root && file.startsWith(`${root}${path.sep}`) ? file : ''; }
 function parseArgs(argv) { const args = { projectRoot: '', workflowId: '', apply: false, json: false }; for (let i = 0; i < argv.length; i += 1) { const arg = argv[i]; if (arg === '--project-root') args.projectRoot = argv[++i] || ''; else if (arg === '--workflow-id') args.workflowId = argv[++i] || ''; else if (arg === '--apply') args.apply = true; else if (arg === '--json') args.json = true; else usage(`unknown argument: ${arg}`); } if (!args.workflowId) usage('missing --workflow-id'); return args; }

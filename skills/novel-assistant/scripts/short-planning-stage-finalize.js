@@ -26,6 +26,8 @@ const { appendIntegrationEvent } = require('./lib/integration-outbox');
 const { ensureCurrentShortMemoryStage } = require('./lib/short-memory-stage-recovery');
 const { invalidateBriefFreshnessSnapshot, sidecarRelativePath } = require('./lib/short-brief-freshness');
 const { validateWorkflowConfirmation } = require('./lib/workflow-confirmation-context');
+const { invokeApplyResult, invokeResolveAction } = require('./lib/workflow-state-machine-invoke');
+const { readJson, parseJson } = require('./lib/cli-utils');
 const {
   analyzeShortOutlineNarrativeQuality,
   inferPlannedSections,
@@ -247,7 +249,7 @@ function replayReusablePlanningCommit({ root, workflowId, execution, stageId, ca
     accepted_commit_id: String(reusableCommit.commit_id || ''),
   };
   atomicWriteJson(packetFile, existingPacket);
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   return finish({
     status: outcome.applied ? 'applied' : 'apply_blocked',
@@ -306,7 +308,7 @@ function applyAcceptedPlanningStageResult({ root, workflowId, task, execution, s
     memory_updates: [],
     result_packet_path: packetRel,
   });
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   const result = outcome.result;
   return finish({
@@ -724,7 +726,7 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
       accepted_commit_id: String(reusableCommit.commit_id || ''),
     };
     atomicWriteJson(packetFile, existingPacket);
-    const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+    const applied = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile });
     const outcome = classifyWorkflowApply(applied);
     return finish({
       status: outcome.applied ? 'applied' : 'apply_blocked',
@@ -834,7 +836,7 @@ function runFeedbackPlanningPatch({ root, workflowId, task, execution, args }) {
     memory_updates: [],
     result_packet_path: packetRel,
   });
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   return finish({
     status: outcome.applied ? 'applied' : 'apply_blocked',
@@ -909,7 +911,7 @@ function runFeedbackBriefInvalidation({ root, workflowId, task, execution, args 
     memory_updates: [],
     result_packet_path: packetRel,
   });
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   if (!outcome.applied) {
     for (const snapshot of rollbackSnapshots) {
@@ -1016,8 +1018,7 @@ function normalizeSectionList(values) {
 }
 
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
-function parseJson(value) { try { return JSON.parse(String(value || '').trim()); } catch (_) { return null; } }
+
 function parseArgs(argv) { const out = { projectRoot: '', workflowId: '', apply: false, context: false, json: false, help: false }; for (let index = 0; index < argv.length; index += 1) { const arg = argv[index]; if (arg === '--project-root') out.projectRoot = argv[++index] || ''; else if (arg === '--workflow-id') out.workflowId = argv[++index] || ''; else if (arg === '--apply' || arg === '--write') out.apply = true; else if (arg === '--context') out.context = true; else if (arg === '--json') out.json = true; else if (arg === '--help' || arg === '-h') out.help = true; else return usage(`unknown argument: ${arg}`); } return out; }
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }
 function usage(message) { process.stderr.write(`${message}\nUsage: node short-planning-stage-finalize.js --project-root <book> --workflow-id <id> [--context] [--apply] [--json]\n`); process.exit(2); }

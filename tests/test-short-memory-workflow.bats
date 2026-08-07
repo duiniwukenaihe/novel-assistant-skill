@@ -44,15 +44,20 @@ EOF
 }
 
 @test "short memory snapshot selects accepted continuity facts and emits a read receipt" {
+  # draft_next_section prunes accepted_facts from the loadout, so fact IDs no
+  # longer appear in selected_entry_ids — but continuity_obligations still
+  # derive from facts (the loadout controls presentation, not derivation).
   run node - "$REPO/scripts/lib/short-memory-snapshot.js" "$BOOK" <<'NODE'
 const api=require(process.argv[2]);const root=process.argv[3];
 const task={workflow_id:'wf-short',workflow_type:'short_write',workflow_profile:'private',scope:'第2节'};
 const out=api.buildShortMemorySnapshot(root,{task,sectionIndex:2,stageId:'draft_next_section'});
 if(out.status!=='assembled'||!out.receipt.memory_revision) throw new Error(JSON.stringify(out));
 const ids=out.receipt.selected_entry_ids;
-if(!ids.includes('fact.character-alan')||ids.includes('fact.future')) throw new Error(JSON.stringify(out));
+if(ids.includes('fact.future')) throw new Error(JSON.stringify(out));
 const text=JSON.stringify(out.payload);
-if(!text.includes('决定复核')||!text.includes('对白先回应眼前的人')||!text.includes('对话保持克制')||!text.includes('禁止同一领域词')) throw new Error(text);
+if(!text.includes('对白先回应眼前的人')) throw new Error(text);
+// draft_next_section prunes user_preferences, so "对话保持克制" (a voice
+// preference) is intentionally not recalled at this stage.
 if(text.includes('首屏使用数字菜单')) throw new Error('workflow preference leaked into prose memory');
 if(text.includes('尚未发生的结局')) throw new Error(text);
 if(!text.includes('主管')||!text.includes('保住部门')) throw new Error(`character alias was not recalled: ${text}`);
@@ -134,6 +139,9 @@ NODE
 @test "due promises and previous hooks become current section continuity obligations" {
   printf '%s\n' '{"promise_id":"promise-signature","summary":"负责人必须说明为何认得签名。","status":"active","opened_section":1,"target_section":2}' > "$BOOK/追踪/schema/promises.jsonl"
   printf '%s\n' '{"fact_id":"fact.hook-signature","subject":"档案复核","predicate":"留下待续钩子","object":"负责人认出了签名。","scope":{"book":"current","section":1},"status":"active"}' >> "$BOOK/追踪/memory/facts.jsonl"
+  # next_section_brief prunes accepted_facts from the loadout, but facts are
+  # still fetched internally because buildContinuityObligations derives from
+  # them — the loadout controls presentation, not derivation.
   run node - "$REPO/scripts/lib/short-memory-snapshot.js" "$BOOK" <<'NODE'
 const api=require(process.argv[2]);const root=process.argv[3];
 const task={workflow_id:'wf-short',workflow_type:'short_write',workflow_profile:'private',scope:'第2节'};
@@ -180,10 +188,13 @@ NODE
   printf '%s\n' '{"fact_id":"fact.hook-duplicate","subject":"全篇","predicate":"留下待续钩子","object":"负责人沉默。","scope":{"book":"current","section":1},"status":"active","evidence":[{"path":"正文/第001节.md"}]}' >> "$BOOK/追踪/memory/facts.jsonl"
   printf '%s\n' '{"fact_id":"fact.reveal-a","subject":"全篇","predicate":"本节揭示","object":"复核素材与实时画面不一致。","scope":{"book":"current","section":1},"status":"active","evidence":[{"path":"正文/第001节.md"}]}' >> "$BOOK/追踪/memory/facts.jsonl"
   printf '%s\n' '{"fact_id":"fact.reveal-b","subject":"当前作品","predicate":"第1节揭示","object":"复核素材与实时画面不一致，且旧素材时间需要继续核验。","scope":{"book":"current","section":1},"status":"active","evidence":[{"path":"正文/第001节.md"}]}' >> "$BOOK/追踪/memory/facts.jsonl"
+  # Fact dedup is a stage-independent mechanism (it happens inside selectFacts
+  # regardless of loadout). A neutral stageId triggers the full need set so
+  # accepted_facts surface in the payload and the dedup result can be asserted.
   run node - "$REPO/scripts/lib/short-memory-snapshot.js" "$BOOK" <<'NODE'
 const api=require(process.argv[2]);const root=process.argv[3];
 const task={workflow_id:'wf-short',workflow_type:'short_write',scope:'第2节'};
-const out=api.buildShortMemorySnapshot(root,{task,sectionIndex:2,stageId:'next_section_brief'});
+const out=api.buildShortMemorySnapshot(root,{task,sectionIndex:2,stageId:'memory_snapshot'});
 const facts=out.payload.accepted_facts||[];
 const summaries=facts.filter(row=>/本节发生/.test(row.predicate)||row.subject==='summary');
 const hooks=facts.filter(row=>/钩子|待续|承诺/.test(row.predicate));
@@ -704,12 +715,16 @@ NODE
 }
 
 @test "brief freshness becomes stale when accepted story memory changes" {
+  # Brief prunes accepted_facts from the loadout, so a new style rule (which IS
+  # in the brief need set) is the most direct trigger for "accepted story
+  # memory changed". Facts are still fetched internally for continuity
+  # derivation, but style rules exercise the recall-to-revision path directly.
   run node - "$REPO/scripts/lib/short-brief-freshness.js" "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');const api=require(process.argv[2]);const root=process.argv[3];
 const options={projectRoot:root,briefPath:'写作Brief_第002节.md',sectionIndex:2,acceptedAnchorPath:'追踪/private-short-extension/section-001-anchor.json'};
 const written=api.writeBriefFreshnessSnapshot(options);
 if(written.status!=='snapshot_written'||!written.snapshot.memory_revision) throw new Error(JSON.stringify(written));
-fs.appendFileSync(path.join(root,'追踪/memory/facts.jsonl'),'\n'+JSON.stringify({fact_id:'fact.hook-new',subject:'档案复核',predicate:'留下待续钩子',object:'负责人认出签名。',scope:{book:'current',section:1},status:'active',evidence:[{path:'正文/第001节.md'}]})+'\n');
+fs.appendFileSync(path.join(root,'追踪/schema/user-style-rules.jsonl'),'\n'+JSON.stringify({rule_id:'style-new-rule',status:'active',content:'新增的文风规则。',scope:'short_write'})+'\n');
 const stale=api.checkBriefFreshness(options);
 if(stale.status!=='stale'||!stale.stale_dependencies.includes('当前作品记忆')) throw new Error(JSON.stringify(stale));
 NODE
@@ -840,7 +855,10 @@ NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
-@test "a stage memory receipt detects relevant accepted facts added after packet creation" {
+@test "a stage memory receipt detects style rule changes added after packet creation" {
+  # Draft prunes accepted_facts from the loadout. A new style rule (which IS
+  # in the draft need set) exercises the recall-to-revision path directly;
+  # facts still feed continuity derivation internally.
   run node - "$REPO/scripts/lib/workflow-stage-context-packet.js" "$REPO/scripts/lib/short-memory-snapshot.js" "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');const packetApi=require(process.argv[2]);const memoryApi=require(process.argv[3]);const root=process.argv[4];
 const task={workflow_id:'wf-short',workflow_type:'short_write',workflow_profile:'private',scope:'第2节',current_stage:'draft_next_section',task_dir:'追踪/workflow/tasks/wf-short',stage_execution:{stage_attempt_id:'sa-stale'}};
@@ -848,7 +866,7 @@ const packet=packetApi.buildStageContextPacket({projectRoot:root,task,stage:'dra
 if(packet.status!=='assembled') throw new Error(JSON.stringify(packet));
 const execution={stage_id:'draft_next_section',stage_context_packet:{packet_json:packet.packet_json}};
 if(memoryApi.validateShortStageMemoryReceipt(root,task,execution).status!=='current') throw new Error('receipt should begin current');
-fs.appendFileSync(path.join(root,'追踪/memory/facts.jsonl'),'\n'+JSON.stringify({fact_id:'fact.new-choice',subject:'阿岚',predicate:'第1节状态',object:'决定先保护账册原件。',scope:{book:'current',section:1},status:'active'})+'\n');
+fs.appendFileSync(path.join(root,'追踪/schema/user-style-rules.jsonl'),'\n'+JSON.stringify({rule_id:'style-new-rule',status:'active',content:'新增的文风规则。',scope:'short_write'})+'\n');
 const stale=memoryApi.validateShortStageMemoryReceipt(root,task,execution);
 if(stale.status!=='stale') throw new Error(JSON.stringify(stale));
 NODE
@@ -899,4 +917,24 @@ NODE
     --section 2 \
     --reject "旧结局"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "short memory snapshot respects stage-specific needs for section_repair" {
+  local tmp
+  tmp="$BATS_TEST_TMPDIR/repair-loadout"
+  mkdir -p "$tmp/追踪/memory" "$tmp/追踪/private-short-extension"
+  printf '%s\n' '{"project_id":"repair-test","project_title":"修复裁剪书","plan_revision":1,"current_section_index":2,"accepted_sections":[{"section_index":1}],"narrative":{"planned_sections":3}}' > "$tmp/追踪/private-short-extension/project-state.json"
+  printf '%s\n' '{"fact_id":"f1","subject":"主角","predicate":"身份","object":"孤儿","scope":{"section":1},"status":"active"}' > "$tmp/追踪/memory/facts.jsonl"
+
+  run node - "$REPO/scripts/lib/short-memory-snapshot.js" "$tmp" <<'NODE'
+const mod = process.argv[2];
+const book = process.argv[3];
+const { buildShortMemorySnapshot } = require(mod);
+const snap = buildShortMemorySnapshot(book, { sectionIndex: 2, stageId: 'section_repair', task: { workflow_id: 'w1', workflow_type: 'short_write' } });
+if (snap.status === 'not_applicable') process.exit(2);
+const facts = (snap.payload && snap.payload.accepted_facts) || [];
+const hasFact = facts.some(f => f.id === 'f1');
+if (hasFact) process.exit(1);
+NODE
+  [ "$status" -eq 0 ]
 }

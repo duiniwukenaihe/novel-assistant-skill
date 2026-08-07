@@ -12,6 +12,8 @@ const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-bind
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { appendIntegrationEvent } = require('./lib/integration-outbox');
 const { readShortProjectState, resolveShortProjectTitle, shortStateFile } = require('./lib/short-project-state');
+const { invokeApplyResult, invokeResolveAction } = require('./lib/workflow-state-machine-invoke');
+const { readJson, parseJson } = require('./lib/cli-utils');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -65,7 +67,7 @@ function main() {
     handoff_summary: `最终检查通过：${plan.count} 节完整，正式稿与去 AI 回执一致。${lengthAdvisories.length ? ` 已汇总 ${lengthAdvisories.length} 节篇幅提醒，不影响完成状态。` : ''}`,
     memory_updates: [], result_packet_path: packetRel,
   });
-  const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const run = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile });
   const outcome = classifyWorkflowApply(run);
   let integrationEvent = null;
   if (outcome.applied) {
@@ -117,9 +119,8 @@ function collectLengthAdvisories(root) {
     }));
 }
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
+
 function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch (_) { return ''; } }
-function parseJson(value) { try { return JSON.parse(String(value || '').trim()); } catch (_) { return null; } }
 function hashText(value) { return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex'); }
 function parseArgs(argv) { const out = { projectRoot: '', workflowId: '', apply: false, json: false, help: false }; for (let i = 0; i < argv.length; i += 1) { const arg = argv[i]; if (arg === '--project-root') out.projectRoot = argv[++i] || ''; else if (arg === '--workflow-id') out.workflowId = argv[++i] || ''; else if (arg === '--apply' || arg === '--write') out.apply = true; else if (arg === '--json') out.json = true; else if (arg === '--help' || arg === '-h') out.help = true; else return usage(`unknown argument: ${arg}`); } return out; }
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }

@@ -3,13 +3,13 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { ensureCurrentShortMemoryStage } = require('./lib/short-memory-stage-recovery');
 const { finalizeDraft } = require('./lib/short-production/section-loop');
+const { invokeApplyResult } = require('./lib/workflow-state-machine-invoke');
 
 const DRAFT_STAGES = new Set(['draft_first_section', 'draft_section', 'draft_next_section']);
 
@@ -100,10 +100,7 @@ function main() {
     result_packet_path: packetRel,
   });
   if (!args.apply) return finish({ status: 'packet_ready', workflow_id: workflowId, result_packet: packetRel }, 0, args.json);
-  const applied = spawnSync(process.execPath, [
-    path.join(__dirname, 'workflow-state-machine.js'),
-    'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json',
-  ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   const result = outcome.result;
   const nextExecution = result.stage_execution || ((result.task || {}).stage_execution) || {};

@@ -10,6 +10,8 @@ const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-bind
 const { inferLongChapter, resolveChapterDraft } = require('./lib/long-stage-context-packet');
 const { evaluateLongChapterLength } = require('./lib/long-chapter-length-contract');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
+const { invokeApplyResult, invokeResolveAction } = require('./lib/workflow-state-machine-invoke');
+const { parseJson } = require('./lib/cli-utils');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -78,7 +80,7 @@ function returnToProse(root, task, execution, base) {
     memory_updates: [],
     result_packet_path: packetRel,
   });
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', String(task.workflow_id || ''), '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: String(task.workflow_id || ''), resultFile: packetFile });
   let outcome = classifyWorkflowApply(applied);
   let repairExecution = null;
   if (outcome.applied) {
@@ -86,7 +88,7 @@ function returnToProse(root, task, execution, base) {
     const repair = options.find((item) => String(item.action_id || '') === 'continue_next_stage'
       && String(item.target_stage || '') === 'prose');
     if (repair) {
-      const started = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'resolve-action', '--project-root', root, '--input', String(repair.number), '--bind-current', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+      const started = invokeResolveAction({ projectRoot: root, input: String(repair.number), bindCurrent: true });
       outcome = classifyWorkflowApply(started);
       if (outcome.applied) repairExecution = attachRepairFeedback(root, task.workflow_id, findings);
     }
@@ -175,8 +177,8 @@ function parseArgs(argv) { const args = { projectRoot: '', workflowId: '', draft
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file.startsWith(`${root}${path.sep}`) ? file : ''; }
 function relative(root, file) { return path.relative(root, file).split(path.sep).join('/'); }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
-function parseJson(text) { try { return JSON.parse(String(text || '').trim()); } catch (_) { return null; } }
+
+
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }
 function usage(message) { process.stderr.write(`${message}\nUsage: node long-chapter-machine-gate.js --project-root <book> --workflow-id <id> [--draft file] [--apply] [--json]\n`); process.exit(2); }
 

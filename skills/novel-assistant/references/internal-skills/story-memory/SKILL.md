@@ -96,6 +96,17 @@ node scripts/memory-recommender.js --project-root <book-root> --status --json
 
 `--status` 只读账本，不改文件。返回字段必须用于用户可见说明：`recentLearned` 是已生效记忆，`pendingConfirmations` 是需要用户确认的高风险建议，`nextEffects` 是下次会影响的流程，`autoApplicable` 是可低风险自动应用的新增项。
 
+## 记忆状态说明
+
+每条记忆都有以下状态，你可以通过 `--status` 查看当前分布：
+
+- **active（生效中）**：当前权威记忆，会自动注入写作上下文。这是绝大多数记忆的状态。
+- **superseded（已取代）**：已有更新的已采纳版本替代它。旧版本保留在历史里可追溯，但不再注入正文。当你看到某条记忆被取代，说明后续章节采纳了更新的版本。
+- **archived（已归档）**：你显式归档的记忆，不再参与召回但保留可查。需要时可重新提出。
+- **rejected（未采纳）**：曾作为建议提出但未被采纳。不会影响写作。
+
+注意：`--status` 的 `recentLearned` 只显示 active 记忆；`visibilitySummary` 显示各状态的条数。
+
 ## 使用流程
 
 1. workflow 进入写作、审阅、回炉、导入吸收、拆文吸收或去 AI 味前，先调用 `context-assembler.js`。

@@ -211,7 +211,88 @@ const {
   validateWorkflowCharacterContract,
 } = require('./lib/workflow-character-contract');
 const { SHORT_WORKFLOW_TYPES, isShortWorkflowType } = require('./lib/short-workflow-types');
+
 const {
+  readText,
+  rel,
+  positiveContextChars,
+  hasActiveWorkflowStatus,
+  createStageAttemptId,
+  arrayOrEmpty,
+  normalizeContentHash,
+  sameContractValue,
+  chineseNumeralValue,
+  normalizedChapterIdentity,
+  isConsoleErrorStatus,
+  renderRpdMarkdown,
+  rebindTaskToCurrentProjectRoot,
+  buildWorkflowRegistrySnapshot,
+  omitVisibleResponse,
+  detailOutlineIdentity,
+  targetRevalidationSnapshotNeedsRefresh,
+  shortFeedbackImpactFromPacket,
+  buildShortFeedbackProposal,
+  orderedStage,
+  infoSourceMaterialScore,
+  infoSourcePrimaryRoute,
+  cardCommandResult,
+  isTrustedShortResumePacket,
+  invalidateShortFeedbackAnalysis,
+  shortBriefPath,
+  pendingFeedbackSectionIndex,
+  isExpressionOnlyShortFeedback,
+  visibleChoiceBinding,
+  awaitingCurrentShortFeedbackProposal,
+  bindStageCompletionContract,
+  shortFeedbackExecutionContractCurrent,
+  runningStageExecutionBlocker,
+  runningStageDisplayName,
+  preservePreviousStageAttempt,
+  markShortMemoryMigrationRefreshed,
+  shortPlanningCanonicalTarget,
+  hasAuthoredQualityEvidence,
+  shortPlanningInputs,
+  synchronizeShortUnitScope,
+  inferCoverOperation,
+  inferStructureChangeType,
+  isStructuralScopeChange,
+  suggestedWorkflowType,
+  safeLongPathSegment,
+  longformReviewReturnWaitingProducer,
+  detailOutlineTargetKey,
+  detailOutlineReviewAccepted,
+  acceptedShortPlanningMemoryBoundary,
+  normalizeLifecycle,
+  buildConfirmationContext,
+  resolveSafeProjectFile,
+  readJsonlRecords,
+  infoSourceSelectionCards,
+  reopenShortTaskForFeedback,
+  shortSettingCandidateView,
+  synchronizeShortWholeStoryScope,
+  inferFreeTextClassification,
+  inspectProjectTreeSymlinks,
+  latestArchivedRepairCandidate,
+  parseInfoSourceCardSelection,
+  parseInfoSourceCardCommand,
+  stageWorkUnitId,
+  failClosedPlanningRevision,
+  longPlanningStagedPath,
+  longformReviewReturnIntro,
+  stageCanonicalWriteSet,
+  pendingDetailOutlineTargets,
+  normalizedVolumeIdentity,
+  workflowDir,
+  durableTaskSnapshotPath,
+  resolveProjectRootReference,
+  sameDetailOutlineIdentities,
+  infoSourceRecommendationLabel,
+  shortFeedbackId,
+  shortPlanningWorkspacePath,
+  hashFile,
+  normalizeWriteSetPath,
+  resolveInsideProject,
+} = require('./lib/state-machine-utils');const {
   SCHEMA_VERSION,
   blocked,
   blockedTaskTemplate,
@@ -374,9 +455,6 @@ function fail(message) {
   process.exit(1);
 }
 
-function workflowDir(root) {
-  return path.join(root, '追踪', 'workflow');
-}
 
 function currentTaskPath(root) {
   return path.join(workflowDir(root), 'current-task.json');
@@ -386,12 +464,6 @@ function currentTaskMdPath(root) {
   return path.join(workflowDir(root), 'current-task.md');
 }
 
-function durableTaskSnapshotPath(taskOrWorkflowId) {
-  if (taskOrWorkflowId && typeof taskOrWorkflowId === 'object' && taskOrWorkflowId.task_dir) {
-    return `${String(taskOrWorkflowId.task_dir).replace(/\\\\/g, '/').replace(/\/$/, '')}/task.json`;
-  }
-  return `追踪/workflow/tasks/${String(taskOrWorkflowId || 'unknown-workflow')}/task.json`;
-}
 
 function taskRootDir(root) {
   return path.join(workflowDir(root), 'tasks');
@@ -413,13 +485,6 @@ function archivedDir(root) {
   return path.join(workflowDir(root), 'archived');
 }
 
-function readText(file) {
-  try {
-    return fs.readFileSync(file, 'utf8');
-  } catch (_) {
-    return '';
-  }
-}
 
 function readFocusedAuthority(root) {
   const focused = readFocusedTask(root);
@@ -450,9 +515,6 @@ function persistTaskSnapshot(root, task, focus = false) {
   if (focus || (focused.pointer && String(focused.pointer.workflow_id || '') === String(task.workflow_id || ''))) writeFocusPointer(root, task);
 }
 
-function rel(root, file) {
-  return path.relative(root, file).split(path.sep).join('/');
-}
 
 function appendJsonl(file, data) {
   appendJsonlRecord(file, data);
@@ -504,41 +566,6 @@ function initializeTaskDirectory(root, task, tpl) {
   if (!fs.existsSync(journalFile)) atomicWriteText(journalFile, '');
 }
 
-function renderRpdMarkdown(task, tpl) {
-  const stages = tpl && Array.isArray(tpl.stages) ? tpl.stages.map((stageDef) => stageDef.stage_id).join(' -> ') : '';
-  return [
-    '# 任务需求与读者承诺文档',
-    '',
-    `- 任务编号：${task.workflow_id}`,
-    `- 任务类型：${task.workflow_type}`,
-    `- 用户目标：${task.user_goal || ''}`,
-    `- 任务范围：${task.scope || '未限定'}`,
-    `- 推进策略：${task.completion_policy}`,
-    '',
-    '## 读者承诺',
-    '',
-    '本任务必须服务当前作品的读者体验：情节可信、人物连续、钩子可追、情绪兑现，不用机械执行替代故事判断。',
-    '',
-    '## 任务边界',
-    '',
-    '- 不凭聊天记忆推进任务。',
-    '- 不把阶段完成伪装成整个流程完成。',
-    '- 不绕过机器门、故事质量门和状态交接。',
-    '- 需要改变上游设定、大纲、细纲、素材卡或章节结构时，先回到计划/Brief 阶段。',
-    '',
-    '## 验收标准',
-    '',
-    '- 当前阶段的 result packet 与任务状态一致。',
-    '- 任务事实只以任务目录 `task.json` 为准；`current-task.json` 只记录界面焦点。',
-    '- 所有写入动作都有最后可信产物或验证证据。',
-    '- 完成后给出下一步候选或明确收束。',
-    '',
-    '## 阶段序列',
-    '',
-    stages || '未加载模板阶段。',
-    '',
-  ].join('\n');
-}
 
 function writeTaskState(root, task, options = {}) {
   const tpl = templates()[task.workflow_type];
@@ -569,27 +596,7 @@ function bindPendingActionToNextState(task, root) {
   };
 }
 
-function resolveProjectRootReference(reference, root) {
-  const value = String(reference || '.').trim();
-  if (!value || value === '.') return path.resolve(root);
-  return path.isAbsolute(value) ? path.resolve(value) : path.resolve(root, value);
-}
 
-function rebindTaskToCurrentProjectRoot(task) {
-  if (!task || typeof task !== 'object') return false;
-  let changed = false;
-  const setPortable = (holder, key) => {
-    if (holder && holder[key] !== '.') {
-      holder[key] = '.';
-      changed = true;
-    }
-  };
-  setPortable(task, 'book_root');
-  setPortable(((task.runtime_guard || {}).checkpoint_policy), 'project_root');
-  setPortable(task.pending_action, 'book_root');
-  setPortable(task.last_selection, 'book_root');
-  return changed;
-}
 
 function appendTaskJournal(root, event, payload) {
   const workflowId = payload.workflow_id || '';
@@ -917,26 +924,6 @@ function longformMigrationMenu(workflowId, reason) {
   };
 }
 
-function buildWorkflowRegistrySnapshot(tpl, primaryOwner) {
-  const overlay = (tpl && tpl.private_overlay) || null;
-  const ownerModule = String((overlay || {}).module || (primaryOwner || {}).owner_module || '');
-  if (!overlay) {
-    return {
-      profile: 'public',
-      owner_module: ownerModule,
-      registry_id: 'public',
-      registry_digest: '',
-    };
-  }
-  return {
-    profile: 'private',
-    owner_module: ownerModule,
-    // registry_id 用 module 名, 稳定且对合理内容更新不敏感.
-    // digest 仅记录来源路径指纹, 不参与强校验, 避免微调阻断.
-    registry_id: ownerModule || 'private',
-    registry_digest: String(overlay.source || ''),
-  };
-}
 
 function buildNewTask(args, tpl, extra) {
   const root = path.resolve(args.projectRoot);
@@ -1092,10 +1079,6 @@ function buildRuntimeGuard(args, workflowId, now, firstStage = {}) {
   };
 }
 
-function positiveContextChars(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
-}
 
 function switchIntent(args) {
   const root = path.resolve(args.projectRoot);
@@ -1419,16 +1402,6 @@ function resetUnmanagedReviewRepair(args) {
   return { schemaVersion: SCHEMA_VERSION, status: 'review_repair_candidates_invalidated', workflow_id: task.workflow_id, resume_stage: resumeStage, archived_candidate_dir: archivedCandidateDir, requires_current_text_recheck: true };
 }
 
-function latestArchivedRepairCandidate(root, taskDirectory) {
-  const artifactsDir = path.join(taskDirectory, 'artifacts');
-  if (!fs.existsSync(artifactsDir)) return '';
-  const names = fs.readdirSync(artifactsDir)
-    .filter(name => /^staged_repair_candidate\.archived-[A-Za-z0-9_-]+$/.test(name))
-    .sort();
-  if (!names.length) return '';
-  const candidate = resolveSafeProjectFile(root, path.join(artifactsDir, names.at(-1)));
-  return candidate && fs.existsSync(candidate) ? rel(root, candidate) : '';
-}
 
 function rejectedManagedResultForExecution(root, task, execution) {
   const auditDir = resolveSafeProjectFile(
@@ -1809,9 +1782,6 @@ function continueReviewWithLegacyEvidence(args) {
   };
 }
 
-function hasActiveWorkflowStatus(status) {
-  return !['completed', 'completed_verified', 'done', 'closed', 'cancelled', 'canceled'].includes(String(status || '').toLowerCase());
-}
 
 function storedReviewPacketIsProtocolCompatible(root, task, batch) {
   const packetPath = String(batch.accepted_result_packet || reviewBatchResultPacket(task.task_dir, batch.id));
@@ -1937,11 +1907,6 @@ function taskOverview(args) {
   };
 }
 
-function omitVisibleResponse(value) {
-  if (!value || typeof value !== 'object') return value;
-  const { visible_response: _visibleResponse, ...rest } = value;
-  return rest;
-}
 
 function legacyReviewHandoffCompletion(root, task, missingStages) {
   if (String((task || {}).workflow_type || '') !== 'review_repair'
@@ -1979,17 +1944,7 @@ function legacyReviewHandoffCompletion(root, task, missingStages) {
   };
 }
 
-function detailOutlineIdentity(target) {
-  return {
-    outline_path: String((target || {}).outline_path || '').replace(/\\/g, '/'),
-    outline_sha256: String((target || {}).outline_sha256 || '').toLowerCase(),
-  };
-}
 
-function sameDetailOutlineIdentities(actual, expected) {
-  const normalized = (items) => arrayOrEmpty(items).map(detailOutlineIdentity);
-  return sameContractValue(normalized(actual), normalized(expected));
-}
 
 function readAcceptedStageAttemptPacket(root, task, stageId, requireVerificationPass = false) {
   const attempt = arrayOrEmpty((task || {}).stage_attempt_history)
@@ -2663,13 +2618,6 @@ function repairTargetRevalidationConfirmation(root, task, args) {
   };
 }
 
-function targetRevalidationSnapshotNeedsRefresh(task) {
-  return String((task || {}).workflow_type || '') === 'long_write'
-    && String((task || {}).current_stage || '') === 'detail_outline_review'
-    && String((((task || {}).longform_target_revalidation || {}).status) || '') === 'running'
-    && String((((task || {}).stage_execution || {}).stage_id) || '') === 'detail_outline_review'
-    && !String((((task || {}).longform_target_revalidation || {}).write_snapshot_refreshed_at) || '');
-}
 
 function repairTargetRevalidationSnapshot(root, task, args) {
   const command = `node scripts/workflow-state-machine.js reconcile-runtime --project-root . --workflow-id ${shellQuote(task.workflow_id)} --session-id ${shellQuote(args.sessionId)} --confirm --json`;
@@ -4553,59 +4501,7 @@ function findMatchingShortFeedbackImpactPacket(root, task) {
   return { data: matches[0].data, relative_path: rel(root, matches[0].file) };
 }
 
-function shortFeedbackImpactFromPacket(packet, packetPath) {
-  return {
-    status: 'ok',
-    feedback_id: String(packet.feedback_id || ''),
-    impact_level: String(packet.impact_level || ''),
-    affected_sections: Array.isArray(packet.affected_sections) ? packet.affected_sections.map(Number).filter(Number.isInteger) : [],
-    affected_assets: Array.isArray(packet.affected_assets) ? packet.affected_assets : [],
-    downstream_impact: packet.downstream_impact && typeof packet.downstream_impact === 'object' ? packet.downstream_impact : {},
-    revision_groups: Array.isArray(packet.revision_groups) ? packet.revision_groups : [],
-    next_stage_id: 'feedback_apply_patch',
-    result_packet_path: String(packetPath || ''),
-    analyzed_at: String(packet.completed_at || packet.updated_at || ''),
-    recovered_from_result_packet: true,
-  };
-}
 
-function buildShortFeedbackProposal(task, result, now = new Date().toISOString()) {
-  const pending = task.pending_feedback || {};
-  const feedbackId = String(result.feedback_id || pending.feedback_id || '');
-  const proposed = result.proposed_plan && typeof result.proposed_plan === 'object' && !Array.isArray(result.proposed_plan)
-    ? result.proposed_plan
-    : {};
-  const items = Array.isArray(pending.items) && pending.items.length
-    ? pending.items
-    : String(pending.text || '').trim() ? [{ feedback_id: feedbackId, text: String(pending.text || '').trim(), impact_level_hint: String(result.impact_level || '') }] : [];
-  const requirements = Array.isArray(proposed.requirements) && proposed.requirements.length
-    ? proposed.requirements.map((item, index) => ({
-      requirement_id: String((item || {}).requirement_id || `${feedbackId}.requirement-${index + 1}`),
-      text: String((item || {}).text || (item || {}).content || '').trim(),
-      impact_level: String((item || {}).impact_level || result.impact_level || ''),
-    })).filter(item => item.text)
-    : items.map(item => ({
-      requirement_id: String(item.feedback_id || ''),
-      text: String(item.text || '').trim(),
-      impact_level: String(item.impact_level_hint || result.impact_level || ''),
-    }));
-  return {
-    schema_version: '1.0.0',
-    proposal_id: String(proposed.proposal_id || `proposal.${feedbackId || 'unbound'}`),
-    status: 'awaiting_user_confirmation',
-    feedback_id: feedbackId,
-    summary: String(proposed.summary || result.plan_summary || pending.text || '').trim(),
-    execution_summary: String(proposed.execution_summary || result.handoff_summary || result.next_recommendation || ''),
-    requirements,
-    impact_level: String(result.impact_level || ''),
-    affected_sections: Array.isArray(result.affected_sections) ? result.affected_sections.map(Number).filter(Number.isInteger) : [],
-    affected_assets: Array.isArray(result.affected_assets) ? result.affected_assets : [],
-    downstream_impact: result.downstream_impact && typeof result.downstream_impact === 'object' ? result.downstream_impact : {},
-    revision_groups: Array.isArray(result.revision_groups) ? result.revision_groups : [],
-    result_packet_path: String(result.result_packet_path || ''),
-    proposed_at: now,
-  };
-}
 
 function buildShortFeedbackProposalPendingAction(template, task) {
   const stageDef = findStage(template, 'feedback_apply_patch');
@@ -4662,21 +4558,6 @@ function recoverShortFeedbackImpact(root, task, pending) {
   };
 }
 
-function reopenShortTaskForFeedback(task, now = new Date().toISOString()) {
-  task.status = 'running';
-  task.lifecycle = normalizeLifecycle(task);
-  task.lifecycle.status = 'active';
-  task.lifecycle.updated_at = now;
-  task.lifecycle.completed_at = '';
-  task.recommended_next = [];
-  if (task.unit_lifecycle && typeof task.unit_lifecycle === 'object') {
-    task.unit_lifecycle = {
-      ...task.unit_lifecycle,
-      status: 'active',
-      updated_at: now,
-    };
-  }
-}
 
 function refreshActiveShortStageGuidance(root, task) {
   if (!isShortWritingWorkflow(task)) return { applied: false, reason: 'not_short_workflow' };
@@ -4933,9 +4814,6 @@ function reconcileShortProjectProgress(root, task, tpl) {
   return { applied: true, ...task.short_project_resume };
 }
 
-function orderedStage(tpl, stageId) {
-  return Boolean(tpl && Array.isArray(tpl.stages) && tpl.stages.some((item) => String((item || {}).stage_id || '') === stageId));
-}
 
 function projectSeedAllTopicCards(root, task) {
   if (String((task || {}).current_stage || '') !== 'project_seed') return [];
@@ -4956,61 +4834,8 @@ function projectSeedAllTopicCards(root, task) {
   }
 }
 
-function infoSourceSelectionCards(root, task) {
-  if (String((task || {}).current_stage || '') !== 'info_source_selection') return [];
-  const file = path.join(root, '追踪/private-short-extension/cards/info-source-cards.jsonl');
-  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return [];
-  const cards = readJsonlRecords(file)
-    .filter(card => ['write', 'backup'].includes(String(card.verdict || '')))
-    .filter(card => !['discarded', 'used'].includes(String(card.pool_status || '')));
-  cards.sort((left, right) => {
-    const byScore = infoSourceMaterialScore(right) - infoSourceMaterialScore(left);
-    if (byScore !== 0) return byScore;
-    const verdictRank = value => String(value.verdict || '') === 'write' ? 0 : 1;
-    const byVerdict = verdictRank(left) - verdictRank(right);
-    if (byVerdict !== 0) return byVerdict;
-    return String(left.info_id || '').localeCompare(String(right.info_id || ''), 'zh-Hans-CN');
-  });
-  return cards.slice(0, 12).map((card, index) => ({ ...card, display_no: index + 1 }));
-}
 
-function readJsonlRecords(file) {
-  try {
-    return fs.readFileSync(file, 'utf8')
-      .split(/\r?\n/u)
-      .filter(line => line.trim())
-      .map(line => JSON.parse(line))
-      .filter(record => record && typeof record === 'object');
-  } catch (_) {
-    return [];
-  }
-}
 
-function parseInfoSourceCardSelection(root, task, input) {
-  const cards = infoSourceSelectionCards(root, task);
-  if (!cards.length) return { status: 'not_applicable', cards: [] };
-  const text = String(input || '').trim();
-  if (!text || /^(?:看|查看|详情|保存退出|保存并退出|暂停|稍后再选)$/u.test(text)) return { status: 'not_selected', cards: [] };
-  const explicit = /^\d+(?:\s*(?:[+、，,]|和|及|与|\s)\s*\d+)*$/u.test(text);
-  const natural = /(?:选|选择|倾向|喜欢|采用|要|用|资讯|素材|第\s*\d+\s*张)/u.test(text);
-  if (!explicit && !natural) return { status: 'not_selected', cards: [] };
-  const numbers = [...text.matchAll(/(\d+)/gu)].map(match => Number(match[1])).filter(number => Number.isInteger(number) && number > 0);
-  const unique = [...new Set(numbers)];
-  if (!unique.length) return { status: 'not_selected', cards: [] };
-  const selected = unique.map(number => cards.find(card => card.display_no === number)).filter(Boolean);
-  if (selected.length !== unique.length) return { status: 'invalid', cards: [], requested: unique, available: cards.length };
-  return { status: 'selected', cards: selected };
-}
-
-function parseInfoSourceCardCommand(root, task, input) {
-  const text = String(input || '').trim();
-  if (!text) return { status: 'not_applicable' };
-  if (/^(?:保存退出|保存并退出|暂停|稍后再选)$/u.test(text)) return { status: 'pause' };
-  const cards = infoSourceSelectionCards(root, task);
-  if (!cards.length) return { status: 'not_applicable' };
-  const detail = text.match(/^(?:看|查看)\s*(?:第\s*)?(\d+)\s*(?:张|个)?(?:详情|卡片|资讯|素材)?$/u);
-  return detail ? cardCommandResult('inspect', cards, Number(detail[1])) : { status: 'not_applicable' };
-}
 
 function infoSourceSelectionResponse(root, task, intro = '') {
   return {
@@ -5047,24 +4872,8 @@ function infoSourceCardDetailResponse(root, task, card) {
   };
 }
 
-function infoSourceMaterialScore(card) {
-  const scorecard = card && card.scorecard && typeof card.scorecard === 'object' ? card.scorecard : {};
-  const value = Number((card || {}).material_score || scorecard.material_score || 0);
-  return Number.isFinite(value) ? value : 0;
-}
 
-function infoSourceRecommendationLabel(card) {
-  const score = infoSourceMaterialScore(card);
-  if (String((card || {}).verdict || '') === 'write' && score >= 8) return '推荐';
-  if (score >= 6.5) return '可组合';
-  return '备选';
-}
 
-function infoSourcePrimaryRoute(card) {
-  const route = (Array.isArray((card || {}).route_fit) ? card.route_fit : [])[0];
-  if (typeof route === 'string') return route;
-  return String((route || {}).route_name || '待补充');
-}
 
 function pauseInfoSourceSelection(root, task) {
   const now = new Date().toISOString();
@@ -5179,10 +4988,6 @@ function parseProjectSeedCardCommand(root, task, input) {
   return { status: 'not_applicable' };
 }
 
-function cardCommandResult(status, cards, number) {
-  const card = cards.find(item => Number(item.display_no) === number);
-  return card ? { status, card, number } : { status: 'invalid', number, available: cards.length };
-}
 
 function projectSeedSelectionResponse(root, task, intro = '') {
   return {
@@ -5493,35 +5298,7 @@ function resolveShortEvidenceResume(root, task, sectionIndex, ordered, draftStag
   return { target_stage: draftStage, evidence_stage: 'brief_ready', latest_trusted_artifact: `写作Brief_第${String(sectionIndex).padStart(3, '0')}节.md` };
 }
 
-function isTrustedShortResumePacket(packet, task, stageId, sectionIndex) {
-  if (!packet || packet.__error) return false;
-  if (String(packet.workflow_id || '') && String(packet.workflow_id) !== String(task.workflow_id || '')) return false;
-  if (String(packet.stage_id || '') !== stageId) return false;
-  if (Number(packet.current_section_index || 0) !== Number(sectionIndex)) return false;
-  if (Array.isArray(packet.blocking_findings) && packet.blocking_findings.length > 0) return false;
-  const verdicts = [packet.verification_result, packet.output_health_result, packet.machine_gate_result, packet.quality_gate_result, packet.story_value_result];
-  return verdicts.some((value) => /^(pass|passed|accepted|approved|ok)$/i.test(String(value || '')));
-}
 
-function shortSettingCandidateView(root, task, options = {}) {
-  const candidate = task.short_setting_candidate && typeof task.short_setting_candidate === 'object'
-    ? task.short_setting_candidate
-    : {};
-  const relative = String(candidate.path || '');
-  const file = resolveSafeProjectFile(root, relative);
-  const source = file && fs.existsSync(file) && fs.statSync(file).isFile()
-    ? fs.readFileSync(file, 'utf8').trim()
-    : '';
-  const limit = Math.max(600, Number(options.previewLimit || 1800));
-  return {
-    status: source ? String(candidate.status || 'ready') : 'missing',
-    path: relative,
-    sha256: String(candidate.sha256 || ''),
-    revision: Number(candidate.revision || 0),
-    preview: source.slice(0, limit),
-    preview_truncated: source.length > limit,
-  };
-}
 
 function shortSettingCandidateInspection(root, task) {
   const candidate = shortSettingCandidateView(root, task, { previewLimit: 6000 });
@@ -6441,57 +6218,6 @@ function shouldContinueConfirmedShortFeedback(task, input, pending) {
   return /(?:根据|按照|按).{0,12}(?:已确认|上述|这个|当前).{0,12}(?:方案|影响|规划).{0,12}(?:继续|执行|修改|回写|回炉)|(?:继续|开始|执行).{0,12}(?:整篇回炉|整篇修改|规划回写|反馈回写)/u.test(String(input || ''));
 }
 
-function invalidateShortFeedbackAnalysis(task, now = new Date().toISOString()) {
-  task.short_feedback_impact = null;
-  if (task.feedback_revision_queue) {
-    const queue = task.feedback_revision_queue;
-    task.feedback_revision_history = [
-      ...(Array.isArray(task.feedback_revision_history) ? task.feedback_revision_history : []),
-      {
-        queue_id: String(queue.queue_id || ''),
-        feedback_id: String(queue.feedback_id || ''),
-        current_section_index: Number(queue.current_section_index || 0) || null,
-        completed_sections: Array.isArray(queue.completed_sections) ? queue.completed_sections : [],
-        remaining_sections: (Array.isArray(queue.items) ? queue.items : [])
-          .filter(item => String((item || {}).status || '') !== 'accepted')
-          .map(item => Number((item || {}).section_index || 0))
-          .filter(Boolean),
-        snapshot_at: now,
-        reason: 'new_feedback_received',
-      },
-    ].slice(-20);
-    queue.interruption = {
-      status: 'feedback_analysis_pending',
-      section_index: Number(queue.current_section_index || 0) || null,
-      at: now,
-    };
-    queue.checkpoints = [
-      ...(Array.isArray(queue.checkpoints) ? queue.checkpoints : []),
-      {
-        event: 'feedback_received',
-        section_index: Number(queue.current_section_index || 0) || null,
-        at: now,
-      },
-    ].slice(-50);
-    queue.updated_at = now;
-  }
-  task.last_selection = null;
-  task.machine = task.machine || {};
-  task.machine.completed_stages = (Array.isArray(task.machine.completed_stages) ? task.machine.completed_stages : [])
-    .filter(stageId => !['feedback_impact_sync', 'feedback_apply_patch'].includes(String(stageId || '')));
-  task.machine.remaining_stages = [
-    'feedback_impact_sync',
-    'feedback_apply_patch',
-    ...(Array.isArray(task.machine.remaining_stages) ? task.machine.remaining_stages : [])
-      .filter(stageId => !['feedback_impact_sync', 'feedback_apply_patch'].includes(String(stageId || ''))),
-  ];
-  task.machine.last_result_packet = '';
-  task.machine.last_transition = 'short_feedback_reanalysis_required';
-  const latest = String(((((task || {}).runtime_guard || {}).heartbeat || {}).latest_trusted_artifact) || '');
-  if (/\/feedback_(?:impact_sync|apply_patch)(?:\.|\.result)/.test(latest)) {
-    task.runtime_guard.heartbeat.latest_trusted_artifact = '';
-  }
-}
 
 function isShortWritingWorkflow(task) {
   return isShortWorkflowType((task || {}).workflow_type);
@@ -6512,9 +6238,6 @@ function shortSectionIndex(root, task, stageId) {
   });
 }
 
-function shortBriefPath(sectionIndex) {
-  return `写作Brief_第${String(sectionIndex).padStart(3, '0')}节.md`;
-}
 
 function shortAcceptedAnchorPath(root, sectionIndex) {
   if (sectionIndex <= 1) return '';
@@ -6682,16 +6405,7 @@ function validateShortFeedbackBinding(task, result) {
   return null;
 }
 
-function shortFeedbackId(text, receivedAt) {
-  return `feedback-${crypto.createHash('sha256').update(`${String(receivedAt || '')}\n${String(text || '').trim()}`, 'utf8').digest('hex').slice(0, 16)}`;
-}
 
-function pendingFeedbackSectionIndex(pending) {
-  const explicit = Number((pending || {}).section_index || 0);
-  if (Number.isInteger(explicit) && explicit > 0) return explicit;
-  const match = `${String((pending || {}).scope_snapshot || '')}\n${String((pending || {}).text || '')}`.match(/第\s*0*(\d+)\s*节/u);
-  return match ? Number(match[1]) : 0;
-}
 
 function pendingFeedbackImpactLevel(pending) {
   const allowed = ['expression_only', 'current_brief', 'planning', 'structure'];
@@ -6709,12 +6423,6 @@ function pendingFeedbackImpactLevel(pending) {
   return inferFeedbackImpact(String((pending || {}).text || ''), String((pending || {}).classification || '')).impact_level;
 }
 
-function isExpressionOnlyShortFeedback(text) {
-  const value = String(text || '').trim();
-  if (!value) return false;
-  if (/(扩容|缩容|增加.{0,4}(节|情节)|删除.{0,4}(节|情节)|合并.{0,4}(节|情节)|重排|改大纲|改设定|人物动机|核心反转|主线|结局)/u.test(value)) return false;
-  return /(AI\s*味|ai\s*味|破折号|省略号|标点|句式|用词|措辞|语气|口吻|对白.{0,4}(自然|生硬)|短句.{0,4}(太多|过密)|复读|重复表达)/u.test(value);
-}
 
 function shortFeedbackReconcileBlock(task, result) {
   if (!isShortWritingWorkflow(task)) return null;
@@ -6773,14 +6481,6 @@ function validateVisibleChoiceBinding(task, pending, args, root) {
   return null;
 }
 
-function visibleChoiceBinding(task, pending, root) {
-  return {
-    pending_action_id: String((pending || {}).id || ''),
-    visible_choice_hash: String((pending || {}).visible_choice_hash || ''),
-    state_version: Number(task.state_version || 0),
-    book_root: root,
-  };
-}
 
 function refreshedVisibleMenu(task, root) {
   const overloadChoice = String((((task || {}).pending_action || {}).id) || '').startsWith('pa-short-brief-overload-');
@@ -7002,13 +6702,6 @@ function pendingActionVisibleResponse(task, root, intro = '') {
   };
 }
 
-function awaitingCurrentShortFeedbackProposal(task) {
-  const pendingFeedbackId = String((((task || {}).pending_feedback || {}).feedback_id) || '');
-  const proposal = task && task.proposed_plan && typeof task.proposed_plan === 'object' ? task.proposed_plan : {};
-  return Boolean(pendingFeedbackId)
-    && String(proposal.feedback_id || '') === pendingFeedbackId
-    && String(proposal.status || '') === 'awaiting_user_confirmation';
-}
 
 function shortRevisionQueueProgress(task, root) {
   if (!task || !task.feedback_revision_queue) return null;
@@ -7234,35 +6927,7 @@ function portableProjectCommand(command, root) {
   return value;
 }
 
-function bindStageCompletionContract(execution) {
-  if (!execution || typeof execution !== 'object') return execution;
-  const completionCommand = String(execution.stage_completion_command || execution.execution_command || '');
-  if (!completionCommand) return execution;
-  return {
-    ...execution,
-    stage_completion_command: completionCommand,
-    current_required_action: 'edit_write_set',
-    after_write_action: {
-      type: 'execute_command',
-      command: completionCommand,
-    },
-    completion_required_before_reply: true,
-    stage_completion_contract: 'read_context_edit_write_set_execute_completion_command_consume_result_same_turn',
-    execution_sequence: ['read_context', 'edit_write_set', 'execute_completion_command', 'consume_result_presentation'],
-  };
-}
 
-function shortFeedbackExecutionContractCurrent(task, execution) {
-  if (String((task || {}).current_stage || '') !== 'feedback_impact_sync') return true;
-  const expected = String((execution || {}).expected_result_packet || '');
-  const writeSet = Array.isArray((execution || {}).write_set) ? execution.write_set.map(String) : [];
-  const completion = String((execution || {}).stage_completion_command || (execution || {}).execution_command || '');
-  return Boolean(expected
-    && writeSet.length === 1
-    && writeSet[0] === expected
-    && /workflow-state-machine\.js apply-result/u.test(completion)
-    && completion.includes(`--result ${JSON.stringify(expected)}`));
-}
 
 function shortFeedbackContractRecovery(task) {
   const command = `node scripts/workflow-state-machine.js resume-pending-short-feedback --project-root . --workflow-id ${JSON.stringify(String((task || {}).workflow_id || ''))} --json`;
@@ -7361,20 +7026,6 @@ function runningStageResume(task, root) {
   };
 }
 
-function runningStageExecutionBlocker(execution) {
-  const memory = execution && execution.memory_context;
-  if (memory && memory.blocking === true) {
-    return { reason: String(memory.reason || memory.status || '当前阶段记忆上下文不可用。') };
-  }
-  for (const field of ['character_contract_blocking', 'context_packet_blocking']) {
-    const finding = execution && execution[field];
-    if (!finding || typeof finding !== 'object') continue;
-    if (finding.blocking === true || String(finding.status || '').startsWith('blocked_')) {
-      return { reason: String(finding.reason || finding.status || '当前阶段上下文存在阻断项。') };
-    }
-  }
-  return null;
-}
 
 function longformResultContractRecovery(task, finding) {
   const holder = String(((((task || {}).runtime_guard || {}).session_lease || {}).holder_id) || 'recovery:stage-result-contract');
@@ -7404,18 +7055,6 @@ function longformResultContractRecovery(task, finding) {
   };
 }
 
-function runningStageDisplayName(stageId) {
-  const names = {
-    feedback_impact_sync: '分析反馈影响',
-    feedback_apply_patch: '回写已确认的设定与小节大纲',
-    section_plan_lock: '确认总节数与小节标题',
-    section_brief_ready: '生成当前小节写作提要',
-    section_draft_loop: '写作当前小节',
-    section_repair_loop: '修订当前小节',
-    final_check: '完成全篇最终检查',
-  };
-  return names[String(stageId || '')] || '继续当前任务';
-}
 
 function runningStageControlMenu(task, root, prefix = '') {
   const command = (number) => `node scripts/workflow-state-machine.js resolve-action --project-root . --input ${number} --bind-current --json`;
@@ -7868,45 +7507,7 @@ function retireInvalidCurrentStageResultContract(root, task, finding) {
   return retired;
 }
 
-function stageWorkUnitId(task, stageId, scope) {
-  const identity = [
-    String((task || {}).workflow_id || 'workflow'),
-    String(stageId || 'stage'),
-    String(scope || 'current-scope'),
-  ].join('|');
-  return `wu-${crypto.createHash('sha256').update(identity).digest('hex').slice(0, 16)}`;
-}
 
-function preservePreviousStageAttempt(task, nextWorkUnitId, preservedAt) {
-  const previous = task && task.stage_execution && typeof task.stage_execution === 'object'
-    ? task.stage_execution
-    : null;
-  const history = Array.isArray((task || {}).stage_attempt_history)
-    ? task.stage_attempt_history.slice()
-    : [];
-  if (previous && previous.stage_attempt_id
-    && !history.some(item => String((item || {}).stage_attempt_id || '') === String(previous.stage_attempt_id))) {
-    history.push({
-      stage_attempt_id: String(previous.stage_attempt_id || ''),
-      work_unit_id: String(previous.work_unit_id || ''),
-      stage_id: String(previous.stage_id || ''),
-      status: String(previous.status || ''),
-      expected_result_packet: String(previous.expected_result_packet || ''),
-      accepted_result_packet: String(previous.accepted_result_packet || previous.result_packet || ''),
-      failed_result_packet: String(previous.failed_result_packet || ''),
-      started_at: String(previous.started_at || ''),
-      preserved_at: String(preservedAt || new Date().toISOString()),
-    });
-  }
-  task.stage_attempt_history = history.slice(-100);
-  const sameUnitAttempts = task.stage_attempt_history
-    .filter(item => String((item || {}).work_unit_id || '') === String(nextWorkUnitId || ''));
-  const latest = sameUnitAttempts[sameUnitAttempts.length - 1] || null;
-  return {
-    attempt_no: sameUnitAttempts.length + 1,
-    supersedes_attempt_id: latest ? String(latest.stage_attempt_id || '') : '',
-  };
-}
 
 function validateStartedStageExecutionContract(task, stageId) {
   const workflowType = String((task || {}).workflow_type || '');
@@ -8216,18 +7817,6 @@ function attachStageMemoryGuidance(root, task, targetStage) {
   markShortMemoryMigrationRefreshed(task, context, targetStage);
 }
 
-function markShortMemoryMigrationRefreshed(task, context, targetStage) {
-  if (String((((task || {}).memory_migration || {}).status) || '') !== 'refresh_on_resume') return;
-  if (!context || context.blocking || String(context.status || '') !== 'assembled') return;
-  task.memory_migration = {
-    ...(task.memory_migration || {}),
-    status: 'completed',
-    refreshed_stage: String(targetStage || ''),
-    refreshed_packet: String(context.packet_json || ''),
-    refreshed_revision: String((((context || {}).memory_contract || {}).memory_revision) || ''),
-    refreshed_at: new Date().toISOString(),
-  };
-}
 
 function attachLongStageExecutionGuidance(root, task, targetStage) {
   if (String(task.workflow_type || '') !== 'long_write') return;
@@ -8302,13 +7891,6 @@ function attachLongStageExecutionGuidance(root, task, targetStage) {
   }
 }
 
-function shortPlanningWorkspacePath(task, targetStage, attempt, canonical) {
-  const workspaceId = crypto.createHash('sha256')
-    .update(`${String(task.workflow_id || '')}\0${String(targetStage || '')}\0${String(attempt || '')}`)
-    .digest('hex')
-    .slice(0, 12);
-  return `追踪/workflow/staging/${workspaceId}/${path.basename(canonical)}`;
-}
 
 function chooseShortPlanningStagedPath(root, task, execution, targetStage, attempt, canonical, existingPath = '') {
   const existing = String(existingPath || '').replace(/\\/g, '/').replace(/^\.\//, '');
@@ -8680,77 +8262,10 @@ function attachShortStageExecutionGuidance(root, task, targetStage) {
   }
 }
 
-function shortPlanningCanonicalTarget(stageId) {
-  return ({
-    project_seed: '素材卡.md',
-    material_card: '素材卡.md',
-    short_setting: '设定.md',
-    platform_genre_lock: '设定.md',
-    rhythm_pattern_selection: '设定.md',
-    section_outline: '小节大纲.md',
-  })[String(stageId || '')] || '';
-}
 
-function hasAuthoredQualityEvidence(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  if (String(value.summary || '').trim()) return true;
-  const checks = Array.isArray(value.checks) ? value.checks : [];
-  if (checks.some((item) => ['status', 'evidence', 'evidence_quote'].some((key) => String((item || {})[key] || '').trim()))) return true;
-  const coverage = Array.isArray(value.outline_coverage) ? value.outline_coverage : [];
-  if (coverage.some((item) => ['status', 'evidence_quote'].some((key) => String((item || {})[key] || '').trim()))) return true;
-  const metadata = value.acceptance_metadata && typeof value.acceptance_metadata === 'object'
-    ? value.acceptance_metadata
-    : {};
-  if ((Array.isArray(metadata.revealed_information) && metadata.revealed_information.length)
-    || (metadata.character_state && typeof metadata.character_state === 'object' && Object.keys(metadata.character_state).length)
-    || String(metadata.open_hook || '').trim()) return true;
-  const reader = value.reader_milestone && typeof value.reader_milestone === 'object'
-    ? value.reader_milestone
-    : {};
-  return Object.values(reader).some((item) => String(item || '').trim());
-}
 
-function shortPlanningInputs(stageId) {
-  const map = {
-    project_seed: [],
-    material_card: [],
-    short_setting: ['素材卡.md'],
-    platform_genre_lock: ['素材卡.md', '设定.md'],
-    rhythm_pattern_selection: ['素材卡.md', '设定.md'],
-    section_outline: ['素材卡.md', '设定.md'],
-  };
-  return map[String(stageId || '')] || [];
-}
 
-function synchronizeShortUnitScope(task, sectionIndex, stageId) {
-  const normalizedIndex = Number(sectionIndex || 0);
-  if (!Number.isInteger(normalizedIndex) || normalizedIndex < 1) return;
-  const scope = `第${normalizedIndex}节`;
-  task.scope = scope;
-  task.unit_lifecycle = {
-    ...(task.unit_lifecycle || {}),
-    unit_type: 'section',
-    status: 'active',
-    current_scope: scope,
-    current_stage: String(stageId || task.current_stage || ''),
-    updated_at: new Date().toISOString(),
-  };
-}
 
-function synchronizeShortWholeStoryScope(task, stageId) {
-  task.scope = '全篇';
-  task.lifecycle = normalizeLifecycle(task);
-  task.lifecycle.scope = '全篇';
-  task.lifecycle.updated_at = new Date().toISOString();
-  task.unit_lifecycle = {
-    ...(task.unit_lifecycle || {}),
-    unit_type: 'story',
-    status: 'active',
-    current_scope: '全篇',
-    current_stage: String(stageId || task.current_stage || ''),
-    updated_at: new Date().toISOString(),
-  };
-}
 
 function resolveDeterministicShortRepair(root, task) {
   const packetRel = String(((task.machine || {}).last_result_packet) || '');
@@ -8770,9 +8285,6 @@ function resolveDeterministicShortRepair(root, task) {
   return { status: 'quote_only', repair_target: repairTarget, repair_file: repairFile };
 }
 
-function createStageAttemptId(workflowId, stageId) {
-  return `sa-${String(workflowId || 'workflow')}-${String(stageId || 'stage')}-${crypto.randomBytes(4).toString('hex')}`;
-}
 
 function expectedResultPacketPath(task, stageId, projectRoot = '') {
   const baseDir = task.context_paths && task.context_paths.result_packets_dir
@@ -8803,30 +8315,6 @@ function expectedResultPacketPath(task, stageId, projectRoot = '') {
   return `${baseDir}/${stageId}.result.json`;
 }
 
-function buildConfirmationContext(task, selected, stageId, selectedAt) {
-  return {
-    status: 'confirmed',
-    workflow_id: task.workflow_id || '',
-    workflow_type: task.workflow_type || '',
-    stage_id: stageId,
-    step_id: stageId,
-    selection_id: selected.selection_id || '',
-    selected_number: selected.selected_number,
-    selected_action_id: selected.action_id || '',
-    selected_at: selectedAt,
-    confirmed_at: selectedAt,
-    expires_at: selected.selection_expires_at || '',
-    visible_choice_hash: selected.visible_choice_hash || '',
-    confirmation_token: crypto.randomBytes(24).toString('hex'),
-    operation: task.workflow_type === 'cover' ? (task.cover_operation || 'generate') : '',
-    target_scope: selected.target_scope || task.scope || '',
-    target_files: Array.isArray(selected.target_files) ? selected.target_files.slice() : [],
-  };
-}
-
-function inferCoverOperation(userGoal, scope) {
-  return /覆盖|替换|overwrite/i.test(`${userGoal || ''} ${scope || ''}`) ? 'overwrite' : 'generate';
-}
 
 function classifyFreeTextInput(task, input, pending) {
   const text = String(input || '').trim();
@@ -8947,16 +8435,6 @@ function restartShortInfoDiscovery(root, task, taskTemplate, input) {
   };
 }
 
-function inferStructureChangeType(text) {
-  if (/插入|插章/.test(text)) return 'insert';
-  if (/合并/.test(text)) return 'merge';
-  if (/删除|删章/.test(text)) return 'delete';
-  if (/扩容/.test(text)) return 'expand';
-  if (/缩容/.test(text)) return 'shrink';
-  if (/前移|后移/.test(text)) return 'move';
-  if (/重排/.test(text)) return 'reorder';
-  return '';
-}
 
 function applyLongformStructureFeedback(task, replan, input) {
   const tpl = templates().long_write;
@@ -9033,77 +8511,8 @@ function applyLongformStructureFeedback(task, replan, input) {
   }
 }
 
-function inferFreeTextClassification(text) {
-  const normalized = text.replace(/\s+/g, ' ');
-  const scopeMatch = normalized.match(/(\d+\s*[-到至]\s*\d+)/);
-  const targetScope = scopeMatch ? scopeMatch[1].replace(/\s+/g, '') : '';
-  if (/(?:重新|重来|再|换一批|作废|不要|丢弃).{0,12}(?:抓取|获取|搜|资讯|热点|素材)|(?:资讯|热点|素材).{0,12}(?:重新抓取|重抓|换一批|作废|不要了)/.test(normalized)) {
-    return {
-      classification: 'restart_short_info_discovery',
-      recommended_action: 'restart_short_info_discovery',
-      suggested_workflow_type: 'short_write',
-      target_scope: '',
-      reason: '用户明确要求废弃当前资讯选择并重新发现热点；旧素材保留为历史，不进入后续上下文。',
-    };
-  }
-  if (/先别|不要继续|换个任务|新任务|改成|转去|先审|审阅|审查/.test(normalized) && /(审阅|审查|拆文|写|短篇|长篇|去\s*AI|下载|导入)/.test(normalized)) {
-    return {
-      classification: 'switch_intent',
-      recommended_action: 'call_switch_intent',
-      suggested_workflow_type: suggestedWorkflowType(normalized),
-      target_scope: targetScope,
-      reason: '用户输入包含明显的新任务或切换意图；不得绑定到旧数字候选。',
-    };
-  }
-  if (isStructuralScopeChange(normalized)) {
-    return {
-      classification: 'scope_change',
-      recommended_action: 'route_upstream_replan',
-      suggested_workflow_type: 'long_write',
-      target_scope: targetScope,
-      reason: '用户改变章/节数量、边界或顺序；需要先回到计划锁定和影响审计。',
-    };
-  }
-  if (/不合理|不对|跑题|人物|动机|逻辑|重做|重写|回炉|反馈|修改|更新|调整|改一下|改为|改成|换成|替换|删除|删掉|不像人|不好看|没爽点|太平|太AI|AI味/.test(normalized)
-    || /第\s*\d+\s*节[^。；]{0,80}(?:可以|建议|应该|改为|加入|增加)/.test(normalized)
-    || /(?:开头|结尾|这一节)[^。；]{0,80}(?:可以|建议|应该|改为|加入|增加)/.test(normalized)) {
-    return {
-      classification: 'current_artifact_feedback',
-      recommended_action: 'route_feedback_before_execution',
-      suggested_workflow_type: '',
-      target_scope: targetScope,
-      reason: '用户在评价当前产物；先判断是否修当前阶段或回写上游设定/大纲/Brief。',
-    };
-  }
-  return {
-    classification: 'free_text_instruction',
-    recommended_action: 'route_by_intent_schema',
-    suggested_workflow_type: suggestedWorkflowType(normalized),
-    target_scope: targetScope,
-    reason: '自由输入需要先做结构化意图识别，再决定是否沿用当前任务。',
-  };
-}
 
-function isStructuralScopeChange(text) {
-  if (/扩容|缩容|重排/.test(text)) return true;
-  const unit = '(?:第\\s*\\d+\\s*)?(?:卷|章|章节|节|小节)';
-  const structuralAction = '(?:插入|插一|增加|新增|拆分|拆成|合并|删除|删掉|前移|后移|移动)';
-  return new RegExp(`${structuralAction}[^。；，,]{0,18}${unit}|${unit}[^。；，,]{0,18}${structuralAction}`).test(text);
-}
 
-function suggestedWorkflowType(text) {
-  if (/封面|封皮|书皮/.test(text)) return 'cover';
-  if (/短篇.*(扫榜|排行|什么火)|((扫榜|排行|什么火).*)短篇/.test(text)) return 'short_scan';
-  if (/长篇.*(扫榜|排行|什么火)|((扫榜|排行|什么火).*)长篇|起点|番茄|晋江/.test(text)) return 'long_scan';
-  if (/短篇.*(拆文|拆书|拆解|分析)|((拆文|拆书|拆解|分析).*)短篇/.test(text)) return 'short_analyze';
-  if (/审阅|审查|复检/.test(text)) return 'review_repair';
-  if (/拆文|拆书|拆解|学习/.test(text)) return 'long_analyze';
-  if (/短篇|小节|脑洞|素材卡/.test(text)) return 'short_write';
-  if (/去\s*AI|AI味|润色|精修/.test(text)) return 'deslop';
-  if (/下载|导入|续更/.test(text)) return 'download_import';
-  if (/长篇|章节|卷纲|细纲|正文|扩容|缩容/.test(text)) return 'long_write';
-  return '';
-}
 
 function internalizeLegacyAuthorStop(root, task, tpl) {
   if (String((((task || {}).pending_action || {}).id) || '').startsWith('pa-short-brief-overload-')) {
@@ -10023,17 +9432,6 @@ function configureConfirmedLongPlanningRevision(root, task, targetStage, selecte
   return { status: 'configured' };
 }
 
-function failClosedPlanningRevision(execution, reason) {
-  if (execution && typeof execution === 'object') {
-    execution.write_set = [];
-    execution.canonical_write_set = [];
-    execution.revision_targets = [];
-    execution.planning_targets = [];
-    delete execution.execution_command;
-    execution.context_packet_warning = reason;
-  }
-  return { status: 'blocked', reason };
-}
 
 // Longform planning revisions expose two distinct path sets: the exact staged
 // candidates the host edits (write_set / snapshot authorized_write_set) and
@@ -10059,15 +9457,6 @@ function longPlanningStagedPaths(task) {
     .filter(Boolean);
 }
 
-function longPlanningStagedPath(task, execution, index, canonical) {
-  const attempt = safeLongPathSegment(String((execution || {}).stage_attempt_id || 'attempt'));
-  const workspaceId = crypto.createHash('sha256')
-    .update(`${String((task || {}).workflow_id || '')}\0${String((execution || {}).stage_id || 'long-planning')}\0${attempt}`)
-    .digest('hex')
-    .slice(0, 12);
-  const basename = path.posix.basename(String(canonical || ''));
-  return `追踪/workflow/staging/${workspaceId}/${String(index + 1).padStart(3, '0')}-${basename}`;
-}
 
 function seedLongPlanningCandidate(root, staged, canonical) {
   const stagedFile = path.join(root, staged);
@@ -10082,9 +9471,6 @@ function seedLongPlanningCandidate(root, staged, canonical) {
   atomicWriteText(stagedFile, seed);
 }
 
-function safeLongPathSegment(value) {
-  return String(value || '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'attempt-pending';
-}
 
 function validateShortSectionAcceptanceResult(projectRoot, task, result) {
   if (!SHORT_WORKFLOW_TYPES.has(String(task.workflow_type || ''))
@@ -10565,22 +9951,7 @@ function maybeAutoStartInternalStage(root, task, taskTemplate) {
   }, selectedAt, null);
 }
 
-function longformReviewReturnWaitingProducer(task) {
-  return String((task || {}).workflow_type || '') === 'long_write'
-    && ['master_outline', 'volume_outline', 'stage_detail_outline', 'chapter_brief'].includes(String((task || {}).current_stage || ''))
-    && String((((task || {}).machine || {}).last_transition) || '') === 'review_failed_return_to_asset';
-}
 
-function longformReviewReturnIntro(task) {
-  if (!longformReviewReturnWaitingProducer(task)) return '';
-  const messages = arrayOrEmpty((((task || {}).machine || {}).last_blocking_findings))
-    .map((finding) => String((finding || {}).message || finding || '').trim())
-    .filter(Boolean)
-    .slice(0, 3);
-  return messages.length > 0
-    ? `上一轮审阅未通过：${messages.join('；')}`
-    : '上一轮审阅未通过，已返回当前规划资产修订。';
-}
 
 function confirmedShortFeedbackRevisionDraftAction(task) {
   if (!task || !['draft_first_section', 'draft_section', 'draft_next_section'].includes(String(task.current_stage || ''))) return null;
@@ -10630,15 +10001,6 @@ function blockTerminalCanonicalAudit(task, audit, result, resultFile, phase = 't
   });
 }
 
-function stageCanonicalWriteSet(result) {
-  const candidates = [
-    ...arrayOrEmpty((result || {}).result_write_set),
-    ...arrayOrEmpty((result || {}).changed_assets),
-    ...arrayOrEmpty((result || {}).changed_files),
-    ...arrayOrEmpty((result || {}).created_files),
-  ];
-  return Array.from(new Set(candidates.map(item => String(item || '').trim()).filter(Boolean)));
-}
 
 function detailOutlineTargetsFromResult(root, result) {
   return stageCanonicalWriteSet(result)
@@ -10653,25 +10015,7 @@ function detailOutlineTargetsFromResult(root, result) {
     .filter(Boolean);
 }
 
-function detailOutlineTargetKey(target) {
-  if (!target || typeof target !== 'object') return '';
-  const targetId = String(target.target_id || '');
-  if (targetId) return `target_id:${targetId}`;
-  const outlinePath = String(target.outline_path || '');
-  const outlineSha256 = String(target.outline_sha256 || '');
-  return outlinePath && outlineSha256 ? `${outlinePath}\n${outlineSha256}` : '';
-}
 
-function pendingDetailOutlineTargets(task) {
-  const consumed = new Set(arrayOrEmpty((task || {}).consumed_detail_outline_targets)
-    .map(detailOutlineTargetKey)
-    .filter(Boolean));
-  return arrayOrEmpty((task || {}).accepted_detail_outline_targets)
-    .filter((target) => {
-      const key = detailOutlineTargetKey(target);
-      return key && !consumed.has(key);
-    });
-}
 
 function ensureActiveChapterTarget(task) {
   const active = (task || {}).active_chapter_target;
@@ -10841,9 +10185,6 @@ function validateLongChapterEcho(projectRoot, task, result) {
   return null;
 }
 
-function arrayOrEmpty(value) {
-  return Array.isArray(value) ? value : [];
-}
 
 function recoverTerminalCanonicalAudit(root, task, result, resultFile) {
   const block = task.canonical_write_audit_block;
@@ -10894,13 +10235,7 @@ function recoverTerminalCanonicalAudit(root, task, result, resultFile) {
   return { schemaVersion: SCHEMA_VERSION, status: 'advanced', task, current_stage: task.current_stage, remaining_stages: task.machine.remaining_stages };
 }
 
-function hashFile(file) {
-  return `sha256:${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`;
-}
 
-function normalizeContentHash(value) {
-  return String(value || '').replace(/^sha256:/, '');
-}
 
 function normalizeLongChapterBriefReviewBudget(root, task, result, resultFile) {
   if (String((task || {}).workflow_type || '') !== 'long_write'
@@ -11077,10 +10412,6 @@ function validateDetailOutlineTargetEnrichment(projectRoot, task, result) {
   ]);
 }
 
-function detailOutlineReviewAccepted(result) {
-  const quality = (((result || {}).outputs || {}).detail_outline_quality) || {};
-  return ['pass', 'pass_with_advisory'].includes(String(quality.status || ''));
-}
 
 function validateManagedRunnerContract(task, result, projectRoot) {
   if (String(result.step_status || '') !== 'completed') return null;
@@ -11338,20 +10669,6 @@ function validateShortResultMemoryReceipt(task, result, projectRoot) {
   }]);
 }
 
-function acceptedShortPlanningMemoryBoundary(task, result, execution) {
-  const stageId = String(result.stage_id || execution.stage_id || task.current_stage || '');
-  if (!['project_seed', 'material_card', 'short_setting', 'platform_genre_lock', 'rhythm_pattern_selection', 'section_outline', 'feedback_apply_patch'].includes(stageId)) return false;
-  const validation = result.memory_validation && typeof result.memory_validation === 'object'
-    ? result.memory_validation
-    : {};
-  if (String(validation.stage_attempt_id || '') !== String(execution.stage_attempt_id || '')) return false;
-  const boundary = String(validation.boundary || '');
-  const status = String(validation.status || '');
-  if (boundary === 'pre_commit' && ['pass', 'not_recorded'].includes(status)) return true;
-  if (boundary !== 'accepted_commit_replay' || status !== 'accepted_transaction') return false;
-  const resultCommitId = String((((result || {}).chapter_commit || {}).accepted_commit_id) || (((result.evidence || [])[0] || {}).commit_id) || '');
-  return Boolean(resultCommitId && resultCommitId === String(validation.accepted_commit_id || ''));
-}
 
 function validateLongformWriteSet(task, result, projectRoot) {
   if (task.workflow_type !== 'long_write') return null;
@@ -11615,41 +10932,11 @@ function validateLongformProjectTreeSymlinks(projectRoot) {
   })));
 }
 
-function inspectProjectTreeSymlinks(projectRoot) {
-  const root = path.resolve(projectRoot);
-  const symlinks = [];
-  try {
-    if (fs.lstatSync(root).isSymbolicLink()) return { symlinks: ['.'], error: '' };
-    const visit = (dir) => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const absolute = path.join(dir, entry.name);
-        const relative = rel(root, absolute);
-        const entryStat = fs.lstatSync(absolute);
-        if (entryStat.isSymbolicLink()) {
-          symlinks.push(relative);
-        } else if (relative === '.git' || relative.startsWith('.git/')) {
-          continue;
-        } else if (entryStat.isDirectory()) {
-          visit(absolute);
-        }
-      }
-    };
-    visit(root);
-    return { symlinks: symlinks.sort(), error: '' };
-  } catch (error) {
-    return { symlinks, error: String(error && error.message ? error.message : error) };
-  }
-}
 
 function normalizedUniquePaths(values) {
   return Array.from(new Set((values || []).map(normalizeWriteSetPath))).sort();
 }
 
-function normalizeWriteSetPath(value) {
-  const raw = String(value || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
-  if (!raw || path.isAbsolute(raw) || raw.split('/').includes('..')) return '';
-  return raw.replace(/\/{2,}/g, '/');
-}
 
 function writeSetEntryAllows(entry, file) {
   const rule = normalizeWriteSetPath(entry);
@@ -11806,10 +11093,6 @@ function validateLongformReviewAcceptance(task, result, stageDef) {
   }]);
 }
 
-function sameContractValue(actual, expected) {
-  if (actual && typeof actual === 'object') return JSON.stringify(actual) === JSON.stringify(expected);
-  return String(actual) === String(expected);
-}
 
 function validateEvidenceScanReceipt(task, result, projectRoot) {
   if (task.workflow_type !== 'review_repair' || task.current_stage !== 'evidence_scan') return null;
@@ -12288,36 +11571,7 @@ function activeChapterTargetIdentity(target) {
   };
 }
 
-function normalizedVolumeIdentity(value) {
-  const raw = String(value || '').replace(/\s+/g, '');
-  const match = raw.match(/^第([0-9一二三四五六七八九十百]+)卷$/)
-    || raw.match(/^卷([0-9一二三四五六七八九十百]+)$/)
-    || raw.match(/^([0-9一二三四五六七八九十百]+)$/);
-  if (!match) return '';
-  if (/^\d+$/.test(match[1])) return String(Number(match[1]));
-  const number = chineseNumeralValue(match[1]);
-  return number > 0 ? String(number) : '';
-}
 
-function chineseNumeralValue(value) {
-  const digits = { 零: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
-  const units = { 十: 10, 百: 100 };
-  let total = 0;
-  let current = 0;
-  for (const char of String(value || '')) {
-    if (Object.prototype.hasOwnProperty.call(digits, char)) current = digits[char];
-    else if (units[char]) {
-      total += (current || 1) * units[char];
-      current = 0;
-    } else return 0;
-  }
-  return total + current;
-}
-
-function normalizedChapterIdentity(value) {
-  const match = String(value || '').trim().match(/^(?:第\s*)?0*(\d+)\s*(?:章)?$/);
-  return match ? Number(match[1]) : 0;
-}
 
 function strictCanonicalResultTargets(projectRoot, result) {
   const changedFiles = Array.isArray(result.changed_files) ? result.changed_files.filter(Boolean) : [];
@@ -12341,29 +11595,6 @@ function strictCanonicalResultTargets(projectRoot, result) {
   return { targets, error: null };
 }
 
-function resolveInsideProject(projectRoot, relativePath) {
-  const root = path.resolve(projectRoot);
-  const file = path.resolve(root, relativePath);
-  if (file === root || !file.startsWith(`${root}${path.sep}`)) return '';
-  return file;
-}
-
-function resolveSafeProjectFile(projectRoot, filePath) {
-  if (!filePath) return '';
-  const root = path.resolve(projectRoot);
-  const file = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
-  if (file === root || !file.startsWith(`${root}${path.sep}`)) return '';
-  try {
-    const realRoot = fs.realpathSync(root);
-    let existing = file;
-    while (!fs.existsSync(existing) && existing !== root) existing = path.dirname(existing);
-    const realExisting = fs.realpathSync(existing);
-    if (realExisting !== realRoot && !realExisting.startsWith(`${realRoot}${path.sep}`)) return '';
-  } catch (_) {
-    return '';
-  }
-  return file;
-}
 
 function advanceTask(task, result, projectRoot, taskTemplate, options = {}) {
   const tpl = taskTemplate;
@@ -12663,20 +11894,6 @@ function normalizeMachine(task, tpl) {
   };
 }
 
-function normalizeLifecycle(task) {
-  const now = new Date().toISOString();
-  const lifecycle = task.lifecycle || {};
-  return {
-    status: lifecycle.status || (task.status === 'completed' ? 'completed' : 'active'),
-    started_at: lifecycle.started_at || task.created_at || now,
-    updated_at: lifecycle.updated_at || task.updated_at || now,
-    completed_at: lifecycle.completed_at || '',
-    user_goal: lifecycle.user_goal || task.user_goal || '',
-    scope: lifecycle.scope || task.scope || '',
-    previous_workflow_id: lifecycle.previous_workflow_id || '',
-    switch_reason: lifecycle.switch_reason || '',
-  };
-}
 
 function longformLifecycleMigrationBlock(task) {
   if (!task || task.workflow_type !== 'long_write') return null;
@@ -12967,8 +12184,8 @@ function frozenShortWriteMutation(args, mutating) {
   );
 }
 
-function main() {
-  const args = parseArgs(process.argv);
+function runCommand(input) {
+  const args = { ...input };
   const effective = buildEffectiveTemplates(args.privateRegistryRoot, args.noPrivateRegistry);
   ACTIVE_TEMPLATES = effective.templates;
   ACTIVE_REGISTRIES = effective.registries;
@@ -13031,33 +12248,16 @@ function main() {
   if (args.compact && args.command === 'task-overview') result = compactTaskOverviewResult(result);
   if (args.compact && args.command === 'next-candidates') result = compactNextCandidatesResult(result);
   if (args.compact && args.command === 'resolve-action') result = compactResolveActionResult(result);
+  return result;
+}
+
+function main() {
+  const args = parseArgs(process.argv);
+  const result = runCommand(args);
   print(result, args.json);
   process.exitCode = isConsoleErrorStatus(result.status) ? 2 : 0;
 }
 
-function isConsoleErrorStatus(status) {
-  const value = String(status || '');
-  if (!value.startsWith('blocked_')) return false;
-  const handledWorkflowStates = new Set([
-    'blocked_non_head_branch_projection',
-    'blocked_selection_resolved',
-    'blocked_selection_expired',
-    'blocked_missing_visible_choice_binding',
-    'blocked_stale_visible_choice',
-    'blocked_visible_choice_hash_mismatch',
-    'blocked_pending_action_project_mismatch',
-    'blocked_stage_already_running',
-    'blocked_free_text_disabled',
-    'blocked_short_section_title_unconfirmed',
-    'blocked_short_feedback_unreconciled',
-    'blocked_short_section_plan_missing',
-    'blocked_short_section_plan_conflict',
-    'blocked_short_section_outside_plan',
-    'blocked_short_full_story_assembly_missing',
-    'blocked_longform_lifecycle_migration_required',
-  ]);
-  return !handledWorkflowStates.has(value);
-}
 
 function blockedOversizedReviewPlan(error) {
   return {
@@ -13076,4 +12276,11 @@ function blockedOversizedReviewPlan(error) {
   };
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = {
+  isPublicCommand,
+  isMutatingCommand,
+  PUBLIC_COMMANDS,
+  runCommand,
+};

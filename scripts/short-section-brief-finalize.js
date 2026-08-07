@@ -4,7 +4,6 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawnSync } = require('child_process');
 const { classifyWorkflowApply, recoverableStageResult } = require('./lib/workflow-apply-result');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
@@ -20,6 +19,8 @@ const {
   plannedTargetChars,
   sectionResponsibilityCount,
 } = require('./lib/short-production/section-loop');
+const { invokeApplyResult, invokeResolveAction, invokeRunnerCommand } = require('./lib/workflow-state-machine-invoke');
+const { readJson, parseJson } = require('./lib/cli-utils');
 
 const BRIEF_STAGES = new Set(['first_section_brief', 'section_brief', 'next_section_brief']);
 
@@ -139,7 +140,7 @@ function nextDraftStage(task) {
 
 function applyOrFinish({ root, workflowId, packetFile, packetRel, sectionIndex, args }) {
   if (!args.apply) return finish({ status: 'packet_ready', workflow_id: workflowId, section_index: sectionIndex, result_packet: packetRel }, 0, args.json);
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   const result = outcome.result;
   let projectStateProjection = null;
@@ -193,8 +194,8 @@ function parseArgs(argv) {
 
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file.startsWith(`${root}${path.sep}`) ? file : ''; }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
-function parseJson(text) { try { return JSON.parse(String(text || '').trim()); } catch (_) { return null; } }
+
+
 function registerBriefRevision({ root, task, briefRel, text, briefQuality, apply }) {
   const attemptId = String((((task || {}).stage_execution || {}).stage_attempt_id) || 'brief');
   const safeAttemptId = attemptId.replace(/[^A-Za-z0-9._-]/gu, '_');
@@ -222,17 +223,14 @@ function registerBriefRevision({ root, task, briefRel, text, briefQuality, apply
   return { attemptCount, exhausted, recordRel: apply ? recordRel : '' };
 }
 function registerBriefOverloadChoice({ root, workflowId, briefRel, findings }) {
-  const result = spawnSync(process.execPath, [
-    path.join(__dirname, 'workflow-state-machine.js'),
-    'register-short-brief-overload',
-    '--project-root', root,
-    '--workflow-id', workflowId,
-    '--scope', briefRel,
-    '--reason', (Array.isArray(findings) ? findings : []).join('|'),
-    '--json',
-  ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
-  const parsed = parseJson(result.stdout);
-  return result.status === 0 && parsed && String(parsed.status || '') === 'workflow_choice_required' ? parsed : null;
+  const parsed = invokeRunnerCommand({
+    command: 'register-short-brief-overload',
+    projectRoot: root,
+    workflowId,
+    scope: briefRel,
+    reason: (Array.isArray(findings) ? findings : []).join('|'),
+  });
+  return parsed && String(parsed.status || '') === 'workflow_choice_required' ? parsed : null;
 }
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }
 function usage(message) { process.stderr.write(`${message}\nUsage: node short-section-brief-finalize.js --project-root <book> --workflow-id <id> [--brief file] [--apply] [--json]\n`); process.exit(2); }

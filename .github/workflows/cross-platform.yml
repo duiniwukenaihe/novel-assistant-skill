@@ -26,6 +26,10 @@ jobs:
         run: bash scripts/check-hook-regex-sync.sh
       - name: Check shared-file consistency
         run: bash scripts/check-shared-files.sh
+      - name: Check bundle sync
+        run: bash scripts/check-bundle-sync.sh
+      - name: Check command references
+        run: node scripts/check-command-references.js
       - name: Check story-setup deployment
         run: bash scripts/check-story-setup-deployment.sh
       - name: Guard against bare python3 invocations

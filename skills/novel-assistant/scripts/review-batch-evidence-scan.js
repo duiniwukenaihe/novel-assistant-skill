@@ -7,6 +7,7 @@ const { spawnSync } = require('child_process');
 const { buildEvidenceMap, parseRange } = require('./lib/review-evidence');
 const { buildSourceIdentity } = require('./lib/review-batch-planner');
 const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
+const { invokeApplyResult } = require('./lib/workflow-state-machine-invoke');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 
 const PROTOCOL_VERSION = '2.0.0';
@@ -137,9 +138,7 @@ function safeProjectPath(root, relativePath) {
 }
 
 function applyWorkflowReceipt(root, relativePacketPath) {
-  const command = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--result', relativePacketPath, '--compact', '--json'], {
-    encoding: 'utf8', shell: false, maxBuffer: 8 * 1024 * 1024,
-  });
+  const command = invokeApplyResult({ projectRoot: root, workflowId: '', resultFile: relativePacketPath });
   const outcome = classifyWorkflowApply(command);
   if (outcome.workflowStatus !== 'workflow_apply_process_failed') return outcome;
   return {

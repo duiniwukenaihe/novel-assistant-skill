@@ -77,34 +77,34 @@ node scripts/novel-assistant-sync-runtime.js --project-root . --dry-run --json
 
 | Source path | Target path | Owner class | Merge mode | Validation check |
 |-------------|-------------|-------------|------------|------------------|
-| `skills/story-setup/references/templates/CLAUDE.md.tmpl` | `CLAUDE.md` | user+managed | marker/section merge | contains story skill routing sections |
-| `skills/story-setup/references/templates/hooks/` | `.claude/hooks/` | story-setup managed | managed manifest per file | `session-*.sh`, `detect-story-gaps.sh`, `validate-story-commit.sh`, `safe-bash-guard.js`, `canonical-write-guard.js`, `guard-outline-before-prose.sh`, `prose-quality-gate.sh`, `lib/common.sh`, `lib/sentinel.sh` exist |
-| `skills/story-deslop/scripts/ai-trace-detector.sh` | `.claude/hooks/ai-trace-detector.sh` | story-deslop managed | copy | detector script + `ai-trace-patterns.json` deployed together |
-| `skills/story-setup/references/templates/rules/*.md` | `.claude/rules/*.md` | story-setup managed | managed manifest per file | every rule contains `paths` frontmatter |
-| `skills/story-setup/references/templates/agents/*.md` | `.claude/agents/*.md` | story-setup managed | managed manifest per file | 8 agent files exist, including `style-learner.md` |
-| `skills/story-setup/references/agent-references/*.md` | `.claude/agent-references/novel-assistant/*.md` | story-setup managed | managed manifest per file | every `novel-assistant/references/agent-references/*.md` reference resolves; legacy `story-setup` fallback may also exist |
+| `references/templates/CLAUDE.md.tmpl` | `CLAUDE.md` | user+managed | marker/section merge | contains story skill routing sections |
+| `references/templates/hooks/` | `.claude/hooks/` | story-setup managed | managed manifest per file | `session-*.sh`, `detect-story-gaps.sh`, `validate-story-commit.sh`, `safe-bash-guard.js`, `canonical-write-guard.js`, `guard-outline-before-prose.sh`, `prose-quality-gate.sh`, `lib/common.sh`, `lib/sentinel.sh` exist |
+| `../story-deslop/scripts/ai-trace-detector.sh` | `.claude/hooks/ai-trace-detector.sh` | story-deslop managed | copy | detector script + `ai-trace-patterns.json` deployed together |
+| `references/templates/rules/*.md` | `.claude/rules/*.md` | story-setup managed | managed manifest per file | every rule contains `paths` frontmatter |
+| `references/templates/agents/*.md` | `.claude/agents/*.md` | story-setup managed | managed manifest per file | 8 agent files exist, including `style-learner.md` |
+| `references/agent-references/*.md` | `.claude/agent-references/novel-assistant/*.md` | story-setup managed | managed manifest per file | every `novel-assistant/references/agent-references/*.md` reference resolves; legacy `story-setup` fallback may also exist |
 | `scripts/normalize-punctuation.js`, `scripts/check-ai-patterns.js`, `scripts/check-degeneration.js`, `scripts/author-voice-profile.js`, `scripts/chapter-text-stats.js`, `scripts/chapter-volume-count.js`, `scripts/story-domain-profile.js`, `scripts/novel-assistant-project-smoke.js`, `scripts/production-smoke-matrix.js`, `scripts/output-pollution-check.js`, `scripts/runtime-guard-validate.js`, `scripts/token-cost-ledger.js`, `scripts/workflow-entry-guard.js`, `scripts/workflow-runtime-supervisor.js`, `scripts/workflow-state-machine.js`, `scripts/context-assembler.js`, `scripts/memory-recommender.js`, `scripts/safe-text-search.js`, `scripts/write-failure-triage.js`, `scripts/review-state-ledger.js`, `scripts/novel-assistant-sync-runtime.js` and longform runtime scripts | `scripts/` | story-setup managed | managed manifest per file | `normalize-punctuation.js`, `check-ai-patterns.js`, `check-degeneration.js`, `author-voice-profile.js`, `chapter-text-stats.js`, `chapter-volume-count.js`, `story-domain-profile.js`, `novel-assistant-project-smoke.js`, `production-smoke-matrix.js`, `output-pollution-check.js`, `runtime-guard-validate.js`, `token-cost-ledger.js`, `workflow-entry-guard.js`, `workflow-runtime-supervisor.js`, `workflow-state-machine.js`, `context-assembler.js`, `memory-recommender.js`, `safe-text-search.js`, `write-failure-triage.js`, `review-state-ledger.js`, `novel-assistant-sync-runtime.js`, stability scripts, schema scripts exist and are executable |
-| `skills/story-setup/references/templates/settings-hooks.json` | `.claude/settings.local.json` | user+managed | merge by hook command | hook JSON valid and registered commands deduped |
+| `references/templates/settings-hooks.json` | `.claude/settings.local.json` | user+managed | merge by hook command | hook JSON valid and registered commands deduped |
 | generated `write-policy.json` | `追踪/story-system/write-policy.json` | story-system managed | create only | 新项目为 `strict`；已有项目为 `legacy`；已有策略绝不覆盖 |
-| `skills/story-setup/references/templates/上下文.md.tmpl` | `{书名}/追踪/上下文.md` | user state | create only if absent | never overwrite existing writing context |
-| `skills/story-setup/references/opencode/AGENTS.md.tmpl` | `AGENTS.md` | user+managed | marker/section merge | contains single-entry `novel-assistant` routing | target_cli 含 opencode |
-| `skills/story-setup/references/opencode/agents/` | `.opencode/agents/` | story-setup managed | replace | 8 agent files exist, including `style-learner.md` | target_cli 含 opencode |
-| `skills/story-setup/references/opencode/commands/` | `.opencode/commands/` | story-setup managed | replace | `novel-assistant.md` exists; compatibility commands point to novel-assistant | target_cli 含 opencode |
-| `skills/story-setup/references/opencode/plugin.ts` | `.opencode/plugins/story-hooks.ts` | story-setup managed | replace | TypeScript plugin file exists | target_cli 含 opencode |
-| `skills/story-setup/references/opencode/opencode.json.patch` | merge into `opencode.json` | user+managed | merge by plugin key | story-hooks plugin registered | target_cli 含 opencode |
-| `skills/story-setup/references/opencode/pre-commit.sh` | `.git/hooks/pre-commit` | user+managed | marker block merge | executable when platform supports chmod | target_cli 含 opencode |
-| `skills/story-setup/references/codex/AGENTS.md.block.tmpl` | `AGENTS.md` | user+managed | marker block merge | Codex 对“继续/下一步/确认/数字回复”每轮重新调用 `novel-assistant`，不得绕过状态机 | 全部已部署项目 |
+| `references/templates/上下文.md.tmpl` | `{书名}/追踪/上下文.md` | user state | create only if absent | never overwrite existing writing context |
+| `references/opencode/AGENTS.md.tmpl` | `AGENTS.md` | user+managed | marker/section merge | contains single-entry `novel-assistant` routing | target_cli 含 opencode |
+| `references/opencode/agents/` | `.opencode/agents/` | story-setup managed | replace | 8 agent files exist, including `style-learner.md` | target_cli 含 opencode |
+| `references/opencode/commands/` | `.opencode/commands/` | story-setup managed | replace | `novel-assistant.md` exists; compatibility commands point to novel-assistant | target_cli 含 opencode |
+| `references/opencode/plugin.ts` | `.opencode/plugins/story-hooks.ts` | story-setup managed | replace | TypeScript plugin file exists | target_cli 含 opencode |
+| `references/opencode/opencode.json.patch` | merge into `opencode.json` | user+managed | merge by plugin key | story-hooks plugin registered | target_cli 含 opencode |
+| `references/opencode/pre-commit.sh` | `.git/hooks/pre-commit` | user+managed | marker block merge | executable when platform supports chmod | target_cli 含 opencode |
+| `references/codex/AGENTS.md.block.tmpl` | `AGENTS.md` | user+managed | marker block merge | Codex 对“继续/下一步/确认/数字回复”每轮重新调用 `novel-assistant`，不得绕过状态机 | 全部已部署项目 |
 | generated sentinel | `.story-deployed` | story-setup managed | replace | contains `agents_version`, `setup_skill_version`, `target_cli`, `resolver_strategy`, `references_dir` |
 
 ### 2.1 部署 CLAUDE.md
 
-- 读取 `skills/story-setup/references/templates/CLAUDE.md.tmpl`
+- 读取 `references/templates/CLAUDE.md.tmpl`
 - 替换占位符（见下方「模板占位符」段）
 - 写入项目根目录 `CLAUDE.md`（如已存在，按「CLAUDE.md 合并策略」处理）
 
 ### 2.2 部署 Hooks
 
-- 按 `.story-runtime-managed.json` 逐文件同步 `skills/story-setup/references/templates/hooks/` 到用户项目 `.claude/hooks/`；绝不递归删除目标目录，未托管文件保持原样。
+- 按 `.story-runtime-managed.json` 逐文件同步 `references/templates/hooks/` 到用户项目 `.claude/hooks/`；绝不递归删除目标目录，未托管文件保持原样。
 - 必须保留子目录 `lib/`，其中：
   - `lib/common.sh` 提供 `project_root`、`discover_active_book`、`discover_all_books`
   - `lib/sentinel.sh` 提供 `.story-deployed` 字段读取
@@ -124,12 +124,12 @@ node scripts/novel-assistant-sync-runtime.js --project-root . --dry-run --json
 
 ### 2.3 部署 Rules
 
-- 读取 `skills/story-setup/references/templates/rules/` 下所有 `.md` 文件
+- 读取 `references/templates/rules/` 下所有 `.md` 文件
 - 按托管清单逐文件同步到用户项目 `.claude/rules/`；同名非托管文件或用户改动过的托管文件必须先预览冲突并取得明确确认。
 
 ### 2.4 部署 Agents
 
-- 读取 `skills/story-setup/references/templates/agents/` 下所有 `.md` 文件
+- 读取 `references/templates/agents/` 下所有 `.md` 文件
 - 按托管清单逐文件同步到用户项目 `.claude/agents/` 目录
 - Agent 文件只有在前次托管版本未被用户改动时才可更新；版本升级遇到同名冲突必须先预览并取得明确确认
 
@@ -140,7 +140,7 @@ node scripts/novel-assistant-sync-runtime.js --project-root . --dry-run --json
 
 ### 2.4.2 部署 Agent References
 
-- 将源码包 `skills/story-setup/references/agent-references/` 下所有 `.md` 复制到项目内 `.claude/agent-references/novel-assistant/`
+- 将源码包 `references/agent-references/` 下所有 `.md` 复制到项目内 `.claude/agent-references/novel-assistant/`
 - 如目标项目已经使用项目本地 `skills/` 目录，也可以同步复制到 `skills/novel-assistant/references/agent-references/` 作为非 Claude 扫描路径 fallback，但不得在 Claude 会扫描的项目本地 skill 目录下创建 `novel-assistant` 或 `story-setup`
 - 为兼容 v16 之前已部署项目，可同时复制到 `.claude/agent-references/legacy-story-setup/`；该路径只用于旧 agent fallback，不得写入新 agent 主引用。
 - 校验：凡 agent 或 reference 中出现 `novel-assistant/references/agent-references/<file>.md`，源包与目标包都必须存在 `<file>.md`
@@ -211,13 +211,13 @@ node scripts/novel-assistant-sync-runtime.js --project-root . --dry-run --json
 
 部署步骤：
 
-1. `skills/story-setup/references/opencode/AGENTS.md.tmpl` → `AGENTS.md`，按 CLAUDE.md 同等 marker/section 策略合并。
-2. `skills/story-setup/references/opencode/agents/` → `.opencode/agents/`，覆盖 story-setup 管理文件。
-3. `skills/story-setup/references/opencode/commands/` → `.opencode/commands/`，必须包含 `novel-assistant.md`；兼容 alias 如 `story-long-write.md` 也必须写“请使用 novel-assistant，按某意图路由”。
-4. `skills/story-setup/references/opencode/plugin.ts` → `.opencode/plugins/story-hooks.ts`。
-5. `skills/story-setup/references/opencode/opencode.json.patch` 合并到 `opencode.json`：只向 `plugin` 数组追加 `./.opencode/plugins/story-hooks.ts`，去重并保留用户已有 provider/model/permission 等字段。
-6. 源码包 `skills/story-setup/references/agent-references/` 同步到 `.opencode/skills/novel-assistant/references/agent-references/`；若项目有 `skills/` fallback，也同步到 `skills/novel-assistant/references/agent-references/`。旧 `.opencode/skills/story-setup/references/agent-references/` 只作为兼容 fallback。
-7. `skills/story-setup/references/opencode/pre-commit.sh` 合并到 `.git/hooks/pre-commit` 的 story-setup 管理块；不覆盖用户已有 hook。
+1. `references/opencode/AGENTS.md.tmpl` → `AGENTS.md`，按 CLAUDE.md 同等 marker/section 策略合并。
+2. `references/opencode/agents/` → `.opencode/agents/`，覆盖 story-setup 管理文件。
+3. `references/opencode/commands/` → `.opencode/commands/`，必须包含 `novel-assistant.md`；兼容 alias 如 `story-long-write.md` 也必须写“请使用 novel-assistant，按某意图路由”。
+4. `references/opencode/plugin.ts` → `.opencode/plugins/story-hooks.ts`。
+5. `references/opencode/opencode.json.patch` 合并到 `opencode.json`：只向 `plugin` 数组追加 `./.opencode/plugins/story-hooks.ts`，去重并保留用户已有 provider/model/permission 等字段。
+6. 源码包 `references/agent-references/` 同步到 `.opencode/skills/novel-assistant/references/agent-references/`；若项目有 `skills/` fallback，也同步到 `skills/novel-assistant/references/agent-references/`。旧 `.opencode/references/agent-references/` 只作为兼容 fallback。
+7. `references/opencode/pre-commit.sh` 合并到 `.git/hooks/pre-commit` 的 story-setup 管理块；不覆盖用户已有 hook。
 
 OpenCode plugin 的正文守卫必须兼容卷内编号结构：既要识别旧 `正文/第001章.md`，也要识别新 `正文/第1卷/第001章_章名.md`，并检查对应 `大纲/第1卷/细纲_第001章.md`。
 
@@ -225,7 +225,7 @@ Codex Desktop / CLI 不依赖 OpenCode 检测：每次新建或更新写作协�
 
 ### 2.5 部署 Session State 模板
 
-- 读取 `skills/story-setup/references/templates/上下文.md.tmpl`
+- 读取 `references/templates/上下文.md.tmpl`
 - 仅当已识别为长篇书目且 `{书名}/追踪/` 已存在时，创建缺失的 `{书名}/追踪/上下文.md`
 - 如果目标文件已存在，不覆盖；短篇项目不得因此创建 `追踪/` 目录
 
@@ -300,13 +300,13 @@ node scripts/story-schema-validate.js <book-project-dir>
 3. 风格宪法（如：必须第三人称 / 对话占比 45-65%）
 4. 平台约束（如：番茄 / 起点 / 晋江 限定的规则）
 
-读取 `skills/story-setup/references/templates/constitution.md.tmpl`，替换 `{{GENRE_TABOO}}` / `{{CHARACTER_RED_LINE}}` / `{{STYLE_CONSTITUTION}}` / `{{PLATFORM_CONSTRAINT}}` 占位符为用户答案（留空用「无（默认未设置）」），写入 [<BOOK_DIR>/.story/constitution.md](#)。4 个 write/analyze skill 在 Phase 1.0 加载它到 system prompt 顶部。
+读取 `references/templates/constitution.md.tmpl`，替换 `{{GENRE_TABOO}}` / `{{CHARACTER_RED_LINE}}` / `{{STYLE_CONSTITUTION}}` / `{{PLATFORM_CONSTRAINT}}` 占位符为用户答案（留空用「无（默认未设置）」），写入 [<BOOK_DIR>/.story/constitution.md](#)。4 个 write/analyze skill 在 Phase 1.0 加载它到 system prompt 顶部。
 
 ### 2.7 合并 Hooks 注册到 settings.local.json
 
 > 兼容性说明：`settings-hooks.json` 中 PreToolUse 的 `if` 字段使用 Claude Code hook 条件语法，需要运行环境支持 hook-level if。若目标工具不支持该字段，hook 脚本本身仍会自检并 advisory-only 退出；部署时可删除该 `if` 字段并保留 matcher + command。
 
-- 读取 `skills/story-setup/references/templates/settings-hooks.json`
+- 读取 `references/templates/settings-hooks.json`
 - 读取用户项目的 `.claude/settings.local.json`（如存在）
 - 合并 hooks 配置（按「settings-hooks.json 合并算法」处理）
 - 写入 `.claude/settings.local.json`

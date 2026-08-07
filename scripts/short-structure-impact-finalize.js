@@ -8,6 +8,8 @@ const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { readShortProjectState, resolveShortStateRelative, shortStateFile } = require('./lib/short-project-state');
+const { invokeApplyResult, invokeResolveAction } = require('./lib/workflow-state-machine-invoke');
+const { readJson } = require('./lib/cli-utils');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -59,7 +61,7 @@ function main() {
   if (!args.apply || report.unassigned_blocking.length) {
     return finish({ status: report.unassigned_blocking.length ? 'short_structure_impact_blocked' : 'short_structure_impact_ready', report: artifactRel, result_packet: packetRel, findings: report.unassigned_blocking }, 0, args.json);
   }
-  const run = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', String(task.workflow_id || ''), '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const run = invokeApplyResult({ projectRoot: root, workflowId: String(task.workflow_id || ''), resultFile: packetFile });
   const outcome = classifyWorkflowApply(run);
   return finish({
     status: outcome.applied ? 'short_structure_impact_completed' : 'short_structure_impact_apply_blocked',
@@ -125,7 +127,7 @@ function buildImpactReport(root, task) {
 function item(asset, disposition, reason, ownerStage) { return { asset, disposition, reason, owner_stage: ownerStage || '' }; }
 function normalizeRel(value) { return String(value || '').replace(/\\/g, '/').replace(/^\.\//, ''); }
 function normalizeTitle(value) { return String(value || '').trim().replace(/[“”]/gu, '"').replace(/\s+/gu, ' '); }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
+
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file !== root && file.startsWith(`${root}${path.sep}`) ? file : ''; }
 function parseArgs(argv) { const args = { projectRoot: '', workflowId: '', apply: false, json: false }; for (let i = 0; i < argv.length; i += 1) { const arg = argv[i]; if (arg === '--project-root') args.projectRoot = argv[++i] || ''; else if (arg === '--workflow-id') args.workflowId = argv[++i] || ''; else if (arg === '--apply') args.apply = true; else if (arg === '--json') args.json = true; else usage(`unknown argument: ${arg}`); } if (!args.workflowId) usage('missing --workflow-id'); return args; }
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }

@@ -9,6 +9,8 @@ const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { resolvePrivateModule } = require('./lib/private-runtime-resolver');
+const { readJson, parseJson } = require('./lib/cli-utils');
+const { invokeApplyResult } = require('./lib/workflow-state-machine-invoke');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -122,13 +124,7 @@ function main() {
     memory_updates: [],
     result_packet_path: packetRel,
   });
-  const applied = spawnSync(process.execPath, [
-    path.join(__dirname, 'workflow-state-machine.js'), 'apply-result',
-    '--project-root', root,
-    '--workflow-id', String(task.workflow_id || ''),
-    '--result', packetFile,
-    '--compact', '--json',
-  ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: String(task.workflow_id || ''), resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   return finish({
     status: outcome.applied ? 'short_material_learning_accepted' : 'short_material_learning_apply_blocked',
@@ -304,12 +300,11 @@ function arrayOfStrings(value) {
 }
 function arrayOfObjects(value) { return Array.isArray(value) ? value.filter(isObject) : []; }
 function isObject(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
+
 function readJsonl(file) {
   if (!isFile(file)) return [];
   return fs.readFileSync(file, 'utf8').split(/\r?\n/u).filter(Boolean).map(line => JSON.parse(line));
 }
-function parseJson(value) { try { return JSON.parse(String(value || '').trim()); } catch (_) { return null; } }
 function recordValidationAttempt(root, task, candidateFile, validation) {
   const file = safeProjectFile(root, `${task.task_dir}/artifacts/material-learning/validation-attempts.json`);
   const current = readJson(file) || {};

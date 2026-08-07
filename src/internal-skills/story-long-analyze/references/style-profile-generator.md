@@ -68,17 +68,17 @@ grep -nE '^第[一二三四五六七八九十百千两零0-9]+章' 原文/原文
 
 - 拿到 grep 的 `行号:第N章` 列表后，选第 1 章、第 10 章、第 20 章（如总章数 <20，按 1/3、2/3、收尾比例挑）
 - 每章用 `Read offset={该章起始行} limit=50` 切出约 1000 字
-- 把 3 段拼接写入 `/tmp/style-sample.txt`（追加 `>>`，不要换文件名）
+- 把 3 段拼接写入拆文库目录下的 `.style-sample.txt`（追加 `>>`，不要换文件名）。**不要用 `/tmp`**——Windows 上 Git Bash 与原生 Python 对 `/tmp` 的解析不一致（Git Bash 映射到 MSYS 临时目录，Python 映射到当前盘根 `\tmp`），会导致 Python 找不到文件。
 
 **确定性句长/标点统计**（替代旧版「眼测」）：
 
-Stage 6 由**主线程**执行，Bash 工具可用。把上一步拼好的 `/tmp/style-sample.txt` 喂给下面的脚本（heredoc 作 Python 源，脚本内 open 样本文件，避免 stdin heredoc 与 `< file` 双重重定向冲突）。先探测可用解释器再跑——**勿直接用 `python3`**，Windows 上它会触发 Microsoft Store 占位程序、exit 49 失败：
+Stage 6 由**主线程**执行，Bash 工具可用。把上一步拼好的 `.style-sample.txt` 喂给下面的脚本（heredoc 作 Python 源，脚本内 open 样本文件，避免 stdin heredoc 与 `< file` 双重重定向冲突）。先探测可用解释器再跑——**勿直接用 `python3`**，Windows 上它会触发 Microsoft Store 占位程序、exit 49 失败：
 
 ```bash
 for PYBIN in python3 python py; do "$PYBIN" -c "" 2>/dev/null && break; done
-"$PYBIN" <<'PYEOF'
-import re
-with open('/tmp/style-sample.txt', 'r', encoding='utf-8') as f:
+"$PYBIN" "<<'PYEOF'" "$(pwd)/拆文库/{书名}/.style-sample.txt"
+import re, sys
+with open(sys.argv[1], 'r', encoding='utf-8') as f:
     text = f.read()
 sents = [s for s in re.split(r'[。！？]+', text) if s.strip()]
 total = max(len(sents), 1)

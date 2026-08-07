@@ -374,3 +374,46 @@ if(!lines[1].content.includes('感知异常')) throw new Error(lines[1].content)
 if(status.pendingSuggestions!==0) throw new Error(JSON.stringify(status));
 NODE
 }
+
+@test "status recentLearned excludes superseded facts" {
+  local tmp
+  tmp="$BATS_TEST_TMPDIR/recent-learned"
+  mkdir -p "$tmp/追踪/memory"
+  printf '%s\n' '{"id":"f1","type":"accepted_fact","title":"旧版本","status":"superseded","valid_to":"2026-01-01","superseded_by":"f2"}' > "$tmp/追踪/memory/lorebook.jsonl"
+  printf '%s\n' '{"id":"f2","type":"accepted_fact","title":"新版本","status":"active","valid_to":null}' >> "$tmp/追踪/memory/lorebook.jsonl"
+
+  run node "$REPO/scripts/memory-recommender.js" --project-root "$tmp" --status --json
+  [ "$status" -eq 0 ]
+  echo "$output" | node -e "
+    let data='';
+    process.stdin.on('data',c=>data+=c);
+    process.stdin.on('end',()=>{
+      const j=JSON.parse(data);
+      const learned=(j.recentLearned||[]).map(i=>i.id);
+      if(learned.includes('f1')) process.exit(1);
+      if(!learned.includes('f2')) process.exit(2);
+    });
+  "
+}
+
+@test "status output includes visibilitySummary with status counts" {
+  local tmp
+  tmp="$BATS_TEST_TMPDIR/visibility-summary"
+  mkdir -p "$tmp/追踪/memory"
+  printf '%s\n' '{"id":"f1","type":"accepted_fact","title":"活跃","status":"active","valid_to":null}' > "$tmp/追踪/memory/lorebook.jsonl"
+  printf '%s\n' '{"id":"f2","type":"accepted_fact","title":"已取代","status":"superseded","valid_to":"2026-01-01","superseded_by":"f1"}' >> "$tmp/追踪/memory/lorebook.jsonl"
+
+  run node "$REPO/scripts/memory-recommender.js" --project-root "$tmp" --status --json
+  [ "$status" -eq 0 ]
+  echo "$output" | node -e "
+    let data='';
+    process.stdin.on('data',c=>data+=c);
+    process.stdin.on('end',()=>{
+      const j=JSON.parse(data);
+      const v=j.visibilitySummary;
+      if(!v) process.exit(1);
+      if(typeof v.active!=='number') process.exit(2);
+      if(typeof v.superseded!=='number') process.exit(3);
+    });
+  "
+}

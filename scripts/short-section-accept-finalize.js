@@ -12,6 +12,8 @@ const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { ensureCurrentShortMemoryStage } = require('./lib/short-memory-stage-recovery');
 const { readShortProjectState } = require('./lib/short-project-state');
 const { acceptSection } = require('./lib/short-production/section-loop');
+const { invokeApplyResult, invokeResolveAction } = require('./lib/workflow-state-machine-invoke');
+const { readJson, parseJson } = require('./lib/cli-utils');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -136,9 +138,9 @@ function rerunMachineGate({ root, workflowId, receiptIssue, lengthPolicy, args }
 }
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file.startsWith(`${root}${path.sep}`) ? file : ''; }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
-function parseJson(text) { try { return JSON.parse(String(text || '').trim()); } catch (_) { return null; } }
-function applyOrFinish({ root, workflowId, packetFile, packetRel, sectionIndex, allCompleted, args }) { if (!args.apply) return finish({ status: 'packet_ready', workflow_id: workflowId, section_index: sectionIndex, result_packet: packetRel }, 0, args.json); const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }); const outcome = classifyWorkflowApply(applied); const result = outcome.result; return finish({ status: outcome.applied ? 'applied' : 'apply_blocked', workflow_status: outcome.workflowStatus, workflow_id: workflowId, section_index: sectionIndex, all_sections_completed: allCompleted, result_packet: packetRel, next_stage: String(result.current_stage || ((result.task || {}).current_stage) || ''), ...outcome.presentation, ...(outcome.applied ? {} : { recovery: result }) }, outcome.exitCode, args.json); }
+
+
+function applyOrFinish({ root, workflowId, packetFile, packetRel, sectionIndex, allCompleted, args }) { if (!args.apply) return finish({ status: 'packet_ready', workflow_id: workflowId, section_index: sectionIndex, result_packet: packetRel }, 0, args.json); const applied = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile }); const outcome = classifyWorkflowApply(applied); const result = outcome.result; return finish({ status: outcome.applied ? 'applied' : 'apply_blocked', workflow_status: outcome.workflowStatus, workflow_id: workflowId, section_index: sectionIndex, all_sections_completed: allCompleted, result_packet: packetRel, next_stage: String(result.current_stage || ((result.task || {}).current_stage) || ''), ...outcome.presentation, ...(outcome.applied ? {} : { recovery: result }) }, outcome.exitCode, args.json); }
 function parseArgs(argv) { const args = { projectRoot: '', workflowId: '', metadata: '', canonical: '', apply: false, json: false, help: false }; for (let i = 0; i < argv.length; i += 1) { const arg = argv[i]; if (arg === '--project-root') args.projectRoot = argv[++i] || ''; else if (arg === '--workflow-id') args.workflowId = argv[++i] || ''; else if (arg === '--metadata') args.metadata = argv[++i] || ''; else if (arg === '--canonical') args.canonical = argv[++i] || ''; else if (arg === '--apply' || arg === '--write') args.apply = true; else if (arg === '--json') args.json = true; else if (arg === '--help' || arg === '-h') args.help = true; else usage(`unknown argument: ${arg}`); } return args; }
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }
 function usage(message) { process.stderr.write(`${message}\nUsage: node short-section-accept-finalize.js --project-root <book> --workflow-id <id> --metadata <json> [--canonical file] [--apply] [--json]\n`); process.exit(2); }

@@ -106,7 +106,7 @@ metadata:
 生产扫榜优先使用：
 
 ```bash
-node skills/story-long-scan/scripts/qidian-rank-scraper.js --type new --format v0.8 --outdir "扫榜库/20260612-qidian-new"
+node skills/novel-assistant/references/internal-skills/story-long-scan/scripts/qidian-rank-scraper.js --type new --format v0.8 --outdir "扫榜库/20260612-qidian-new"
 ```
 
 手动转换已有 Markdown 扫榜报告时运行：

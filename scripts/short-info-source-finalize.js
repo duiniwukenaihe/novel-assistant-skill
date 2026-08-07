@@ -10,6 +10,8 @@ const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { buildHotSourceSelection } = require('./lib/hot-source-registry');
 const { resolvePrivateModule } = require('./lib/private-runtime-resolver');
+const { readJson, parseJson } = require('./lib/cli-utils');
+const { invokeApplyResult } = require('./lib/workflow-state-machine-invoke');
 
 const TOPIC_SEED_PATTERN = /彩礼|断亲|打脸|反杀|复仇|追妻|火葬场|重生|真假千金/u;
 
@@ -178,13 +180,7 @@ function main() {
     memory_updates: [],
     result_packet_path: packetRel,
   });
-  const applied = spawnSync(process.execPath, [
-    path.join(__dirname, 'workflow-state-machine.js'), 'apply-result',
-    '--project-root', root,
-    '--workflow-id', String(task.workflow_id || ''),
-    '--result', packetFile,
-    '--compact', '--json',
-  ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: String(task.workflow_id || ''), resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   return finish({
     status: outcome.applied ? 'short_info_source_pool_accepted' : 'short_info_source_pool_apply_blocked',
@@ -509,8 +505,7 @@ function hasCurrentCaptureMethod(methods) {
   return Array.isArray(methods) && methods.some(method => accepted.has(String(method || '')));
 }
 function run(command, args, cwd) { return spawnSync(command, args, { cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }); }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
-function parseJson(value) { try { return JSON.parse(String(value || '').trim()); } catch (_) { return null; } }
+
 function isFile(file) { return fs.existsSync(file) && fs.statSync(file).isFile(); }
 function safeProjectFile(root, relative) {
   const file = path.resolve(root, relative);

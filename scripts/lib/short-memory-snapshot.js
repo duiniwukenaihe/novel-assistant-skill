@@ -9,6 +9,7 @@ const {
   createMemoryContract,
   createMemoryReadReceipt,
   normalizeMemoryQuery,
+  needsForStage,
 } = require('./memory-query-contract');
 const {
   buildMemoryRevision,
@@ -47,13 +48,22 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
     stage_id: stageId || 'short_memory_snapshot',
     owner_module: String(task.workflow_owner || 'story-short-write'),
     scope: { section_index: sectionIndex },
-    needs: ['accepted_facts', 'active_cast', 'active_promises', 'reader_promise', 'confirmed_style_rules', 'confirmed_quality_rules', 'planning_constraints', 'continuity_obligations', 'canon_constraints'],
+    needs: needsForStage(String(task.workflow_type || 'short_write'), stageId),
     query_text: queryText,
   };
   if (attemptId) querySpec.stage_attempt_id = attemptId;
   if (workUnitId) querySpec.work_unit_id = workUnitId;
+  // needSet drives the stage-specific loadout: it controls which memory
+  // categories are presented to the model as independent recall fields.
+  // Internal derivation (continuity obligations, active-cast compaction)
+  // always reads the underlying repository data — the loadout only decides
+  // what surfaces as a first-class field in the packet.
+  const needSet = new Set(querySpec.needs);
   const memoryQuery = normalizeMemoryQuery(querySpec);
   const memoryTokenBudget = deriveMemoryTokenBudget({ task, query: queryText, stageId });
+  // Facts are always fetched because buildContinuityObligations and
+  // compactActiveCast derive from them; the loadout only controls whether
+  // they appear as a standalone accepted_facts field below.
   const factSelection = selectFacts(
     repository.acceptedFacts(),
     queryText,
@@ -61,18 +71,19 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
     memoryTokenBudget,
   );
   const facts = factSelection.rows;
-  const styleRules = selectRules(repository.styleRules(), queryText);
-  const preferences = selectWritingPreferences(repository.preferences(), queryText);
-  const qualityRules = selectQualityRules(repository.pollutionRules(), queryText);
-  const promises = selectPromises(repository.promises(), sectionIndex);
-  const planningConstraints = selectPlanningConstraints(repository, sectionIndex, task);
-  const storedReaderPromise = repository.readerPromise();
+  const styleRules = needSet.has('confirmed_style_rules') ? selectRules(repository.styleRules(), queryText) : [];
+  const preferences = needSet.has('user_preferences') ? selectWritingPreferences(repository.preferences(), queryText) : [];
+  const qualityRules = needSet.has('confirmed_quality_rules') ? selectQualityRules(repository.pollutionRules(), queryText) : [];
+  const promises = needSet.has('active_promises') ? selectPromises(repository.promises(), sectionIndex) : [];
+  const planningConstraints = needSet.has('planning_constraints') ? selectPlanningConstraints(repository, sectionIndex, task) : [];
+  const storedReaderPromise = needSet.has('reader_promise') ? repository.readerPromise() : null;
   const readerPromise = compactReaderPromiseForSection(storedReaderPromise, sectionIndex);
   const memoryWarnings = buildMemoryWarnings(storedReaderPromise);
   const activeCast = compactActiveCast(repository.activeCast(), facts, queryText);
   const continuityObligations = buildContinuityObligations(facts, promises, planningConstraints, sectionIndex, readerPromise);
+  const includeFacts = needSet.has('accepted_facts');
   const selectedEntryIds = unique([
-    ...facts.map(item => item.fact_id),
+    ...(includeFacts ? facts.map(item => item.fact_id) : []),
     ...styleRules.map(item => item.id),
     ...preferences.map(item => item.id),
     ...qualityRules.map(item => item.id),
@@ -81,7 +92,7 @@ function buildShortMemorySnapshot(projectRoot, options = {}) {
     ...(readerPromise ? [`reader-promise:${readerPromise.revision}`] : []),
   ]);
   const selectedMemory = {
-    accepted_facts: facts.map(compactFact),
+    accepted_facts: includeFacts ? facts.map(compactFact) : [],
     active_cast: activeCast,
     active_promises: promises,
     reader_promise: readerPromise,

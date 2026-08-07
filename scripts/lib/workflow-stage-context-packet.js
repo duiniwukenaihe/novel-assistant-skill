@@ -43,6 +43,7 @@ const { inferShortSectionIndex } = require('./short-workflow-state');
 const { currentShortFeedbackRevisionSection } = require('./short-feedback-revision-queue');
 const { atomicWriteJson, atomicWriteText } = require('./workflow-state-store');
 const { buildShortMemorySnapshot } = require('./short-memory-snapshot');
+const { describeNeeds, needsForStage } = require('./memory-query-contract');
 const {
   buildShortSectionOutlineContract,
   renderOutlineCoverageTemplate,
@@ -146,6 +147,7 @@ function buildStageContextPacket({ projectRoot, task, stage, options = {} } = {}
     omitted: assembled.omitted,
     identity,
     modelProfile,
+    workflowType,
   });
 
   const packetMdAbs = safeResolve(root, packetMdRel);
@@ -1211,7 +1213,7 @@ function safePathSegment(value) {
   return String(value || 'attempt-pending').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 96) || 'attempt-pending';
 }
 
-function renderMarkdown({ workflowId, sectionIndex, stageId, assets, tokenBudget, usedTokens, omitted, identity, modelProfile }) {
+function renderMarkdown({ workflowId, sectionIndex, stageId, assets, tokenBudget, usedTokens, omitted, identity, modelProfile, workflowType }) {
   const lines = [];
   lines.push(`# 短篇当前小节最小上下文包 (workflow=${workflowId}, stage=${stageId}, section=${sectionIndex})`);
   lines.push('');
@@ -1230,6 +1232,17 @@ function renderMarkdown({ workflowId, sectionIndex, stageId, assets, tokenBudget
     for (const directive of (Array.isArray(modelProfile.prompt_directives) ? modelProfile.prompt_directives : [])) {
       lines.push(`- ${directive}`);
     }
+    lines.push('');
+  }
+  const activeNeeds = needsForStage(workflowType || 'short_write', stageId || '');
+  const needDescriptions = describeNeeds(activeNeeds);
+  if (needDescriptions.length) {
+    const recallLines = needDescriptions.map(item => `- **${item.key}**：${item.description}（对应字段：${item.maps_to}）`);
+    lines.push(`## 本次召回说明`);
+    lines.push('');
+    lines.push(`本阶段（${stageId || '未知'}）召回以下记忆类别：`);
+    lines.push('');
+    for (const recallLine of recallLines) lines.push(recallLine);
     lines.push('');
   }
   lines.push('## 允许资产（最小集）');

@@ -151,3 +151,43 @@ if(stale.status!=='stale'||!stale.stale_fields.includes('stage_attempt_id')) thr
 NODE
   [ "$status" -eq 0 ]
 }
+
+@test "NEEDS entries carry description and maps_to for agent readability" {
+  run node - "$REPO/scripts/lib/memory-query-contract.js" <<'NODE'
+const path = process.argv[2];
+const { NEEDS, describeNeeds } = require(path);
+const sample = describeNeeds(['accepted_facts', 'planning_constraints']);
+if (!Array.isArray(sample) || sample.length !== 2) process.exit(1);
+for (const item of sample) {
+  if (!item.key || !item.description || !item.maps_to) process.exit(2);
+}
+const all = describeNeeds(Object.keys(NEEDS));
+if (all.length !== 11) process.exit(3);
+NODE
+  [ "$status" -eq 0 ]
+}
+
+@test "needsForStage returns stage-specific subset for short_write brief/draft/repair" {
+  run node - "$REPO/scripts/lib/memory-query-contract.js" <<'NODE'
+const path = process.argv[2];
+const { needsForStage } = require(path);
+const brief = needsForStage('short_write', 'section_brief');
+const draft = needsForStage('short_write', 'section_draft');
+const repair = needsForStage('short_write', 'section_repair');
+if (brief.includes('continuity_obligations')) process.exit(1);
+if (draft.includes('reader_promise')) process.exit(2);
+if (repair.includes('accepted_facts')) process.exit(3);
+if (!repair.includes('planning_constraints')) process.exit(4);
+NODE
+  [ "$status" -eq 0 ]
+}
+
+@test "needsForStage falls back to full set for unknown stage" {
+  run node - "$REPO/scripts/lib/memory-query-contract.js" <<'NODE'
+const path = process.argv[2];
+const { needsForStage } = require(path);
+const fallback = needsForStage('short_write', 'unknown_stage');
+if (fallback.length < 5) process.exit(1);
+NODE
+  [ "$status" -eq 0 ]
+}

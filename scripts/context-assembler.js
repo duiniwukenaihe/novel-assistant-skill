@@ -268,6 +268,7 @@ function staleRecord(entry, context) {
 }
 
 function structuredResult({ status, context, selected = [], omitted = [], stale = [], quarantined = [], conflicts = [], ...extra }) {
+  const declaredNeeds = String(args.needs || '').split(',').map((item) => String(item || '').trim()).filter(Boolean);
   return {
     status,
     projectRoot,
@@ -280,6 +281,7 @@ function structuredResult({ status, context, selected = [], omitted = [], stale 
     stale,
     quarantined,
     conflicts,
+    ...(declaredNeeds.length ? { declared_needs: declaredNeeds } : {}),
     ...extra,
   };
 }
@@ -287,13 +289,14 @@ function structuredResult({ status, context, selected = [], omitted = [], stale 
 function parseArgs(argv) {
   const out = {
     projectRoot: '', task: '', target: '', budget: 3000, json: false,
-    workflowId: '', taskDir: '', runId: '', lifecycleNode: '', bookId: '', volumeId: '', stageId: '', chapterId: '', taskFamilyId: '',
+    workflowId: '', taskDir: '', runId: '', lifecycleNode: '', bookId: '', volumeId: '', stageId: '', chapterId: '', taskFamilyId: '', needs: '',
   };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--project-root') out.projectRoot = argv[++i] || '';
     else if (arg === '--task') out.task = argv[++i] || '';
     else if (arg === '--target') out.target = argv[++i] || '';
+    else if (arg === '--needs') out.needs = argv[++i] || '';
     else if (arg === '--workflow-id') out.workflowId = argv[++i] || '';
     else if (arg === '--task-dir') out.taskDir = argv[++i] || '';
     else if (arg === '--run-id') out.runId = argv[++i] || '';

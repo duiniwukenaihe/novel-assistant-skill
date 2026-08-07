@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { buildHotSourceSelection } = require('./lib/hot-source-registry');
 const { resolvePrivateModule } = require('./lib/private-runtime-resolver');
+const { readJson } = require('./lib/cli-utils');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -103,7 +104,7 @@ function parseDate(value) {
 }
 
 function isoDate(value) { return value.toISOString().slice(0, 10); }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
+
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }
 function parseArgs(argv) {
   const out = { profiles: '', windowDays: 1, asOf: '', json: false };

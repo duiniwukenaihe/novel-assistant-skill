@@ -9,6 +9,8 @@ const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson, atomicWriteText, mutateTask } = require('./lib/workflow-state-store');
+const { invokeApplyResult, invokeResolveAction } = require('./lib/workflow-state-machine-invoke');
+const { parseJson } = require('./lib/cli-utils');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -280,9 +282,6 @@ function readJson(file) {
   try { return file && JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
 }
 
-function parseJson(text) {
-  try { return JSON.parse(String(text || '').trim()); } catch (_) { return null; }
-}
 
 function finish(value, code, json) {
   process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`);

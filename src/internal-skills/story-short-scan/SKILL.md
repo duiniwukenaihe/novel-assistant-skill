@@ -222,7 +222,7 @@ node scripts/fanqie-category-catalog.js --app-har "采集/fanqie-app.har" --json
 生产扫榜优先使用：
 
 ```bash
-node skills/story-short-scan/scripts/dz-browse-scraper.js --channel male --format v0.8 --outdir "扫榜库/20260612-dz-male"
+node skills/novel-assistant/references/internal-skills/story-short-scan/scripts/dz-browse-scraper.js --channel male --format v0.8 --outdir "扫榜库/20260612-dz-male"
 ```
 
 手动转换已有 Markdown 扫榜报告时运行：

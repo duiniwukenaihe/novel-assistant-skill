@@ -4,7 +4,11 @@ One entry point for planning, drafting, reviewing, deconstructing, and polishing
 
 `novel-assistant` evolved from the excellent upstream project [worldwonderer/oh-story-claudecode](https://github.com/worldwonderer/oh-story-claudecode). It preserves upstream's professional fiction capabilities while addressing production failures such as interrupted tasks, drifting memory, wasted tokens, structural expansion, and model degradation.
 
-> The current release prioritizes a stable end-to-end short-form workflow. Long-form writing, review, deconstruction, trend research, import, and de-AI polishing remain available.
+> Short-form focus: short-form writing is stable and production-ready, prioritized for real short-form work.
+> Long-form is still maturing: complex tasks may have edge-case and checkpoint-recovery issues; validate on a small scale before committing to critical drafts.
+> Review, deconstruction, trend research, import, and de-AI polishing modules are all available and work alongside the short-form / long-form workflows.
+>
+> Public release: v0.1.0
 
 ## Quick Start
 
@@ -18,7 +22,7 @@ Remove `-g` for a project-local install.
 
 ### Use
 
-Enter the story directory and invoke this in Claude Code, Codex, or ZCode:
+Enter the story directory and invoke this in Claude Code, Codex, ZCode, or OpenCode:
 
 ```text
 /novel-assistant
@@ -37,6 +41,8 @@ Remove AI-like prose without changing the story.
 ```
 
 A new directory shows creation entries. An existing story surfaces unfinished work first. Native arrow-key menus are preferred, numbered choices are the fallback, and free-form correction is always available.
+
+OpenCode CLI shares the same single-entry `novel-assistant` as other hosts; the skill does not manage model accounts, API keys, or provider configuration.
 
 ## Why It Exists
 
@@ -124,6 +130,8 @@ Each prose unit closes its own loop:
 4. **Accepted commit:** only adopted work updates canonical prose and Memory.
 
 Normal sections use lightweight checks. Climaxes, reversals, character turns, and canon changes receive stronger review only when needed.
+
+Genre settings share a unified "ability / growth-rule consistency" check, but defer to the work's own semantics. Cultivation systems must not be mechanically relabeled as power systems, nor should generic terminology flatten the original rules of realistic, sci-fi, or system-lit genres.
 
 ## Capabilities
 

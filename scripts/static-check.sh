@@ -474,6 +474,27 @@ echo ""
 echo "=================="
 echo "Total: $TOTAL | Pass: $PASS | Fail: $FAIL | Warn: $WARN"
 
-if [ "$FAIL" -gt 0 ]; then
+# Bundle sync & command reference guards (also run in CI; keep local verify aligned)
+GUARD_FAIL=0
+
+echo ""
+echo "--- bundle sync ---"
+if bash "$REPO_ROOT/scripts/check-bundle-sync.sh"; then
+  echo "  [PASS] bundle in sync with source"
+else
+  echo "  [FAIL] bundle sync check failed"
+  GUARD_FAIL=1
+fi
+
+echo ""
+echo "--- command references ---"
+if node "$REPO_ROOT/scripts/check-command-references.js"; then
+  echo "  [PASS] all command references resolve"
+else
+  echo "  [FAIL] command reference check failed"
+  GUARD_FAIL=1
+fi
+
+if [ "$FAIL" -gt 0 ] || [ "$GUARD_FAIL" -gt 0 ]; then
   exit 1
 fi

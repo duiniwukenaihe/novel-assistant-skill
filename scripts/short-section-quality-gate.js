@@ -4,8 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawnSync } = require('child_process');
 const { classifyWorkflowApply, recoverableStageResult } = require('./lib/workflow-apply-result');
+const { finish, parseJson, readJson, relative } = require('./lib/cli-utils');
 const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { inferShortSectionIndex } = require('./lib/short-workflow-state');
@@ -25,6 +25,7 @@ const {
   validateBriefOutlineCoverage,
   validateDraftOutlineCoverage,
 } = require('./lib/short-section-outline-contract');
+const { invokeApplyResult } = require('./lib/workflow-state-machine-invoke');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -219,10 +220,7 @@ function main() {
   });
 
   if (!args.apply) return finish({ status: 'packet_ready', decision, section_index: sectionIndex, result_packet: packetRel }, 0, args.json);
-  const applied = spawnSync(process.execPath, [
-    path.join(__dirname, 'workflow-state-machine.js'),
-    'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json',
-  ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   const applyResult = outcome.result;
   const pending = applyResult && applyResult.task && applyResult.task.pending_action
@@ -588,14 +586,6 @@ function safeProjectFile(root, rel) {
   return file === root || file.startsWith(`${root}${path.sep}`) ? file : '';
 }
 
-function relative(root, file) {
-  return file ? path.relative(root, file).split(path.sep).join('/') : '';
-}
-
-function readJson(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
-}
-
 function readQualityEvidence(file) {
   if (!file || !fs.existsSync(file)) return { value: null, repaired: false };
   const raw = fs.readFileSync(file, 'utf8');
@@ -606,15 +596,6 @@ function readQualityEvidence(file) {
     return `${match[1]}${match[2].replace(/(?<!\\)"/gu, '”')}${match[3]}`;
   }).join('\n');
   try { return { value: JSON.parse(repairedText), repaired: repairedText !== raw }; } catch (_) { return { value: null, repaired: false }; }
-}
-
-function parseJson(text) {
-  try { return JSON.parse(String(text || '').trim()); } catch (_) { return null; }
-}
-
-function finish(value, code, json) {
-  process.stdout.write(`${json ? JSON.stringify(value) : `${value.status}\n`}\n`);
-  return code;
 }
 
 function usage(message) {

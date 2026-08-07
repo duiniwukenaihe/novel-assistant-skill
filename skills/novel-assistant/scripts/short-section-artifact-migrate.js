@@ -13,6 +13,7 @@ const {
   resolveShortStateRelative,
   shortStateFile,
 } = require('./lib/short-project-state');
+const { readJson } = require('./lib/cli-utils');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -272,7 +273,7 @@ function parseArgs(argv) {
 
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file === root || file.startsWith(`${root}${path.sep}`) ? file : ''; }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
+
 function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch (_) { return ''; } }
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : `${value.status}\n`}\n`); return code; }
 function usage(message) { process.stderr.write(`${message}\nUsage: node short-section-artifact-migrate.js --project-root <book> --workflow-id <id> [--user-confirmed-sections 1,2] [--confirm] [--json]\n`); process.exit(2); }

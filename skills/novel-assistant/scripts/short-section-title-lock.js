@@ -4,12 +4,13 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { mutateTaskAuthority, resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { advanceShortPlanRevision, resolveShortStateRelative } = require('./lib/short-project-state');
 const { isShortWorkflowType } = require('./lib/short-workflow-types');
+const { invokeApplyResult, invokeResolveAction, invokeRunnerCommand } = require('./lib/workflow-state-machine-invoke');
+const { readJson, parseJson } = require('./lib/cli-utils');
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -137,18 +138,13 @@ function persistLockAndContinue({ root, args, task, sections, digest, lockRel, o
   if (String(task.current_stage || '') === 'section_plan_lock') {
     return completeSectionPlanLock({ root, args, task, sections, digest, lockRel, projectState, reused });
   }
-  const refreshed = spawnSync(process.execPath, [
-    path.join(__dirname, 'workflow-state-machine.js'),
-    'refresh-short-title-lock',
-    '--project-root', root,
-    '--workflow-id', args.workflowId,
-    '--json',
-  ], { cwd: root, encoding: 'utf8', maxBuffer: 1024 * 1024 });
-  const workflowResume = parseJson(refreshed.stdout) || {
-    status: 'blocked_short_title_lock_refresh_failed',
-    message: String(refreshed.stderr || '').trim().slice(0, 500),
-  };
-  const ok = refreshed.status === 0 && workflowResume.status === 'short_section_titles_bound';
+  const refreshedResult = invokeRunnerCommand({ command: 'refresh-short-title-lock', projectRoot: root, workflowId: args.workflowId });
+  const workflowResume = refreshedResult && refreshedResult.status
+    ? refreshedResult
+    : parseJson(JSON.stringify(refreshedResult)) || {
+        status: 'blocked_short_title_lock_refresh_failed',
+      };
+  const ok = Boolean(workflowResume.status) && workflowResume.status === 'short_section_titles_bound';
   return finish({
     status: ok ? 'section_titles_confirmed_and_bound' : 'section_titles_confirmed_workflow_refresh_blocked',
     lock_path: lockRel,
@@ -191,7 +187,7 @@ function completeSectionPlanLock({ root, args, task, sections, digest, lockRel, 
     memory_updates: [],
     result_packet_path: packetRel,
   });
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', String(task.workflow_id || ''), '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: String(task.workflow_id || ''), resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   return finish({
     status: outcome.applied ? 'section_plan_locked' : 'section_plan_lock_apply_blocked',
@@ -343,8 +339,7 @@ function parseArgs(argv) {
 function printHelp() { process.stdout.write('Usage: node short-section-title-lock.js --project-root <book> [--workflow-id <id>] [--outline 小节大纲.md] [--digest sha256 --confirm] [--json]\n'); return 0; }
 
 function sha256(value) { return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex'); }
-function parseJson(value) { try { return JSON.parse(String(value || '').trim()); } catch (_) { return null; } }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
+
 function safeProjectFile(root, relativePath) { const value=String(relativePath||'').replace(/\\/g,'/').replace(/^\.\//,''); if(!value||path.isAbsolute(value)||value.split('/').includes('..')) return ''; const file=path.resolve(root,value); return file.startsWith(`${path.resolve(root)}${path.sep}`)?file:''; }
 function relative(root, file) { return path.relative(root, file).split(path.sep).join('/'); }
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }

@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { isShortWorkflowType } = require('./short-workflow-types');
+const { needsForStage } = require('./memory-query-contract');
 
 const SCRIPT_DIR = path.resolve(__dirname, '..');
 
@@ -83,7 +84,7 @@ const DETERMINISTIC_NO_MEMORY_STAGES = new Set([
 ]);
 
 const NO_STORY_MEMORY_WORKFLOWS = new Set(['project_setup', 'setup_update']);
-const OPTIONAL_STORY_MEMORY_WORKFLOWS = new Set(['long_scan', 'short_scan', 'cover', 'download_import']);
+const OPTIONAL_STORY_MEMORY_WORKFLOWS = new Set(['long_scan', 'short_scan', 'cover', 'download_import', 'short_review']);
 const NO_MEMORY_UPDATE_WORKFLOWS = new Set(['project_setup', 'setup_update', 'cover']);
 const WORKFLOW_MEMORY_BUDGETS = Object.freeze({
   long_startup: 3600,
@@ -92,7 +93,7 @@ const WORKFLOW_MEMORY_BUDGETS = Object.freeze({
   short_write: 3600,
   private_short_startup: 3600,
   review_repair: 4200,
-  short_review: 3600,
+  short_review: 2400,
   long_analyze: 3200,
   short_analyze: 2800,
   deslop: 3000,
@@ -162,22 +163,8 @@ function authorPhaseForStage(workflowType, stageDef) {
 }
 
 function memoryNeedsForStage(workflowType, stageDef) {
-  if (NO_STORY_MEMORY_WORKFLOWS.has(workflowType)) return [];
-  if (/(?:scan|cover|setup)/u.test(workflowType)) return ['user_preferences'];
-  if (/(?:analyze|review|deslop)/u.test(workflowType) || String(stageDef.owner_module || '') === 'story-review') {
-    return ['accepted_facts', 'review_dependencies', 'confirmed_quality_rules', 'user_preferences'];
-  }
-  return [
-    'accepted_facts',
-    'active_cast',
-    'active_promises',
-    'confirmed_style_rules',
-    'confirmed_quality_rules',
-    'planning_constraints',
-    'continuity_obligations',
-    'canon_constraints',
-    'user_preferences',
-  ];
+  const stageId = String((stageDef && stageDef.stage_id) || '');
+  return needsForStage(workflowType, stageId);
 }
 
 function stageMemoryContract(workflowType, stageDef) {

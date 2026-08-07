@@ -6,6 +6,7 @@ const { sanitizeForArtifact } = require('../behavior-eval');
 const {
   createMemoryContract,
   createMemoryReadReceipt,
+  needsForStage,
 } = require('./memory-query-contract');
 const { StoryMemoryRepository } = require('./story-memory-repository');
 
@@ -14,6 +15,7 @@ function prepareMemoryContext(root, task, execution, policy, contextRunId = '') 
   const script = path.join(__dirname, '..', 'context-assembler.js');
   const target = String(execution.work_unit_scope || task.scope || execution.stage_id || task.user_goal || 'current-task');
   const taskName = `${task.workflow_type}:${execution.stage_id}`;
+  const stageNeeds = needsForStage(task.workflow_type, String(execution.stage_id || task.current_stage || ''));
   const result = spawnSync(process.execPath, [
     script,
     '--project-root', root,
@@ -24,6 +26,7 @@ function prepareMemoryContext(root, task, execution, policy, contextRunId = '') 
     '--stage', execution.stage_id,
     '--run-id', contextRunId,
     '--budget', String(policy.token_budget),
+    '--needs', stageNeeds.join(','),
     '--json',
   ], { encoding: 'utf8', shell: false, maxBuffer: 20 * 1024 * 1024 });
   let parsed = {};
@@ -59,7 +62,7 @@ function prepareMemoryContext(root, task, execution, policy, contextRunId = '') 
     stage_id: String(execution.stage_id || task.current_stage || ''),
     owner_module: String(execution.owner_module || task.workflow_owner || ''),
     scope: { target },
-    needs: memoryNeedsFor(task.workflow_type),
+    needs: needsForStage(task.workflow_type, String(execution.stage_id || task.current_stage || '')),
     query_text: `${taskName}\n${target}`,
   };
   if (attemptId) querySpec.stage_attempt_id = attemptId;
@@ -144,14 +147,6 @@ function resolveProjectIdentity(root, task) {
     project_id: String(embedded.project_id || stored.project_id || task.book_id || path.basename(root) || 'current-project'),
     project_instance_id: String(embedded.project_instance_id || stored.project_instance_id || ''),
   };
-}
-
-function memoryNeedsFor(workflowType) {
-  if (/(?:scan|cover|setup)/u.test(String(workflowType || ''))) return ['user_preferences'];
-  if (/(?:analyze|review|deslop)/u.test(String(workflowType || ''))) {
-    return ['accepted_facts', 'review_dependencies', 'confirmed_quality_rules', 'user_preferences'];
-  }
-  return ['accepted_facts', 'active_cast', 'active_promises', 'confirmed_style_rules', 'confirmed_quality_rules', 'planning_constraints', 'continuity_obligations', 'canon_constraints', 'user_preferences'];
 }
 
 function normalizeDigest(value) {

@@ -3,8 +3,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const cp = require('child_process');
 const { mutateTask } = require('./lib/workflow-state-store');
+const { invokeApplyResult } = require('./lib/workflow-state-machine-invoke');
 const { readFocusedTask } = require('./lib/workflow-task-authority');
 const {
   currentReviewBatch,
@@ -312,20 +312,16 @@ function defaultPacketPath(task, stageId) {
 }
 
 function applyPacket(projectRoot, packetFile, recoveredStage) {
-  const stateMachine = path.join(__dirname, 'workflow-state-machine.js');
-  const run = cp.spawnSync(process.execPath, [stateMachine, 'apply-result', '--project-root', projectRoot, '--result', packetFile, '--compact', '--json'], {
-    encoding: 'utf8',
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  if (run.error || run.status !== 0) {
+  const run = invokeApplyResult({ projectRoot, workflowId: '', resultFile: packetFile });
+  if (run.status !== 0) {
     return {
       status: 'blocked_recovery_apply_failed',
       recovered_stage: recoveredStage,
       result_packet_path: packetFile,
-      error: run.error ? run.error.message : String(run.stderr || run.stdout || '').trim(),
+      error: String(run.stderr || run.stdout || '').trim().slice(0, 500),
     };
   }
-  const applied = JSON.parse(run.stdout);
+  const applied = run.result || {};
   return {
     status: 'recovered_and_advanced',
     recovered_stage: recoveredStage,

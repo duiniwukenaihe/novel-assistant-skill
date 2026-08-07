@@ -3,15 +3,92 @@
 const crypto = require('crypto');
 
 const CONTRACT_VERSION = '1.0.0';
-const NEEDS = new Set([
-  'accepted_facts', 'active_cast', 'active_promises', 'confirmed_style_rules',
-  'confirmed_quality_rules', 'planning_constraints', 'continuity_obligations', 'canon_constraints',
-  'reader_promise', 'review_dependencies', 'user_preferences',
-]);
+const NEEDS = {
+  accepted_facts: {
+    description: '已采纳的角色、世界观与事件事实，用于保证正文不与已确定内容矛盾',
+    maps_to: 'relevant_lore, hard_constraints',
+  },
+  active_cast: {
+    description: '当前在场角色及其状态约束，用于本节对话与行动的连贯',
+    maps_to: 'active_cast',
+  },
+  active_promises: {
+    description: '尚未兑现的伏笔与读者期待，用于判断本节是否需要推进或回收',
+    maps_to: 'hard_constraints',
+  },
+  confirmed_style_rules: {
+    description: '作者已确认的句法节奏、表达偏好，用于约束正文风格',
+    maps_to: 'author_voice, hard_constraints',
+  },
+  confirmed_quality_rules: {
+    description: '已确认的质量门规则（AI 味、退化检测容忍线），用于本节自检',
+    maps_to: 'negative_constraints',
+  },
+  planning_constraints: {
+    description: '已确认的规划约束——本节必须达成的目标、禁止偏离的走向',
+    maps_to: 'hard_constraints',
+  },
+  continuity_obligations: {
+    description: '跨节连续性义务（上一节留下的悬念、待接的动作），用于衔接',
+    maps_to: 'must_inherit, hard_constraints',
+  },
+  canon_constraints: {
+    description: '已确认的规划约束（本节目标、走向边界、已采纳计划派生的硬约束），用于防止偏离既定规划',
+    maps_to: 'hard_constraints',
+  },
+  reader_promise: {
+    description: '对读者的核心承诺（爽点节奏、情感线走向），用于 brief 阶段定向',
+    maps_to: 'hard_constraints',
+  },
+  review_dependencies: {
+    description: '审阅依赖——上一轮审阅发现的待修项，用于 review/deslop 阶段',
+    maps_to: 'task_context',
+  },
+  user_preferences: {
+    description: '作者的通用写作偏好（非作品特定），用于所有阶段的轻量定向',
+    maps_to: 'author_voice',
+  },
+};
+
+const NEED_KEYS = Object.keys(NEEDS);
+const NEED_SET = new Set(NEED_KEYS);
+
+function needsForStage(workflowType, stageId) {
+  const type = String(workflowType || '');
+  const stage = String(stageId || '');
+  if (/(?:scan|cover|setup)/u.test(type)) return ['user_preferences'];
+  if (/(?:analyze|review|deslop)/u.test(type)) {
+    return ['accepted_facts', 'review_dependencies', 'confirmed_quality_rules', 'user_preferences'];
+  }
+  // short_write / long_write 按阶段裁剪
+  const briefStages = ['first_section_brief', 'section_brief', 'next_section_brief'];
+  if (briefStages.includes(stage) || /brief/u.test(stage)) {
+    return ['planning_constraints', 'reader_promise', 'active_cast', 'confirmed_style_rules', 'active_promises'];
+  }
+  if (stage === 'draft_section' || stage === 'section_draft' || stage === 'draft_first_section' || stage === 'draft_next_section') {
+    return ['active_cast', 'planning_constraints', 'continuity_obligations', 'confirmed_style_rules', 'canon_constraints', 'active_promises'];
+  }
+  if (stage === 'section_repair_loop' || stage === 'section_repair' || /repair/u.test(stage)) {
+    return ['planning_constraints', 'continuity_obligations', 'canon_constraints', 'confirmed_quality_rules'];
+  }
+  if (stage === 'feedback_impact_sync' || stage === 'feedback_apply_patch') {
+    return ['planning_constraints', 'continuity_obligations'];
+  }
+  // 默认：返回宽集合（向后兼容旧项目/未知阶段）
+  return ['accepted_facts', 'active_cast', 'active_promises', 'confirmed_style_rules',
+    'confirmed_quality_rules', 'planning_constraints', 'continuity_obligations',
+    'canon_constraints', 'user_preferences'];
+}
+
+function describeNeeds(needKeys) {
+  return unique(needKeys)
+    .filter((key) => NEED_SET.has(key))
+    .map((key) => ({ key, description: NEEDS[key].description, maps_to: NEEDS[key].maps_to }));
+}
 
 function normalizeMemoryQuery(value = {}) {
   const needs = unique(value.needs).map(String);
-  const unknown = needs.filter(need => !NEEDS.has(need));
+  const unknown = needs.filter(need => !NEED_SET.has(need));
   if (unknown.length) throw invalid(`unsupported memory needs: ${unknown.join(', ')}`);
   if (!needs.length) throw invalid('memory query needs at least one typed need');
   const attemptRaw = String(value.stage_attempt_id || '').trim();
@@ -111,6 +188,9 @@ function invalid(message) { const error = new Error(message); error.code = 'MEMO
 module.exports = {
   CONTRACT_VERSION,
   NEEDS,
+  NEED_KEYS,
+  needsForStage,
+  describeNeeds,
   createMemoryContract,
   createMemoryReadReceipt,
   normalizeMemoryQuery,

@@ -4,8 +4,8 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const { detectAdapters } = require('./lib/workflow-host-adapters');
+const { invokeRunnerCommand } = require('./lib/workflow-state-machine-invoke');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
 const { resolveAuthoritativeStatus } = require('./workflow-state-validate');
 const { resolveExecutionMemoryPolicy, resolveWorkflowMemoryPolicy } = require('./lib/workflow-memory-policy');
@@ -523,20 +523,19 @@ function archiveRejectedManagedResult(root, task, execution, resultFile) {
 }
 
 function runState(command, root, extra = []) {
-  const script = path.join(__dirname, 'workflow-state-machine.js');
-  const result = spawnSync(process.execPath, [script, command, '--project-root', root, ...extra, '--json'], {
-    encoding: 'utf8',
-    shell: false,
-    maxBuffer: 20 * 1024 * 1024,
-  });
-  let parsed;
-  try {
-    parsed = JSON.parse(result.stdout || '{}');
-  } catch (error) {
-    return { status: 'blocked_state_machine_invalid_output', error: error.message, stderr: result.stderr || '' };
+  const options = { command, projectRoot: root };
+  for (let i = 0; i < extra.length; i += 2) {
+    const key = String(extra[i]).replace(/^--/, '');
+    const value = extra[i + 1];
+    if (key === 'input') options.input = String(value);
+    else if (key === 'pending-action-id') options.pendingActionId = String(value);
+    else if (key === 'visible-choice-hash') options.visibleChoiceHash = String(value);
+    else if (key === 'state-version') options.stateVersion = String(value);
+    else if (key === 'book-root') options.bookRoot = String(value);
+    else if (key === 'result') options.resultFile = String(value);
+    else if (key === 'bind-current') options.bindCurrent = true;
   }
-  if (result.error) parsed.runner_error = result.error.message;
-  return parsed;
+  return invokeRunnerCommand(options);
 }
 
 function compactStageExecutionForRunner(execution) {

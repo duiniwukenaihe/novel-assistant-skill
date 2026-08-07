@@ -9,6 +9,8 @@ const { resolveTaskAuthority } = require('./lib/workflow-task-authority');
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { inferLongChapter, resolveChapterDraft } = require('./lib/long-stage-context-packet');
 const { atomicWriteJson } = require('./lib/workflow-state-store');
+const { invokeApplyResult, invokeResolveAction } = require('./lib/workflow-state-machine-invoke');
+const { readJson } = require('./lib/cli-utils');
 
 const CHECKS = ['brief_alignment', 'causal_chain', 'character_consistency', 'promise_and_hook', 'protagonist_agency', 'continuity', 'story_attraction', 'drift_control'];
 const UPSTREAM_BRIEF_CHECKS = new Set(['brief_alignment', 'drift_control']);
@@ -76,7 +78,7 @@ function main() {
     result_write_set: [], memory_updates: [], result_packet_path: packetRel,
   });
   if (!args.apply) return finish({ status: 'packet_ready', workflow_id: workflowId, chapter, decision: args.decision, result_packet: packetRel }, 0, args.json);
-  const applied = spawnSync(process.execPath, [path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root, '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   const result = outcome.result;
   return finish({ status: outcome.applied ? 'applied' : 'apply_blocked', workflow_status: outcome.workflowStatus, workflow_id: workflowId, chapter, decision: args.decision, result_packet: packetRel, next_stage: String(result.current_stage || ((result.task || {}).current_stage) || ''), ...outcome.presentation, ...(outcome.applied ? {} : { recovery: result }) }, outcome.exitCode, args.json);
@@ -87,8 +89,8 @@ function parseArgs(argv) { const args = { projectRoot: '', workflowId: '', draft
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); return file.startsWith(`${root}${path.sep}`) ? file : ''; }
 function relative(root, file) { return path.relative(root, file).split(path.sep).join('/'); }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
-function parseJson(text) { try { return JSON.parse(String(text || '').trim()); } catch (_) { return null; } }
+
+
 function finish(value, code, json) { process.stdout.write(`${json ? JSON.stringify(value) : value.status}\n`); return code; }
 function usage(message) { process.stderr.write(`${message}\nUsage: node long-chapter-quality-gate.js --project-root <book> --workflow-id <id> --decision <pass|revise> [--failed a,b] [--draft file] [--apply] [--json]\n`); process.exit(2); }
 

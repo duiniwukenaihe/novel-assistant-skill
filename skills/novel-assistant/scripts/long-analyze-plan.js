@@ -142,9 +142,13 @@ function renderProgress(outDir, plan) {
 }
 
 function collectChapterHeadings(raw) {
-  const pattern = /^(第\s*([0-9零一二三四五六七八九十百千万两]+)\s*章[^\r\n]*|Chapter\s+([0-9]+)[^\r\n]*)/gim;
+  // 编号章节：第N章 / 第一章 / Chapter N
+  const numberedPattern = /^(第\s*([0-9零一二三四五六七八九十百千万两]+)\s*章[^\r\n]*|Chapter\s+([0-9]+)[^\r\n]*)/gim;
+  // 非编号章节：序章/楔子/引子/前言/番外/尾声/后记/终章 等
+  const unnumberedPattern = /^(序章|楔子|引子|前言|序言|番外篇?|尾声|后记|终章|引言)[^\r\n]*/gim;
+
   const headings = [];
-  for (const match of raw.matchAll(pattern)) {
+  for (const match of raw.matchAll(numberedPattern)) {
     const heading = match[1].trim();
     const numberText = match[2] || match[3] || '';
     headings.push({
@@ -152,6 +156,16 @@ function collectChapterHeadings(raw) {
       heading,
       chapterNo: parseChapterNumber(numberText),
       title: normalizeTitle(heading),
+    });
+  }
+  for (const match of raw.matchAll(unnumberedPattern)) {
+    const heading = match[1].trim();
+    const kind = heading.replace(/[^\u4e00-\u9fff]/g, '');
+    headings.push({
+      index: match.index,
+      heading,
+      chapterNo: 0,
+      title: heading,
     });
   }
   return headings

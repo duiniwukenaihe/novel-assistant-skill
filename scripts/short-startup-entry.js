@@ -29,7 +29,8 @@
 // flags are rejected the same way.
 
 const path = require('path');
-const { spawnSync } = require('child_process');
+const engine = require('./lib/workflow-v3/engine');
+const stateStore = require('./lib/workflow-state-store');
 
 // Usage error: a programmer mistake on the command line. Prints a single stable
 // line to stderr and exits 2 — never a thrown stack trace. Called from parseArgs
@@ -61,21 +62,29 @@ function main() {
   return runV3(root, args);
 }
 
-// V3 default: delegate to the canonical create-short CLI and wrap the durable
+// V3 default: delegate to the canonical create-short engine and wrap the durable
 // task in the stable short_startup_ready output. The task carries the engine
 // contract identity (engine_version 3, current_stage creative_entry,
 // production_kernel short-v3); the wrapper only forwards it, and echoes the
 // task's workflow_id at the top level so hosts can key off it directly.
 function runV3(root, args) {
   const profile = args.profile || (args.noPrivateRegistry ? 'public' : 'private');
-  const cliArgs = [
-    'create-short', '--project-root', root, '--profile', profile,
-    '--user-goal', args.userGoal || '新开短篇', '--json',
-  ];
-  const created = runJson(root, 'workflow-v3.js', cliArgs);
-  if (!created.ok) return finish({ status: 'short_startup_create_failed', detail: created.value }, created.code || 1, args.json);
-  const task = (created.value && created.value.ok && created.value.task) || null;
-  if (!task) return finish({ status: 'short_startup_create_failed', detail: created.value }, 1, args.json);
+  const userGoal = String(args.userGoal || '新开短篇').trim();
+  const workflowId = stateStore.createWorkflowId('short_write');
+  let task;
+  try {
+    task = engine.createTask(root, {
+      workflow_id: workflowId,
+      workflow_type: 'short_write',
+      workflow_profile: profile,
+      production_kernel: 'short-v3',
+      user_goal: userGoal,
+      book_root: '.',
+      resume_matching_family: true,
+    });
+  } catch (error) {
+    return finish({ status: 'short_startup_create_failed', detail: { ok: false, error: String((error && error.message) || error) } }, 1, args.json);
+  }
   return finish({ status: 'short_startup_ready', workflow_id: task.workflow_id, task }, 0, args.json);
 }
 
@@ -84,17 +93,6 @@ function runLegacyV2(_root, args) {
     status: 'blocked_v2_short_write_frozen',
     reason: 'V2 短篇写入口已冻结；新项目请移除 --legacy-v2，旧项目请通过兼容迁移入口恢复。',
   }, 2, args.json);
-}
-
-function runJson(cwd, script, args) {
-  const result = spawnSync(process.execPath, [path.join(__dirname, script), ...args], {
-    cwd, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
-  });
-  let value;
-  try { value = JSON.parse(String(result.stdout || '').trim()); } catch (_) {
-    value = { status: 'invalid_script_output', stdout: String(result.stdout || '').trim().slice(0, 500), stderr: String(result.stderr || '').trim().slice(0, 500) };
-  }
-  return { ok: result.status === 0, code: Number(result.status || 0), value };
 }
 
 // Parses argv into a structured object. Value flags (--project-root,

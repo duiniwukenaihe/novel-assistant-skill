@@ -4,7 +4,6 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 const { acceptTransaction, inspectChapter, prepareTransaction } = require('./lib/chapter-commit-store');
 const { classifyWorkflowApply } = require('./lib/workflow-apply-result');
 const { buildPendingAction, buildShortDraftPendingAction, decoratePendingAction } = require('./lib/workflow-action-renderer');
@@ -15,6 +14,8 @@ const { mutateTaskAuthority, resolveTaskAuthority } = require('./lib/workflow-ta
 const { singleUnfinishedWorkflowId } = require('./lib/workflow-command-task-binding');
 const { atomicWriteJson, atomicWriteText } = require('./lib/workflow-state-store');
 const { readShortProjectState, shortStateFile } = require('./lib/short-project-state');
+const { readJson } = require('./lib/cli-utils');
+const { invokeApplyResult } = require('./lib/workflow-state-machine-invoke');
 
 const ASSEMBLY_VOLUME = '短篇发布稿';
 
@@ -191,10 +192,7 @@ function main() {
     result_packet_path: packetRel,
   });
 
-  const applied = spawnSync(process.execPath, [
-    path.join(__dirname, 'workflow-state-machine.js'), 'apply-result', '--project-root', root,
-    '--workflow-id', workflowId, '--result', packetFile, '--compact', '--json',
-  ], { cwd: root, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+  const applied = invokeApplyResult({ projectRoot: root, workflowId: workflowId, resultFile: packetFile });
   const outcome = classifyWorkflowApply(applied);
   const applyResult = outcome.result;
   return finish({
@@ -316,9 +314,9 @@ function parseArgs(argv) {
 
 function focusedWorkflowId(root) { return singleUnfinishedWorkflowId(root); }
 function safeProjectFile(root, rel) { const file = path.resolve(root, String(rel || '')); if (file !== root && !file.startsWith(`${root}${path.sep}`)) throw new Error(`unsafe path: ${rel}`); return file; }
-function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; } }
+
 function readText(file) { try { return fs.readFileSync(file, 'utf8'); } catch (_) { return ''; } }
-function parseJson(text) { try { return JSON.parse(String(text || '').trim()); } catch (_) { return null; } }
+
 function hashText(text) { return crypto.createHash('sha256').update(String(text || ''), 'utf8').digest('hex'); }
 function hashFile(file) { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); }
 function normalizeHash(value) { return String(value || '').replace(/^sha256:/, ''); }
