@@ -325,7 +325,11 @@ function finalizeEditorialReview(context = {}) {
     stage_id: stageId, decision, story_sha256: pack.story_sha256,
     reader_response_path: acceptedReaderRel, review_card_path: acceptedReviewRel,
     review_card_sha256: reviewHash, receipt_path: receiptRel,
-    findings, feedback: decision === 'revise' ? { items: findings } : { items: [] },
+    findings,
+    section_indices: (Array.isArray(pack.section_metrics) ? pack.section_metrics : [])
+      .map(item => Number((item || {}).section_index))
+      .filter(index => Number.isInteger(index) && index > 0),
+    feedback: decision === 'revise' ? { items: findings } : { items: [] },
     next_stage: decision === 'pass' ? 'deslop' : 'planning_confirmation',
   });
 }

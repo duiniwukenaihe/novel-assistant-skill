@@ -67,7 +67,7 @@ node scripts/behavior-eval.js run \
   --json
 ```
 
-The evaluator writes `reports/behavior-eval/<run-id>/summary.json`. Each passing summary records:
+The evaluator writes `reports/behavior-eval/<run-id>/summary.json` by default. A release candidate may explicitly keep the same hash-bound structure outside its worktree with `--reports-root <external-dir>`; then the summary is `<external-dir>/behavior-eval/<run-id>/summary.json`. Each passing summary records:
 
 - current `bundleId` and `sourceCommit`;
 - requested hosts and scenario;
@@ -80,9 +80,31 @@ Release gate:
 node scripts/behavior-eval-release-gate.js --json
 ```
 
-The gate only reads existing reports. It never starts a host. It blocks release if a required scenario is missing, a report is dry-run/non-paid, the bundle ID is stale, any host failed, or token/cost usage is not host-reported.
+The gate only reads existing reports. It never starts a host. It blocks release if a required scenario is missing, a report is dry-run/non-paid, the bundle ID or source commit is stale, any host failed, or token/cost usage is not host-reported.
 
 Run IDs must be 1-64 characters containing only letters, numbers, `.`, `_`, and `-`. The evaluator resolves the calculated directory and verifies it remains inside `reports/behavior-eval`; values such as `../../../outside` are rejected.
+
+## Public Candidate Evidence
+
+Public release evidence is deliberately collected outside the sanitized candidate tree. It is never synthesized by a release gate and no command starts a paid host unless `--execute-paid`, an exact confirmation ID, and a budget ceiling are present.
+
+```bash
+PUBLIC_EVIDENCE=/secure/external/novel-assistant-public-evidence
+RUN_ID=public-route-single-entry-001
+node scripts/behavior-eval.js run \
+  --execute-paid --paid-confirmation "$RUN_ID" --max-budget-usd 10 \
+  --scenario route-single-entry --hosts claude,codex,zcode --run-id "$RUN_ID" \
+  --reports-root "$PUBLIC_EVIDENCE" --json
+```
+
+Collect all six release scenarios, then validate from the public candidate checkout:
+
+```bash
+node scripts/behavior-eval-release-gate.js \
+  --repo-root . --reports-root "$PUBLIC_EVIDENCE" --json
+```
+
+`publish-public --run-public-behavior-eval --max-behavior-budget-usd <n>` provides the same explicit, opt-in collection path for a fresh sanitized worktree. The public release gate rejects missing, non-paid, stale-bundle, incomplete-host, or hash-mismatched evidence.
 
 ## Prose Quality Calibration
 

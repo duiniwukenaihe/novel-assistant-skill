@@ -9,6 +9,7 @@ const { validateTaskState } = require('./lib/workflow-state-store');
 const { readFocusedTask } = require('./lib/workflow-task-authority');
 const { isMigrationSuppressed, scanWorkflowMigrations } = require('./lib/workflow-legacy-migration');
 const { validateResultPacketUnitBinding } = require('./lib/workflow-result-packet-identity');
+const { resolveRecoveryAction } = require('./lib/workflow-blocker-registry');
 
 const TERMINAL_STATUSES = new Set(['completed', 'completed_verified', 'done', 'pass', 'closed', 'cancelled', 'canceled', 'superseded']);
 const PAUSED_STATUSES = new Set(['paused', 'paused_after_batch', 'paused_after_step']);
@@ -19,15 +20,21 @@ function resolveAuthoritativeStatus(projectRoot, options = {}) {
   const focused = options.task ? null : readFocusedTask(root);
   const task = options.task || (focused && focused.authority.status === 'ok' ? focused.authority.task : null);
   const now = options.now || new Date().toISOString();
-  if (!task && focused && focused.pointer) return status('blocked', 'repair_task_state', {
-    project_root: root, current_task_path: currentFile, reason_code: 'task_authority_missing', findings: [{ code: 'blocked_task_authority_missing', message: focused.authority.message || 'durable task snapshot is unavailable' }],
-  });
+  if (!task && focused && focused.pointer) {
+    const recovery = resolveRecoveryAction({ reason_code: 'task_authority_missing' });
+    return status('blocked', recovery.action_id, {
+      project_root: root, current_task_path: currentFile, reason_code: 'task_authority_missing', recovery_action: recovery,
+      findings: [{ code: 'blocked_task_authority_missing', message: focused.authority.message || 'durable task snapshot is unavailable' }],
+    });
+  }
   if (!task) return status('idle', 'idle', { project_root: root, current_task_path: currentFile, findings: [] });
   if (task.__error) {
-    return status('blocked', 'repair_runtime_guard', {
+    const recovery = resolveRecoveryAction({ reason_code: 'invalid_current_task' });
+    return status('blocked', recovery.action_id, {
       project_root: root,
       current_task_path: currentFile,
       reason_code: 'invalid_current_task',
+      recovery_action: recovery,
       findings: [{ code: 'invalid_json', message: task.__error }],
     });
   }
@@ -51,9 +58,13 @@ function resolveAuthoritativeStatus(projectRoot, options = {}) {
     focus_pointer_findings: pointerFindings,
     findings,
   };
-  if (findings.length) return status('blocked', 'repair_task_state', { ...base, reason_code: 'state_invariant' });
+  if (findings.length) {
+    const recovery = resolveRecoveryAction({ reason_code: 'state_invariant' });
+    return status('blocked', recovery.action_id, { ...base, reason_code: 'state_invariant', recovery_action: recovery });
+  }
   if (!task.runtime_guard || task.runtime_guard === 'none') {
-    return status('blocked', 'repair_runtime_guard', { ...base, reason_code: 'runtime_guard_missing' });
+    const recovery = resolveRecoveryAction({ reason_code: 'runtime_guard_missing' });
+    return status('blocked', recovery.action_id, { ...base, reason_code: 'runtime_guard_missing', recovery_action: recovery });
   }
   const migration = findActiveMigration(root, task.workflow_id);
   if (migration) {
@@ -87,7 +98,14 @@ function resolveAuthoritativeStatus(projectRoot, options = {}) {
     });
   }
   if (awaitsUser(task)) return status('awaiting_user', 'await_user_choice', base);
-  if (taskStatus.startsWith('blocked')) return status('blocked', 'repair_runtime_guard', { ...base, reason_code: taskStatus || 'blocked' });
+  if (taskStatus.startsWith('blocked')) {
+    const recovery = resolveRecoveryAction({
+      workflow_type: task.workflow_type,
+      task_status: taskStatus,
+      current_stage: task.current_stage,
+    });
+    return status('blocked', recovery.action_id, { ...base, reason_code: taskStatus || 'blocked', recovery_action: recovery });
+  }
   if (PAUSED_STATUSES.has(taskStatus) || String((task.stage_execution || {}).status || '').toLowerCase() === 'paused') {
     return status('paused', 'resume_from_checkpoint', { ...base, reason_code: taskStatus || 'paused' });
   }

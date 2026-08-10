@@ -94,11 +94,13 @@ function getScenario(id) {
   };
 }
 
-function createPlan({ scenario: scenarioId, hosts, runId, executionMode = 'dry-run' }) {
+function createPlan({ scenario: scenarioId, hosts, runId, executionMode = 'dry-run', reportsRoot = '' }) {
   const scenario = getScenario(scenarioId);
   const selectedHosts = normalizeHosts(hosts);
   const resolvedRunId = normalizeRunId(runId, scenario.id, executionMode);
-  const outputDirectory = `${path.posix.join('reports', 'behavior-eval', resolvedRunId)}/`;
+  const externalReportsRoot = String(reportsRoot || '').trim();
+  const outputDirectory = `${path.posix.join(externalReportsRoot ? 'behavior-eval' : 'reports/behavior-eval', resolvedRunId)}/`;
+  const absoluteReportsRoot = externalReportsRoot ? path.resolve(externalReportsRoot) : path.resolve(process.cwd(), 'reports');
   const estimatedUsd = estimateRunBudget(selectedHosts);
   return {
     status: 'dry_run',
@@ -116,7 +118,8 @@ function createPlan({ scenario: scenarioId, hosts, runId, executionMode = 'dry-r
       runId: resolvedRunId,
       directory: outputDirectory,
       summary: path.posix.join(outputDirectory, 'summary.json'),
-      absoluteDirectory: path.resolve(process.cwd(), outputDirectory),
+      reportsRoot: absoluteReportsRoot,
+      absoluteDirectory: path.join(absoluteReportsRoot, 'behavior-eval', resolvedRunId),
     },
     commands: selectedHosts.map((host) => ({ host, command: hostCommands[host], mode: 'planned_only', scenario: scenario.id, fixture: scenario.fixture })),
   };
@@ -128,29 +131,42 @@ function estimateRunBudget(hosts) {
   return roundUsd(selectedHosts.length * (MAX_HEALTH_RECOVERIES + 1) * ESTIMATED_HOST_ATTEMPT_USD);
 }
 
-function createRunDirectory(directory) {
-  const reportsRoot = safeReportsRoot();
+function createRunDirectory(directory, reportsRootPath = '') {
+  const reportsRoot = safeReportsRoot(reportsRootPath);
   const requested = path.resolve(String(directory || ''));
-  const relative = path.relative(reportsRoot, requested);
+  const canonicalParent = fs.realpathSync(path.dirname(requested));
+  const canonicalRequested = path.join(canonicalParent, path.basename(requested));
+  const relative = path.relative(reportsRoot, canonicalRequested);
   if (!relative || relative.includes(path.sep) || relative === '..' || path.isAbsolute(relative)) {
     throw new Error('run directory must resolve to a direct child of reports/behavior-eval');
   }
   try {
-    fs.mkdirSync(requested, { mode: 0o700 });
+    fs.mkdirSync(canonicalRequested, { mode: 0o700 });
   } catch (error) {
     if (error && error.code === 'EEXIST') throw new Error('run directory already exists');
     throw error;
   }
-  const resolved = fs.realpathSync(requested);
+  const resolved = fs.realpathSync(canonicalRequested);
   if (path.dirname(resolved) !== reportsRoot) throw new Error('run directory escapes reports/behavior-eval');
   fs.chmodSync(resolved, 0o700);
   return resolved;
 }
 
-function safeReportsRoot() {
+function safeReportsRoot(reportsRootPath = '') {
+  const externalReportsRoot = String(reportsRootPath || '').trim();
   const workspaceRoot = fs.realpathSync(process.cwd());
-  let current = workspaceRoot;
-  for (const segment of ['reports', 'behavior-eval']) {
+  let current = externalReportsRoot ? path.resolve(externalReportsRoot) : workspaceRoot;
+  if (externalReportsRoot) {
+    if (fs.existsSync(current)) {
+      if (fs.lstatSync(current).isSymbolicLink()) throw new Error(`reports root contains symlink: ${current}`);
+      if (!fs.statSync(current).isDirectory()) throw new Error(`reports root is not a directory: ${current}`);
+    } else {
+      fs.mkdirSync(current, { recursive: true, mode: 0o700 });
+    }
+    fs.chmodSync(current, 0o700);
+  }
+  const segments = externalReportsRoot ? ['behavior-eval'] : ['reports', 'behavior-eval'];
+  for (const segment of segments) {
     current = path.join(current, segment);
     if (fs.existsSync(current)) {
       if (fs.lstatSync(current).isSymbolicLink()) throw new Error(`reports root contains symlink: ${current}`);

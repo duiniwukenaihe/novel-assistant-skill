@@ -386,7 +386,7 @@ NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
-@test "V3 editorial review sends pass to deslop and revise back to author planning" {
+@test "V3 editorial review sends pass to deslop and revise to a durable author-confirmed repair plan" {
   run node - "$REPO" "$PROJECT" <<'NODE'
 const assert = require('assert');
 const fs = require('fs');
@@ -502,7 +502,7 @@ function seed(root, id, decision, requireLengthDecision = false) {
   assert.equal(result.decision, decision);
   assert.ok(!Object.prototype.hasOwnProperty.call(result, 'visible_response'));
   const outcome = engine.applyStageResult(root, id, task.state_version, result);
-  assert.equal(outcome.task.current_stage, decision === 'pass' ? 'deslop' : 'planning_confirmation');
+  assert.equal(outcome.task.current_stage, decision === 'pass' ? 'deslop' : 'editorial_review');
   assert.equal(outcome.task.short_full_story_review.decision, decision);
   assert.equal(outcome.task.short_full_story_review.story_sha256, pack.story_sha256);
   assert.equal(outcome.task.short_full_story_review.review_card_path, result.review_card_path);
@@ -511,6 +511,27 @@ function seed(root, id, decision, requireLengthDecision = false) {
   assert.equal(outcome.task.short_full_story_review_projection.status,
     decision === 'pass' ? 'review_passed' : 'review_revision_required');
   assert.equal(outcome.task.short_full_story_review_projection.source, 'workflow_v3_editorial_review');
+  if (decision === 'revise') {
+    assert.equal(outcome.task.short_full_story_review.findings.length, 1);
+    assert.equal(outcome.task.short_full_story_review.findings[0].code, 'EndingCost');
+    assert.equal(outcome.task.pending_feedback.status, 'awaiting_confirmation');
+    assert.deepEqual(outcome.task.pending_feedback.proposed_plan.affected_sections, [2]);
+    assert.equal(outcome.task.pending_action.feedback_id, outcome.task.pending_feedback.id);
+    assert.match(outcome.visible_response.text, /1\. 采用这份修改方案/u);
+    assert.doesNotMatch(outcome.visible_response.text, /EndingCost|S3/u);
+    const persisted = engine.readTask(root, id);
+    assert.deepEqual(persisted.pending_feedback.proposed_plan.review_findings,
+      outcome.task.pending_feedback.proposed_plan.review_findings);
+    engine.resolveAuthorInput(root, id, persisted.state_version, {
+      ...outcome.visible_response.binding,
+      choice: '1',
+    });
+    const accepted = engine.readTask(root, id);
+    assert.equal(accepted.pending_feedback.status, 'accepted');
+    assert.equal(accepted.current_stage, 'feedback_apply_patch');
+    assert.equal(accepted.current_section_index, 2);
+    return accepted;
+  }
   return outcome.task;
 }
 

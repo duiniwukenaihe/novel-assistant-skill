@@ -7,7 +7,8 @@ const { atomicWriteJson } = require('./workflow-state-store');
 
 const PROTAGONIST_ROLE = /主角|女主|男主|第一人称/u;
 const PRESSURE_ROLE = /对手|反派|阻力|压力|哥哥|姐姐|母亲|父亲|婆婆|老板|上司|前任|丈夫|妻子/u;
-const CHARACTER_ROLE_LABEL = /主角|女主|男主|主要压力角色|压力角色|对手|反派|主要阻力|支撑角色|配角|朋友|证人/u;
+const CHARACTER_ROLE_LABEL = /主角|女主|男主|主要压力角色|压力角色|主要对手|对手|反派|主要阻力|支撑角色|配角|朋友|证人/u;
+const CHARACTER_TITLE_PREFIX = /(?:(?:第一人称)?主角|女主|男主|主要压力角色|压力角色|主要对手|对手|反派|主要阻力|支撑角色|配角|朋友|证人)/u;
 
 function analyzeShortCharacterContract(settingText) {
   const source = String(settingText || '');
@@ -174,11 +175,17 @@ function parseCharacterTable(source) {
 }
 
 function parseCharacterProfiles(source) {
-  const heading = /^###\s+([^\n]+)$/gmu;
-  const matches = Array.from(String(source || '').matchAll(heading));
+  const heading = /^(#{2,3})\s+([^\n]+)$/gmu;
+  const matches = Array.from(String(source || '').matchAll(heading)).map((match) => ({
+    level: String(match[1] || '').length,
+    title: String(match[2] || '').trim(),
+    index: Number(match.index || 0),
+    raw: match[0],
+  }));
   return matches.map((match, index) => {
-    const title = String(match[1] || '').trim();
-    const body = String(source || '').slice(match.index + match[0].length, matches[index + 1] ? matches[index + 1].index : source.length).trim();
+    const title = match.title;
+    const nextPeer = matches.slice(index + 1).find((candidate) => candidate.level <= match.level);
+    const body = String(source || '').slice(match.index + match.raw.length, nextPeer ? nextPeer.index : source.length).trim();
     const name = cleanName(title);
     return { name, profile: body, title, aliases: aliasesFor({}, title), role: roleFor({}, `${title}\n${body}`) };
   }).filter(item => {
@@ -283,14 +290,15 @@ function normalizeColumn(value) {
 
 function cleanName(value) {
   let text = String(value || '').trim().replace(/[*_`]/g, '');
-  const rolePrefix = /^(?:主角|女主|男主|主要压力角色|压力角色|对手|反派|主要阻力|支撑角色|配角|朋友|证人)\s*[：:]\s*(.+)$/u.exec(text);
+  text = text.replace(/^[一二三四五六七八九十百]+\s*[、.．]\s*/u, '');
+  const rolePrefix = new RegExp(`^${CHARACTER_TITLE_PREFIX.source}\\s*[：:]\\s*(.+)$`, 'u').exec(text);
   if (rolePrefix) text = rolePrefix[1].trim();
   const labelledParts = text.split(/[｜|]/u).map(item => item.trim()).filter(Boolean);
   if (labelledParts.length > 1) {
     const namedPart = labelledParts.find(item => !/^(?:主角|女主|男主|主要压力角色|压力角色|对手|反派|主要阻力|支撑角色|配角|朋友|证人|不可越界)$/u.test(item));
     if (namedPart) text = namedPart;
   }
-  text = text.replace(/^(?:主角|女主|男主|主要压力角色|压力角色|对手|反派|主要阻力|支撑角色|配角|朋友|证人)\s+/u, '');
+  text = text.replace(new RegExp(`^${CHARACTER_TITLE_PREFIX.source}\\s+`, 'u'), '');
   const match = text.match(/^([\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z·]{1,15})(?=\s*[，,（(：:]|\s+\d|$)/u);
   return match ? match[1] : '';
 }

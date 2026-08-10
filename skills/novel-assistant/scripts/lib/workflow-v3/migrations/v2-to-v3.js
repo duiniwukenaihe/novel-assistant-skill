@@ -46,6 +46,21 @@ const EXACT_CHECKPOINTS = Object.freeze([
   }),
 ]);
 
+// These stages were published in the V2 short workflow but do not carry
+// enough durable evidence to select a V3 continuation automatically. They
+// must remain explicit in the matrix: an unknown or mid-gate stage is not a
+// licence to route the author into an arbitrary repair or acceptance stage.
+const UNSUPPORTED_V2_SOURCE_STAGES = Object.freeze([
+  'startup_scan', 'startup_menu', 'freshness_window', 'info_source_pool',
+  'short_review', 'info_source_selection', 'material_learning', 'project_seed',
+  'short_setting', 'platform_genre_lock', 'rhythm_pattern_selection',
+  'section_outline', 'section_plan_lock', 'short_structure_impact_audit',
+  'hook_retention_gate', 'hook_value_gate', 'section_machine_gate',
+  'quality_gate', 'story_value_gate', 'section_candidate_compare',
+  'section_accept_anchor', 'feedback_apply_patch', 'feedback_impact_sync',
+  'full_story_review', 'short_deslop', 'deslop', 'final_check',
+]);
+
 function mapV2Checkpoint(task) {
   if (!task || typeof task !== 'object') return ambiguous('', 'task_not_object');
   const stage = String(task.current_stage || task.current_step || '');
@@ -69,6 +84,9 @@ function mapV2Checkpoint(task) {
       ...(pendingActionPolicy ? { pending_action_policy: pendingActionPolicy } : {}),
     };
   }
+  if (UNSUPPORTED_V2_SOURCE_STAGES.includes(stage)) {
+    return ambiguous(stage, 'unsupported_requires_author_choice');
+  }
   return ambiguous(stage, 'v2_checkpoint_not_exact');
 }
 
@@ -86,6 +104,7 @@ module.exports = {
   EXACT_CHECKPOINTS,
   LEGACY_RUNTIME_PROJECTION_FIELDS,
   SUPPORTED_TARGET_STAGES,
+  UNSUPPORTED_V2_SOURCE_STAGES,
   mapV2Checkpoint,
   stripLegacyRuntimeProjections,
 };

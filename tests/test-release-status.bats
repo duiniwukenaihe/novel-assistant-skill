@@ -8,7 +8,8 @@ setup() {
 
 @test "release-status reports branch, public worktree, and github remote as json" {
     [ -x "$SCRIPT" ]
-    output="$(node "$SCRIPT" --repo-root "$REPO" --json)"
+    run node "$SCRIPT" --repo-root "$REPO" --json
+    [ "$status" -eq 2 ]
     echo "$output" | grep -q '"schemaVersion":"1.0.0"'
     echo "$output" | grep -q '"repoRoot"'
     echo "$output" | grep -q '"currentBranch"'
@@ -29,7 +30,8 @@ setup() {
         git -C "$FIXTURE" commit -qm "test release status fixture"
     fi
     node "$FIXTURE/scripts/na-dev.js" bundle >/dev/null
-    output="$(node "$FIXTURE/scripts/release-status.js" --repo-root "$FIXTURE" --json)"
+    run node "$FIXTURE/scripts/release-status.js" --repo-root "$FIXTURE" --verify-bundle --json
+    [ "$status" -eq 2 ]
     STATUS="$output" node - <<'NODE'
 const status = JSON.parse(process.env.STATUS);
 const bundle = status.bundleVersion || {};
@@ -53,4 +55,39 @@ NODE
 @test "script docs document release-status before publishing" {
     grep -q "release-status.js" "$REPO/scripts/README.md"
     grep -q "node scripts/na-dev.js release-status" "$REPO/scripts/README.md"
+}
+
+@test "release-status rejects a pass receipt whose tree or source-input digest is stale" {
+    FIXTURE="$BATS_TEST_TMPDIR/release-status-stale-receipt"
+    receipt="$FIXTURE/reports/private/production-repair/latest/production-release-gate.json"
+    mkdir -p "$(dirname "$receipt")"
+    cat > "$receipt" <<'JSON'
+{
+  "schemaVersion": "1.0.0",
+  "status": "pass",
+  "release_ready": true,
+  "profile": "local-private",
+  "repoRoot": "/fixture",
+  "required": ["deterministic_core", "behavior_eval", "bundle_current", "public_tree_audit", "public_behavior_eval", "install_consistency"],
+  "gates": [
+    {"id":"deterministic_core","status":"pass"}, {"id":"behavior_eval","status":"pass"},
+    {"id":"bundle_current","status":"pass"}, {"id":"public_tree_audit","status":"pass"},
+    {"id":"public_behavior_eval","status":"pass"}, {"id":"install_consistency","status":"pass"}
+  ],
+  "bundle": {"bundleId":"same-bundle","sourceTreeId":"old-tree","sourceInputDigest":"old-input"}
+}
+JSON
+
+    run node - "$SCRIPT" "$FIXTURE" <<'NODE'
+const status = require(process.argv[2]);
+const result = status.productionReleaseInfo(process.argv[3], {
+  sourceState: 'clean', currentSourceState: 'clean', bundleId: 'same-bundle',
+  sourceTreeId: 'current-tree', sourceInputDigest: 'current-input',
+});
+if (result.status !== 'blocked' || result.reason !== 'production_release_receipt_stale') {
+  throw new Error(JSON.stringify(result));
+}
+NODE
+
+    [ "$status" -eq 0 ]
 }

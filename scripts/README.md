@@ -14,6 +14,7 @@
 |---|---|---|
 | `static-check.sh` | skill 结构、frontmatter、引用路径、死文件和基础一致性检查 | CI / 提交前 |
 | `public-release-audit.js` | GitHub 公开发布审计，拦截内网地址、本机路径、原文素材、个人创作样本、Claude 运行日志和临时 benchmark 输出 | 发布 `github/public-release` 前 |
+| `production-release-gate.js` | 单一生产发布总门禁；确定性回执、行为验证、bundle、公开树、公开行为和三端安装任一未通过即阻断。私有源与公开候选必须使用不同根目录；公开候选必须用 `--public-evidence-root` 提供仓库外、哈希绑定的付费行为证据，并用 `--install-root` 检查隔离 Claude/Codex/ZCode 的可加载运行时 | 发布、GitHub Release 和 `release-status` |
 | `sanitize-github-public-tree.js` | GitHub 公开发布树清理器，删除私有 skill、私有 workflow overlay、私有维护脚本、superpowers 过程文档、临时报告、benchmark 和个人 demo，同时保留公开 `story-workflow` 编排能力；还会把内网 URL/本机路径/私有功能名改成公开表述 | 生成 GitHub 公开分支时 |
 | `publish-github-public-branch.sh` | 从 `main` 或指定 ref 创建隔离 worktree，清理公开分支、重建不含私有 skill 的 bundle、运行审计，并可选 commit/push 到 GitHub | 发布 GitHub 分支时 |
 | `check-shared-files.sh` | 只检查明确托管的共享脚本和 agent-reference 镜像，不按 basename 误判内部 bundle/template 差异 | CI / 改共享脚本后 |
@@ -49,8 +50,9 @@
 | `node scripts/na-dev.js audit --repo-root . --json` | 维护性审计 |
 | `node scripts/na-dev.js release-audit --json` | GitHub 公开发布审计；应在已清理的 `github/public-release` 分支上运行 |
 | `node scripts/na-dev.js release-status --json` | 发布前状态体检：显示当前开发分支、公开 release worktree、GitHub remote、远端 main/public-release 指针和私有资产风险 |
+| `node scripts/production-release-gate.js --repo-root . --profile local-private --public-root <sanitized-candidate> --evidence-root <private-evidence> --public-evidence-root <public-evidence> --install-root <isolated-home> --json` | 检查六项生产发布门禁；只有全部通过才返回 0。私有源不能冒充公开候选；两份 bundle 的行为证据都必须在对应 worktree 外，且公开候选的 receipt/evidence 不能写回候选树 |
 | `node scripts/na-dev.js prepare-public` | 公开分支发布准备：用 GitHub 更新源重建 bundle，再运行公开审计和 `git diff --check` |
-| `node scripts/na-dev.js publish-public --source-ref main --commit --push` | 一键生成/提交/推送 `github/public-release`；在隔离 worktree 中删除私有 skill 与私有 workflow overlay，不改 `main` |
+| `node scripts/na-dev.js publish-public --source-ref main --run-public-behavior-eval --max-behavior-budget-usd <n> --commit --push` | 一键生成/提交/推送 `github/public-release`；在隔离 worktree 中删除私有 skill 与私有 workflow overlay，不改 `main`。付费行为验证必须显式授权；发布器会先写确定性回执、创建隔离三端安装镜像，再验证 worktree 外的哈希绑定证据；缺任一证据时拒绝 commit/push |
 | `node scripts/na-dev.js static` | 静态检查 |
 | `node scripts/na-dev.js bundle` | 重建 `novel-assistant` 默认包和 `oh-story` 兼容包 |
 | `node scripts/na-dev.js install-local-private` | 本地自用安装：强制以 `NOVEL_ASSISTANT_INCLUDE_PRIVATE=1` 构建并同步到 Claude/Codex/zcode，全程验证私有 workflow overlay 已生效 |
@@ -66,7 +68,7 @@
 | `node scripts/na-dev.js short-write-sync --check --json` | 检查公开短篇 `story-short-write` 与私有短篇 absorbed 方法包是否一致；加 `--upstream-repo <url> --upstream-ref <ref>` 可从上游吸附 |
 | `node scripts/na-dev.js skill-policy --json` | 检查 `skills/` 顶层目录角色，避免误删源码模块或新增未归类 skill |
 | `node scripts/na-dev.js panlong --candidate benchmarks/panlong/<run>` | 将盘龙候选拆文结果与 `demo/拆文库-盘龙` 基线做结构化对比 |
-| `node scripts/na-dev.js behavior-eval --scenario route-single-entry --hosts claude,codex,zcode` | 三端行为验收 dry-run：输出计划命令、预算和预留报告目录；不会启动宿主或消耗额度 |
+| `node scripts/na-dev.js behavior-eval --scenario route-single-entry --hosts claude,zcode --skill-dir <candidate-skill-dir>` | 发布行为验收 dry-run：Claude + ZCode 输出计划命令、预算和预留报告目录；显式候选包会复制到隔离项目的宿主级 skill 根，避免误用全局安装。Codex 仍由独立三端安装门验证 |
 | `node scripts/na-dev.js test-triage-evidence --run-id <id> --runner <bats\|lite> --output /tmp/<file>.json -- tests/<suite>.bats` | 运行确定性测试并生成可哈希验证的原始证据；不调用模型 |
 | `node scripts/na-dev.js zcode-test-triage --evidence /tmp/bats.json --evidence /tmp/lite.json --output /tmp/glm.json` | 让 ZCode/GLM 在 headless 模式比较紧凑证据，所有宿主工具均禁用。GLM 不执行测试、不修改代码；Codex 负责复现、判断、修复与最终验证 |
 

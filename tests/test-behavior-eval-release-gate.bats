@@ -10,6 +10,7 @@ setup() {
     rm -rf "$FIXTURE/.git" "$FIXTURE/reports"
     mkdir -p "$FIXTURE/reports/behavior-eval"
     BUNDLE_ID="$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).bundleId)" "$REPO/skills/novel-assistant/novel-assistant-manifest.json")"
+    BUNDLE_COMMIT="$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).sourceCommit)" "$REPO/skills/novel-assistant/novel-assistant-manifest.json")"
 }
 
 teardown() {
@@ -23,10 +24,11 @@ write_report() {
     local bundle_id="${4:-$BUNDLE_ID}"
     local paid="${5:-true}"
     local usage_source="${6:-host}"
+    local source_commit="${7:-$BUNDLE_COMMIT}"
     mkdir -p "$FIXTURE/reports/behavior-eval/$run_id"
-    node - "$FIXTURE/reports/behavior-eval/$run_id/summary.json" "$scenario" "$status_value" "$bundle_id" "$paid" "$usage_source" <<'NODE'
+    node - "$FIXTURE/reports/behavior-eval/$run_id/summary.json" "$scenario" "$status_value" "$bundle_id" "$paid" "$usage_source" "$source_commit" <<'NODE'
 const fs=require('fs');
-const [file,scenario,status,bundleId,paid,usageSource]=process.argv.slice(2);
+const [file,scenario,status,bundleId,paid,usageSource,sourceCommit]=process.argv.slice(2);
 const hosts=['claude','codex','zcode'];
 const assertionsByScenario={
   'route-single-entry':['route','visible_response'],
@@ -44,7 +46,7 @@ const summary={
   paidExecution: paid==='true',
   scenario:{id:scenario,assertions:assertionNames},
   hosts,
-  release_evidence:{bundleId,sourceCommit:'test-commit',hostVersions:{claude:'test',codex:'test',zcode:'test'}},
+  release_evidence:{bundleId,sourceCommit,hostVersions:{claude:'test',codex:'test',zcode:'test'}},
   budget:{actualUsd:complete?0.6:null,actualUsdStatus:complete?'host_reported':'blocked_cost_unavailable',durationMs:1234},
   results:hosts.map(host=>{
     const evidencePath=`evidence/${host}/artifacts/evidence.txt`;
@@ -90,12 +92,64 @@ write_all_reports() {
     [[ "$output" == *'bundle_mismatch'* ]]
 }
 
+@test "release gate blocks reports from a different source commit even when bundle id matches" {
+    write_all_reports
+    write_report "review-1-200" "paid-review-1-200" pass "$BUNDLE_ID" true host "stale-source-commit"
+    run node "$GATE" --repo-root "$FIXTURE" --json
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'source_commit_mismatch'* ]]
+}
+
 @test "release gate blocks missing host usage provenance" {
     write_all_reports
     write_report "deconstruction-health-stop" "paid-deconstruction-health-stop" pass "$BUNDLE_ID" true estimated
     run node "$GATE" --repo-root "$FIXTURE" --json
     [ "$status" -eq 1 ]
     [[ "$output" == *'usage_not_host_reported'* ]]
+}
+
+@test "release gate accepts the configured Claude and ZCode release-host evidence without Codex" {
+    write_all_reports
+    node - "$FIXTURE/reports/behavior-eval" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const root = process.argv[2];
+for (const runId of fs.readdirSync(root)) {
+  const file = path.join(root, runId, 'summary.json');
+  const summary = JSON.parse(fs.readFileSync(file, 'utf8'));
+  summary.hosts = ['claude', 'zcode'];
+  summary.results = summary.results.filter((result) => result.host !== 'codex');
+  summary.release_evidence.hostVersions = { claude: 'test', zcode: 'test' };
+  fs.writeFileSync(file, JSON.stringify(summary, null, 2));
+}
+NODE
+
+    run node "$GATE" --repo-root "$FIXTURE" --json
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"pass"'* ]]
+}
+
+@test "release gate still blocks a missing required ZCode host" {
+    write_all_reports
+    node - "$FIXTURE/reports/behavior-eval" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const root = process.argv[2];
+for (const runId of fs.readdirSync(root)) {
+  const file = path.join(root, runId, 'summary.json');
+  const summary = JSON.parse(fs.readFileSync(file, 'utf8'));
+  summary.hosts = ['claude'];
+  summary.results = summary.results.filter((result) => result.host === 'claude');
+  summary.release_evidence.hostVersions = { claude: 'test' };
+  fs.writeFileSync(file, JSON.stringify(summary, null, 2));
+}
+NODE
+
+    run node "$GATE" --repo-root "$FIXTURE" --json
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'missing_host:zcode'* ]]
 }
 
 @test "release gate blocks missing or overwritten host evidence" {
@@ -128,13 +182,26 @@ NODE
     [[ "$output" == *'"status":"pass"'* ]]
 }
 
-@test "release gate passes complete paid reports and release-status exposes result" {
+@test "release gate reads hash-bound reports from an explicit external evidence root" {
+    write_all_reports
+    EVIDENCE_ROOT="$TMP_DIR/external-evidence"
+    mkdir -p "$EVIDENCE_ROOT"
+    cp -R "$FIXTURE/reports/." "$EVIDENCE_ROOT/"
+    rm -rf "$FIXTURE/reports"
+
+    run node "$GATE" --repo-root "$FIXTURE" --reports-root "$EVIDENCE_ROOT" --json
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status":"pass"'* ]]
+}
+
+@test "behavior reports may pass while release-status stays blocked without the aggregate receipt" {
     write_all_reports
     run node "$GATE" --repo-root "$FIXTURE" --json
     [ "$status" -eq 0 ]
     [[ "$output" == *'"status":"pass"'* ]]
     run node "$STATUS" --repo-root "$FIXTURE" --json
-    [ "$status" -eq 0 ]
-    [[ "$output" == *'"behaviorGate"'* ]]
-    [[ "$output" == *'"status":"pass"'* ]]
+    [ "$status" -eq 2 ]
+    [[ "$output" == *'"productionRelease"'* ]]
+    [[ "$output" == *'"missing_production_release_receipt"'* ]]
 }

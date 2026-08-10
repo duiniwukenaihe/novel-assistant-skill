@@ -20,6 +20,7 @@ const SHORT_GRAPH = Object.freeze({
   setting: Object.freeze({ author_phase: '规划作品', next: Object.freeze(['section_outline']) }),
   section_outline: Object.freeze({ author_phase: '规划作品', next: Object.freeze(['planning_confirmation']) }),
   planning_confirmation: Object.freeze({ author_phase: '确认方案', next: Object.freeze(['section_brief']) }),
+  feedback_apply_patch: Object.freeze({ author_phase: '回写已确认方案', next: Object.freeze(['section_brief']) }),
   section_brief: Object.freeze({ author_phase: '写当前小节', next: Object.freeze(['section_draft']) }),
   section_draft: Object.freeze({ author_phase: '写当前小节', next: Object.freeze(['machine_gate']) }),
   machine_gate: Object.freeze({ author_phase: '写当前小节', next: Object.freeze(['story_gate', 'section_repair']) }),

@@ -1,0 +1,86 @@
+name: Collect public behavior evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact public candidate commit, tag, or branch to evaluate
+        required: true
+        type: string
+      max_budget_usd:
+        description: Maximum USD for each required scenario execution
+        required: true
+        type: string
+      hosts:
+        description: Required paid hosts; must include claude,codex,zcode
+        required: false
+        default: claude,codex,zcode
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    if: github.repository == 'duiniwukenaihe/novel-assistant-skill'
+    runs-on: [self-hosted, novel-assistant-eval]
+    env:
+      EVIDENCE_ROOT: ${{ runner.temp }}/novel-assistant-public-behavior-evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve immutable public candidate commit
+        id: candidate
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Reject a non-public candidate before invoking paid hosts
+        run: |
+          node scripts/public-release-audit.js --repo-root . --json
+          node scripts/workflow-state-machine.js templates --json > "$RUNNER_TEMP/workflow-templates.json"
+          node - "$RUNNER_TEMP/workflow-templates.json" <<'NODE'
+          const fs = require('fs');
+          const templates = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (Number(templates.privateRegistryCount || 0) !== 0) {
+            throw new Error('public behavior evidence requires a sanitized candidate with no private registry');
+          }
+          NODE
+
+      - name: Run explicit paid public behavior matrix
+        env:
+          MAX_BUDGET_USD: ${{ inputs.max_budget_usd }}
+          HOSTS: ${{ inputs.hosts }}
+        run: |
+          for scenario in route-single-entry write-only-section-6 review-1-200 deconstruction-health-stop review-repair-staged-gate chapter-commit-conflict; do
+            RUN_ID="public-${scenario}-${GITHUB_RUN_ID}"
+            node scripts/behavior-eval.js run \
+              --execute-paid \
+              --paid-confirmation "$RUN_ID" \
+              --max-budget-usd "$MAX_BUDGET_USD" \
+              --scenario "$scenario" \
+              --hosts "$HOSTS" \
+              --run-id "$RUN_ID" \
+              --reports-root "$EVIDENCE_ROOT" \
+              --json
+          done
+
+      - name: Validate exact public bundle evidence
+        run: |
+          node scripts/behavior-eval-release-gate.js \
+            --repo-root . \
+            --reports-root "$EVIDENCE_ROOT" \
+            --json
+
+      - name: Upload immutable behavior evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: novel-assistant-behavior-evidence-${{ steps.candidate.outputs.commit }}
+          path: ${{ env.EVIDENCE_ROOT }}/behavior-eval
+          if-no-files-found: error
+          retention-days: 14

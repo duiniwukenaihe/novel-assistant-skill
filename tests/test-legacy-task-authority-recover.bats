@@ -125,6 +125,105 @@ assert.ok(primary.execution_command.includes('--resume-intent'), 'option 1 must 
 NODE
 }
 
+@test "an exact legacy short task recovers as short_write instead of being promoted to long_write" {
+    write_legacy_task "$PROJECT/追踪/workflow/current-task.json" \
+        'legacy_short_checkpoint_20260101' \
+        'short_write' \
+        'do not use'
+
+    local preview
+    preview="$(run_recover preview --resume-intent 'continue the current short draft')"
+    local preview_id
+    preview_id="$(node -e 'console.log(JSON.parse(process.argv[1]).preview_id)' "$preview")"
+    local snapshot_path
+    snapshot_path="$(run_recover confirm --resume-intent 'continue the current short draft' --preview-id "$preview_id" --confirm \
+        | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8")).snapshot_path)')"
+    local applied
+    applied="$(run_recover apply --resume-intent 'continue the current short draft' --snapshot "$snapshot_path")"
+
+    node - "$PROJECT" "$applied" "$snapshot_path" <<'NODE'
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const [root, output, snapshotRel] = process.argv.slice(2);
+const result = JSON.parse(output);
+assert.equal(result.status, 'legacy_task_authority_recovered');
+assert.equal(result.successor_workflow_type, 'short_write');
+const snapshot = JSON.parse(fs.readFileSync(path.join(root, snapshotRel), 'utf8'));
+assert.equal(snapshot.successor_workflow_type, 'short_write');
+const task = JSON.parse(fs.readFileSync(path.join(root, result.successor_task_dir, 'task.json'), 'utf8'));
+assert.equal(task.workflow_type, 'short_write');
+NODE
+}
+
+@test "an exact legacy review task preserves review_repair through recovery" {
+    write_legacy_task "$PROJECT/追踪/workflow/current-task.json" \
+        'legacy_review_checkpoint_20260101' \
+        'review_repair' \
+        'do not use'
+
+    local preview
+    preview="$(run_recover preview --resume-intent '审阅第1至3章')"
+    local preview_id
+    preview_id="$(node -e 'console.log(JSON.parse(process.argv[1]).preview_id)' "$preview")"
+    local snapshot_path
+    snapshot_path="$(run_recover confirm --resume-intent '审阅第1至3章' --preview-id "$preview_id" --confirm \
+        | node -e 'console.log(JSON.parse(require("fs").readFileSync(0,"utf8")).snapshot_path)')"
+    run run_recover apply --resume-intent '审阅第1至3章' --snapshot "$snapshot_path"
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    local applied="$output"
+
+    node - "$PROJECT" "$applied" <<'NODE'
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const [root, output] = process.argv.slice(2);
+const result = JSON.parse(output);
+assert.equal(result.status, 'legacy_task_authority_recovered');
+assert.equal(result.successor_workflow_type, 'review_repair');
+const task = JSON.parse(fs.readFileSync(path.join(root, result.successor_task_dir, 'task.json'), 'utf8'));
+assert.equal(task.workflow_type, 'review_repair');
+NODE
+}
+
+@test "a legacy review task without a numeric scope remains read-only at preview" {
+    write_legacy_task "$PROJECT/追踪/workflow/current-task.json" \
+        'legacy_review_scope_missing_20260101' \
+        'review_repair' \
+        'do not use'
+
+    run run_recover preview --resume-intent '审阅当前正文'
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    node - "$output" <<'NODE'
+const assert = require('assert');
+const out = JSON.parse(process.argv[2]);
+assert.equal(out.status, 'blocked_legacy_review_scope_required');
+assert.equal(out.read_only, true);
+assert.equal(out.visible_response.selection_contract, 'route_intent_only');
+assert.equal(JSON.stringify(out.visible_response.options).includes('execution_command'), false);
+assert.match(out.visible_response.text, /第.*章|范围/u);
+NODE
+}
+
+@test "an unrecognized legacy type returns a read-only explanation without a recovery command" {
+    write_legacy_task "$PROJECT/追踪/workflow/current-task.json" \
+        'legacy_unknown_checkpoint_20260101' \
+        'unknown prose task' \
+        'do not use'
+
+    run run_recover preview --resume-intent 'continue the current draft'
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    node - "$output" <<'NODE'
+const assert = require('assert');
+const value = JSON.parse(process.argv[2]);
+assert.equal(value.status, 'blocked_legacy_task_type_confirmation_required');
+assert.equal(value.read_only, true);
+assert.equal(value.visible_response.selection_contract, 'route_intent_only');
+assert.equal(JSON.stringify(value.visible_response.options).includes('execution_command'), false);
+assert.match(value.visible_response.text, /任务类型/u);
+NODE
+}
+
 
 # --- (b) unsafe task_id and symlinked root/workflow/archive/snapshot paths fail closed ---
 

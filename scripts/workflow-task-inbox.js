@@ -19,6 +19,7 @@ const {
   buildShortRevisionTaskOverview,
   projectTaskActionView,
 } = require('./lib/workflow-action-renderer');
+const { projectV3TaskActions, visibleStageLabel } = require('./lib/workflow-v3/task-action-facade');
 const { normalizeExecutionBoundary } = require('./lib/workflow-execution-boundary');
 const {
   taskHasOverview,
@@ -49,6 +50,10 @@ const INBOX_ACTIONS = new Set([
   'show_current_run',
   'show_smart_recommendations',
   'show_new_goal_options',
+]);
+const V3_ACTION_PROJECTIONS = new Set([
+  'v3_task_action_projection',
+  'v3_planning_chat_input',
 ]);
 
 const USAGE = `Usage: node scripts/workflow-task-inbox.js [--project-root <book-dir>] [--write] [--json] [--compact]
@@ -207,6 +212,7 @@ const STAGE_LABELS = {
   section_candidate_compare: '双门验收与采用',
   section_accept_anchor: '双门验收与采用',
   full_story_assembly: '合稿 / 精修 / 发布检查',
+  editorial_review: '全篇审阅',
   full_story_review: '合稿 / 精修 / 发布检查',
   short_deslop: '合稿 / 精修 / 发布检查',
   deslop: '合稿 / 精修 / 发布检查',
@@ -229,7 +235,9 @@ const STAGE_LABELS = {
 function humanStepLabel(value) {
   const key = String(value || '').trim();
   if (!key) return '';
-  return STAGE_LABELS[key] || key.replace(/_/g, ' ');
+  const v3Label = visibleStageLabel(key);
+  return STAGE_LABELS[key]
+    || (v3Label !== '继续当前任务' ? v3Label : key.replace(/_/g, ' '));
 }
 
 const EXECUTION_STAGE_LABELS = {
@@ -397,6 +405,7 @@ function addCandidate(candidates, candidate) {
     detail_lines: Array.isArray(candidate.detail_lines) ? candidate.detail_lines : [],
     action_resolution: candidate.action_resolution || null,
 	    ...(Object.prototype.hasOwnProperty.call(candidate, 'v3_interaction') ? { v3_interaction: candidate.v3_interaction } : {}),
+	    ...(candidate.v3_task_actions ? { v3_task_actions: candidate.v3_task_actions } : {}),
 	    ...(candidate.task_overview ? { task_overview: candidate.task_overview } : {}),
 	    task_family_id: candidate.task_family_id || '',
 	    head_workflow_id: candidate.head_workflow_id || '',
@@ -452,10 +461,14 @@ function v3CandidateRouting(root, task) {
   if (child.status !== 0 || output.ok !== true) {
     throw new Error(`v3_show_failed: ${String(output.error || child.stderr || 'unknown error').trim()}`);
   }
+  const projection = projectV3TaskActions({ projectRoot: root, task: output.task });
   return {
-    next_actions: [],
-    action_resolution: null,
-    v3_interaction: output.interaction || null,
+    next_actions: projection.options,
+    action_resolution: projection.action_resolution,
+    v3_interaction: projection.selection_contract === 'v3_committed_binding'
+      ? projection.visible_response
+      : null,
+    v3_task_actions: projection,
     task_overview: buildV3RevisionTaskOverview(root, task),
   };
 }
@@ -759,6 +772,7 @@ function buildTaskCard(candidate, index) {
     free_text_enabled: candidate.free_text_enabled !== false,
     action_resolution: candidate.action_resolution || null,
     ...(carriesV3Interaction ? { v3_interaction: candidate.v3_interaction } : {}),
+    ...(candidate.v3_task_actions ? { v3_task_actions: candidate.v3_task_actions } : {}),
     ...(candidate.task_overview ? { v3_task_overview: candidate.task_overview } : {}),
     interaction_mode: taskCommand ? 'execute_command' : 'semantic_only',
     execution_command: taskCommand,
@@ -1070,7 +1084,11 @@ function scanTaskFamilies(root, candidates, suppressedWorkflowIds) {
       stop_reason: stopReasonFromTask(task),
       next_actions: v3Routing ? v3Routing.next_actions : normalizeNextActions(task, firstCandidateLabel(task)),
       action_resolution: v3Routing ? v3Routing.action_resolution : actionResolutionMetadata(task),
-      ...(v3Routing ? { v3_interaction: v3Routing.v3_interaction, task_overview: v3Routing.task_overview } : {}),
+      ...(v3Routing ? {
+        v3_interaction: v3Routing.v3_interaction,
+        v3_task_actions: v3Routing.v3_task_actions,
+        task_overview: v3Routing.task_overview,
+      } : {}),
       free_text_enabled: !task.pending_action || task.pending_action.free_text_enabled !== false,
       source: rel(root, file),
       // task.json is authoritative; family.status is a projection and may lag
@@ -1120,7 +1138,11 @@ function scanWorkflow(root, candidates, suppressedWorkflowIds) {
     stop_reason: stopReasonFromTask(task),
     next_actions: v3Routing ? v3Routing.next_actions : normalizeNextActions(task, firstCandidateLabel(task)),
     action_resolution: v3Routing ? v3Routing.action_resolution : actionResolutionMetadata(task),
-    ...(v3Routing ? { v3_interaction: v3Routing.v3_interaction, task_overview: v3Routing.task_overview } : {}),
+    ...(v3Routing ? {
+      v3_interaction: v3Routing.v3_interaction,
+      v3_task_actions: v3Routing.v3_task_actions,
+      task_overview: v3Routing.task_overview,
+    } : {}),
     free_text_enabled: !task.pending_action || task.pending_action.free_text_enabled !== false,
     source: rel(root, file),
     status: task.status || '',
@@ -1157,7 +1179,11 @@ function scanTaskDirectories(root, candidates, suppressedWorkflowIds) {
       stop_reason: stopReasonFromTask(task),
       next_actions: v3Routing ? v3Routing.next_actions : normalizeNextActions(task, firstCandidateLabel(task)),
       action_resolution: v3Routing ? v3Routing.action_resolution : actionResolutionMetadata(task),
-      ...(v3Routing ? { v3_interaction: v3Routing.v3_interaction, task_overview: v3Routing.task_overview } : {}),
+      ...(v3Routing ? {
+        v3_interaction: v3Routing.v3_interaction,
+        v3_task_actions: v3Routing.v3_task_actions,
+        task_overview: v3Routing.task_overview,
+      } : {}),
       free_text_enabled: !task.pending_action || task.pending_action.free_text_enabled !== false,
       source: rel(root, file),
       status: task.status || '',
@@ -1874,6 +1900,7 @@ function compactTaskCard(card, projectRoot) {
     execution_command: materializeTaskCommand(card.execution_command, projectRoot),
     next_actions: (card.next_actions || []).map((action) => compactNextAction(action, projectRoot)).filter(Boolean),
     ...(Object.prototype.hasOwnProperty.call(card, 'v3_interaction') ? { v3_interaction: card.v3_interaction } : {}),
+    ...(card.v3_task_actions ? { v3_task_actions: card.v3_task_actions } : {}),
     ...(card.v3_task_overview ? { v3_task_overview: card.v3_task_overview } : {}),
     display: card.display,
   };
@@ -1963,6 +1990,18 @@ function actionView(inbox, action) {
             '回复 1/2/3/4，或直接输入你的要求。',
           ].filter(Boolean).join('\n'),
           safe_default: '先进入任务总览，再执行当前子任务；不会自动开启其他任务。',
+        };
+      }
+      if (focusedCard.v3_task_actions
+          && V3_ACTION_PROJECTIONS.has(String(focusedCard.v3_task_actions.selection_contract || ''))) {
+        return {
+          ...base,
+          status: 'current_v3_task_actions',
+          candidateCount: 1,
+          taskCardCount: 1,
+          focused_workflow_id: inbox.focused_workflow_id,
+          ...focusedCard.v3_task_actions,
+          safe_default: '只执行当前 V3 任务的动作；不调用旧状态机。',
         };
       }
       if (Object.prototype.hasOwnProperty.call(focusedCard, 'v3_interaction')

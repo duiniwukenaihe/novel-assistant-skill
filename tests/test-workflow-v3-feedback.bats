@@ -138,6 +138,24 @@ JSON
   cmp -s "$TASK" "$TMP_DIR/before-empty-plan.json"
 }
 
+@test "V3 propose-feedback refuses an unresolved impact after author chat" {
+  create_task
+  printf '%s\n' '{"text":"请先判断这个审阅项应改哪里。"}' > "$TMP_DIR/feedback.json"
+  node "$CLI" submit-feedback --project-root "$PROJECT" --workflow-id "$WFID" \
+    --expected-version 1 --input-file "$TMP_DIR/feedback.json" --json > "$TMP_DIR/feedback-out.json"
+  feedback_id="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).feedback_receipt.feedback_id)" "$TMP_DIR/feedback-out.json")"
+  cp "$TASK" "$TMP_DIR/before-unresolved-plan.json"
+  cat > "$TMP_DIR/unresolved-plan.json" <<JSON
+{"feedback_id":"$feedback_id","summary":"尚未明确影响层级。","impact_level":"needs_analysis","affected_sections":[1],"evidence":["审阅项没有可靠的影响分类"],"proposed_changes":["先与作者确认修改层级"]}
+JSON
+
+  run node "$CLI" propose-feedback --project-root "$PROJECT" --workflow-id "$WFID" \
+    --expected-version 2 --input-file "$TMP_DIR/unresolved-plan.json" --json
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"feedback_plan_impact_level_requires_author_classification"* ]]
+  cmp -s "$TASK" "$TMP_DIR/before-unresolved-plan.json"
+}
+
 @test "V3 final check refuses legacy accepted feedback with no affected section" {
   node - "$REPO" "$PROJECT" <<'NODE'
 const assert = require('assert');
@@ -419,7 +437,7 @@ const entry = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 assert.equal(entry.status, 'v3_feedback_plan_accepted');
 assert.equal(entry.presentation_allowed, false);
 assert.equal(entry.stage_execution.selection_contract, 'resume_running_stage');
-assert.deepEqual(entry.stage_execution.write_set, ['小节大纲.md', '写作Brief_第009节.md']);
+assert.deepEqual(entry.stage_execution.write_set, ['写作Brief_第009节.md']);
 assert.match(entry.stage_execution.context_read_command, /workflow-stage-context\.js read-current/);
 assert.equal(entry.stage_execution.source_files.length, 1);
 assert.match(entry.stage_execution.source_files[0], /context-packets\/section_brief\/.+\/stage-context\.md$/u);

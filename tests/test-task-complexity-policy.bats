@@ -86,16 +86,16 @@ NODE
     printf '正文\n' > "$TMP_DIR/review/正文/chapter001.md"
     printf '正文\n' > "$TMP_DIR/review/正文/chapter002.md"
 
-    node "$REPO/scripts/workflow-state-machine.js" create --workflow-type short_write --project-root "$TMP_DIR/short" --user-goal "写一个短篇" --json > "$TMP_DIR/short.json"
+    node "$REPO/scripts/workflow-v3.js" create-short --project-root "$TMP_DIR/short" --profile public --user-goal "写一个短篇" --json > "$TMP_DIR/short.json"
     node "$REPO/scripts/workflow-state-machine.js" create --workflow-type review_repair --project-root "$TMP_DIR/review" --scope 1-2 --user-goal "审阅 1-2 章" --json > "$TMP_DIR/review.json"
 
     node - "$TMP_DIR/short.json" "$TMP_DIR/review.json" <<'NODE'
 const assert = require('assert');
 const fs = require('fs');
 const [short, review] = process.argv.slice(2).map((file) => JSON.parse(fs.readFileSync(file, 'utf8')).task);
-assert.equal(short.runtime_guard.complexity_policy.size_class, 'small');
-assert.equal(short.runtime_guard.complexity_policy.recommended_agent_count, 1);
-assert.equal(short.runtime_guard.token_estimate.agent_count, 1);
+assert.equal(short.production_kernel, 'short-v3');
+assert.equal(short.current_stage, 'creative_entry');
+assert.equal(short.engine_version, 3);
 assert(review.runtime_guard.complexity_policy);
 assert.equal(review.runtime_guard.complexity_policy.execution_topology, 'single_agent');
 NODE

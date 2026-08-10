@@ -12,6 +12,7 @@ const { resolveExecutionMemoryPolicy, resolveWorkflowMemoryPolicy } = require('.
 const { memoryContextDecision, memoryContextFromStagePacket, prepareMemoryContext } = require('./lib/workflow-memory-context');
 const { buildStageContextPacket } = require('./lib/workflow-stage-context-packet');
 const { buildLongStageContextPacket } = require('./lib/long-stage-context-packet');
+const { resolveStageContext } = require('./lib/workflow-stage-context-resolution');
 const { mutateTaskAuthority } = require('./lib/workflow-task-authority');
 const { resolveRunnerTask } = require('./lib/workflow-runner-telemetry');
 const { normalizeExecutionBoundary } = require('./lib/workflow-execution-boundary');
@@ -202,7 +203,12 @@ async function executeOneStage(root, options) {
   // Build the minimum stage context packet for supported short- and long-form
   // writing stages. Long chapter packets fail closed when their exact target
   // or candidate source is unavailable.
-  const stageContextPacket = resolveStageContextPacket(root, task, execution);
+  const stageContextPacket = resolveStageContext({
+    projectRoot: root,
+    task,
+    execution,
+    builders: [buildStageContextPacket, buildLongStageContextPacket],
+  });
   if (stageContextPacket && stageContextPacket.blocking === true) {
     return {
       status: String(stageContextPacket.status || 'blocked_long_stage_context'),
@@ -307,26 +313,6 @@ async function executeOneStage(root, options) {
   const result = appliedResult(root, task, execution, apply, false, lastAttempt, expectedAbs);
   if (archivedStaleResult) result.archived_stale_result_packet = archivedStaleResult;
   return result;
-}
-
-// Returns the first applicable stage-scoped packet. Short and long builders
-// stay separate so their domain rules do not leak into each other.
-function resolveStageContextPacket(root, task, execution) {
-  try {
-    const input = {
-      projectRoot: root,
-      task,
-      stage: String((execution && execution.stage_id) || ''),
-    };
-    for (const buildPacket of [buildStageContextPacket, buildLongStageContextPacket]) {
-      const packet = buildPacket(input);
-      if (packet && packet.status === 'assembled' && packet.packet_md) return packet;
-      if (packet && packet.blocking === true) return packet;
-    }
-    return null;
-  } catch (_) {
-    return null;
-  }
 }
 
 function writeRecoveryPacket(root, task, execution, attemptResult, nextAttempt) {

@@ -14,10 +14,11 @@ const SCRIPT_DIR = require('path').resolve(__dirname, '..');
 function buildInitialReviewPlan(root, task, options = {}) {
   const scope = parseNumericScope(task.scope);
   if (!scope) throw new Error('review plan requires an immutable numeric chapter scope');
+  const numericScope = `${scope.start}-${scope.end}`;
   const evidence = reviewPlanningEvidence(root, scope);
   const planned = planReviewBatches({
     chapters: evidence.chapters,
-    parentScope: task.scope,
+    parentScope: numericScope,
     requiredDimensions: ['plot', 'hooks', 'character', 'canon', 'prose'],
     budgetPolicy: reviewPlannerBudgetPolicy(task.runtime_guard),
     reviewTarget: task.review_target,
@@ -125,11 +126,15 @@ function reviewPlannerBudgetPolicy(runtimeGuard) {
 }
 
 function parseNumericScope(scope) {
-  const match = String(scope || '').match(/(\d+)\s*[-到至~]\s*(\d+)/);
-  if (!match) return null;
-  const start = Number(match[1]);
-  const end = Number(match[2]);
-  return Number.isInteger(start) && Number.isInteger(end) && start > 0 && end >= start ? { start, end } : null;
+  const text = String(scope || '').trim();
+  const range = text.match(/^(?:第\s*)?(\d+)\s*(?:章|节)?\s*(?:-|–|—|~|～|到|至)\s*(?:第\s*)?(\d+)\s*(?:章|节)?$/u);
+  const single = range ? null : text.match(/^(?:第\s*)?(\d+)\s*(?:章|节)?$/u);
+  if (!range && !single) return null;
+  const start = Number((range || single)[1]);
+  const end = range ? Number(range[2]) : start;
+  return Number.isInteger(start) && start > 0 && Number.isInteger(end) && end >= start
+    ? { start, end }
+    : null;
 }
 
 function reviewBatchContinuation(root, task, batch) {

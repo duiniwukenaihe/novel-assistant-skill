@@ -152,14 +152,39 @@ function outlineSectionCount(text) {
   const explicit = source.match(/总小节数\s*[：:]\s*(\d+)\s*节?/u);
   if (explicit) return positiveInt(explicit[1]);
   const values = [
-    ...source.matchAll(/^#{1,6}\s*第\s*0*(\d+)\s*节(?:\s*[：:｜]|\s|$)/gmu),
+    ...source.matchAll(/^#{1,6}\s*第\s*([0-9０-９一二三四五六七八九十百千两〇零]+)\s*节(?:\s*[：:｜]|\s|$)/gmu),
     ...source.matchAll(/^#{1,6}\s*节\s*0*(\d+)(?:\s*[：:｜]|\s|$)/gmu),
-  ].map((match) => positiveInt(match[1])).filter(Boolean);
+  ].map((match) => parseShortSectionOrdinal(match[1])).filter(Boolean);
   if (/^#{1,6}\s*逐节(?:蓝图|大纲|细纲)/mu.test(source)) {
     values.push(...[...source.matchAll(/^#{2,6}\s*0*(\d+)\s*[.、]\s*\S/gmu)]
       .map((match) => positiveInt(match[1])).filter(Boolean));
   }
   return values.length ? Math.max(...values) : 0;
+}
+
+function parseShortSectionOrdinal(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 0;
+  const normalizedDigits = raw.replace(/[０-９]/gu, (char) => String(char.codePointAt(0) - '０'.codePointAt(0)));
+  if (/^\d+$/u.test(normalizedDigits)) return positiveInt(normalizedDigits);
+  const digits = new Map([
+    ['零', 0], ['〇', 0], ['一', 1], ['二', 2], ['两', 2], ['三', 3], ['四', 4],
+    ['五', 5], ['六', 6], ['七', 7], ['八', 8], ['九', 9],
+  ]);
+  const units = new Map([['十', 10], ['百', 100], ['千', 1000]]);
+  let total = 0;
+  let current = 0;
+  for (const char of normalizedDigits) {
+    if (digits.has(char)) {
+      current = digits.get(char);
+      continue;
+    }
+    const unit = units.get(char);
+    if (!unit) return 0;
+    total += (current || 1) * unit;
+    current = 0;
+  }
+  return positiveInt(total + current);
 }
 
 function isUnfinished(task) {
@@ -226,6 +251,7 @@ module.exports = {
   ensureShortProjectState,
   migrateShortStateStorage,
   outlineSectionCount,
+  parseShortSectionOrdinal,
   readShortProjectState,
   resolveShortProjectTitle,
   resolveShortStateRelative,

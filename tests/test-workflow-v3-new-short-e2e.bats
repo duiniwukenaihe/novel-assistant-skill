@@ -321,44 +321,31 @@ NEUTRAL_DRAFT_2='# 第2节
     run_current_stage
     [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }
 
-    # 6. planning_confirmation advances via apply-result (engine-owned semantic).
+    # 6. planning_confirmation is the author's approval of the accepted outline.
+    # It must atomically bind the title list before the first Brief; tests may
+    # not fabricate that production artifact after the transition.
     printf '{"kind":"completed","code":"planning_confirmed","stage_id":"planning_confirmation"}\n' > "$TMP_DIR/result.json"
     apply_result 5
     [ "$status" -eq 0 ]
     [ "$(node -e "console.log(JSON.parse(require('fs').readFileSync('$TMP_DIR/apply.json','utf8')).task.current_stage)")" = "section_brief" ]
-
-    # The author-confirmed title lock is a planning artifact, not a stage
-    # transition. Bind it to the freshly committed project identity and outline
-    # digest before the professional Brief service runs.
     node - "$REPO" "$PROJECT" "$WFID" <<'NODE'
-const crypto = require('crypto');
+const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const [repo, root, workflowId] = process.argv.slice(2);
-const { atomicWriteJson } = require(path.join(repo, 'scripts/lib/workflow-state-store'));
 const { resolveShortStateRelative } = require(path.join(repo, 'scripts/lib/short-project-state'));
 const stateRel = resolveShortStateRelative(root, 'project-state.json');
 const state = JSON.parse(fs.readFileSync(path.join(root, stateRel), 'utf8'));
-const outlineFile = path.join(root, '小节大纲.md');
-const lockRel = resolveShortStateRelative(root, 'section-title-lock.json', { forWrite: true });
-atomicWriteJson(path.join(root, lockRel), {
-  schema_version: '1.0.0',
-  status: 'confirmed',
-  workflow_id: String(state.active_write_workflow_id || workflowId),
-  project_id: String(state.project_id || ''),
-  plan_revision: Number(state.plan_revision || 0),
-  planned_sections: Number(state.planned_sections || 2),
-  source_outline: '小节大纲.md',
-  source_digest: crypto.createHash('sha256').update(fs.readFileSync(outlineFile)).digest('hex'),
-  confirmed_at: new Date().toISOString(),
-  sections: [
-    { section_index: 1, title: '发现重复编号', confirmed: true, title_source: 'user_confirmed_outline' },
-    { section_index: 2, title: '恢复正确编号', confirmed: true, title_source: 'user_confirmed_outline' },
-  ],
-});
+const lockRel = resolveShortStateRelative(root, 'section-title-lock.json');
+const lock = JSON.parse(fs.readFileSync(path.join(root, lockRel), 'utf8'));
+assert.equal(lock.status, 'confirmed');
+assert.equal(lock.workflow_id, workflowId);
+assert.equal(lock.project_id, state.project_id);
+assert.equal(lock.plan_revision, state.plan_revision);
+assert.deepEqual(lock.sections.map(item => item.title), ['发现重复编号', '恢复正确编号']);
 NODE
 
-    # 7. Title lock + section-1 Brief live on disk before section_brief advances.
+    # 7. The confirmed title lock and section-1 Brief live on disk before section_brief advances.
     printf '%s' "$NEUTRAL_BRIEF_1" > "$PROJECT/写作Brief_第001节.md"
     run_current_stage
     [ "$status" -eq 0 ] || { printf '%s\n' "$output" >&2; false; }

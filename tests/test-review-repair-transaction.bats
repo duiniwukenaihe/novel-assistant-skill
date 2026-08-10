@@ -29,7 +29,10 @@ function json(result) {
 }
 function read(file) { return JSON.parse(fs.readFileSync(file, 'utf8')); }
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`); }
-function taskFile() { return path.join(root, '追踪/workflow/current-task.json'); }
+function taskFile() {
+  const pointer = read(path.join(root, '追踪/workflow/current-task.json'));
+  return path.join(root, pointer.task_dir, 'task.json');
+}
 function configureStage(stageId, requiresConfirmation) {
   const task = read(taskFile());
   const expected = `${task.context_paths.result_packets_dir}/${stageId}.result.json`;
@@ -41,6 +44,7 @@ function configureStage(stageId, requiresConfirmation) {
   task.machine.remaining_stages = [stageId, ...(stageId === 'repair_machine_gate' ? ['execute_repair', 'recheck', 'closure'] : ['recheck', 'closure'])];
   task.stage_execution = {
     status: 'running', stage_id: stageId, step_id: stageId,
+    stage_attempt_id: `sa-${stageId}`,
     expected_result_packet: expected, owner_module: stageId === 'repair_machine_gate' ? 'story-workflow' : 'story-long-write',
     requires_user_confirm: requiresConfirmation, selected_number: 1, action_id: 'continue_next_stage',
   };
@@ -68,6 +72,7 @@ function writeResult(stage, packet) {
   const file = path.join(root, task.stage_execution.expected_result_packet);
   write(file, {
     workflow_id: task.workflow_id, workflow_type: task.workflow_type, stage_id: stage, step_id: stage,
+    owner_module: task.stage_execution.owner_module,
     step_status: 'completed', outputs: [], changed_files: [], evidence: ['fixture'], verification_result: 'pass',
     blocking_reason: '', next_recommendation: '', handoff_summary: 'fixture', checkpoint_state: {},
     output_health_result: 'pass', result_packet_path: task.stage_execution.expected_result_packet,
@@ -113,10 +118,18 @@ if (fs.readFileSync(canonical, 'utf8') !== '# 第一章\n原始正文。\n') thr
 
 const repaired = path.join(root, '追踪/staging/repaired.md');
 fs.writeFileSync(repaired, '# 第一章\n修正后的正文。\n');
-const workflowId = read(taskFile()).workflow_id;
+const commitTask = read(taskFile());
+const workflowId = commitTask.workflow_id;
 const manifest = path.join(root, '追踪/staging/repair-manifest.json');
 write(manifest, {
   workflow_id: workflowId, volume: '1', chapter: 1,
+  provenance: {
+    task_family_id: commitTask.task_family_id,
+    workflow_id: workflowId,
+    branch_id: commitTask.branch_id || workflowId,
+    stage_attempt_id: commitTask.stage_execution.stage_attempt_id,
+    acceptance_status: 'accepted',
+  },
   gates: { output_health: 'pass', prose_quality: 'pass', story_drift: 'pass' },
   artifacts: [{ role: 'canonical_prose', staged: '追踪/staging/repaired.md', target: '正文/第1卷/第001章.md' }],
 });
@@ -139,7 +152,11 @@ const acceptedPacket = writeResult('execute_repair', {
 });
 const applied = apply(acceptedPacket);
 if (applied.status !== 0) throw new Error(applied.output || applied.error);
-if (read(taskFile()).current_stage !== 'recheck') throw new Error(`expected recheck, got ${read(taskFile()).current_stage}`);
+const afterApplied = read(taskFile());
+if (afterApplied.current_stage !== 'recheck') throw new Error(`expected recheck, got ${afterApplied.current_stage}`);
+if (afterApplied.review_plan_refresh.source_stage !== 'execute_repair') throw new Error(JSON.stringify(afterApplied.review_plan_refresh));
+if (!Array.isArray(afterApplied.review_plan_history) || afterApplied.review_plan_history.length !== 1) throw new Error(JSON.stringify(afterApplied.review_plan_history));
+if (afterApplied.review_plan_history[0].digest === afterApplied.review_plan_digest) throw new Error('review plan digest did not change after accepted repair');
 if (fs.readFileSync(canonical, 'utf8') !== '# 第一章\n修正后的正文。\n') throw new Error('accepted transaction was not projected to canonical prose');
 
 configureStage('recheck', false);

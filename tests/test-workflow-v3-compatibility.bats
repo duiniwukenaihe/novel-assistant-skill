@@ -86,6 +86,36 @@ const unresolved = gateway.mapV2Checkpoint({
   pending_feedback: { messages: [{ raw_text: '保留作者原话' }] },
 }, {});
 if (unresolved.exact !== false || unresolved.reason !== 'unresolved_author_feedback') throw new Error(JSON.stringify(unresolved));
+const unknownType = gateway.classifyTask({ workflow_type: 'unknown prose task', current_stage: 'section_brief' });
+if (unknownType.status !== 'unsupported' || unknownType.reason !== 'legacy_type_unrecognized') {
+  throw new Error(JSON.stringify(unknownType));
+}
+NODE
+  [ "$status" -eq 0 ]
+}
+
+@test "every published non-checkpoint V2 short stage requires an author choice" {
+  run node - "$GATEWAY" <<'NODE'
+const gateway = require(process.argv[2]);
+const stages = [
+  'startup_scan', 'startup_menu', 'freshness_window', 'info_source_pool',
+  'short_review', 'info_source_selection', 'material_learning', 'project_seed',
+  'short_setting', 'platform_genre_lock', 'rhythm_pattern_selection',
+  'section_outline', 'section_plan_lock', 'short_structure_impact_audit',
+  'hook_retention_gate', 'hook_value_gate', 'section_machine_gate',
+  'quality_gate', 'story_value_gate', 'section_candidate_compare',
+  'section_accept_anchor', 'feedback_apply_patch', 'feedback_impact_sync',
+  'full_story_review', 'short_deslop', 'deslop', 'final_check',
+];
+for (const stage of stages) {
+  const mapped = gateway.mapV2Checkpoint({
+    workflow_type: 'short_write', current_stage: stage, current_step: stage,
+    stage_execution: { stage_id: stage },
+  });
+  if (mapped.exact || mapped.reason !== 'unsupported_requires_author_choice') {
+    throw new Error(`${stage}: ${JSON.stringify(mapped)}`);
+  }
+}
 NODE
   [ "$status" -eq 0 ]
 }

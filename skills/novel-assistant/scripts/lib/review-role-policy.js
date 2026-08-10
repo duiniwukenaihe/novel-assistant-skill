@@ -3,8 +3,13 @@
 const ROLE_CATALOG = [
   {
     subagent_type: 'story-explorer',
+    dimensions: ['evidence_collection'],
+    focus: '独立检索正文与项目证据，不做结构裁决',
+  },
+  {
+    subagent_type: 'story-architect',
     dimensions: ['plot', 'hooks'],
-    focus: '独立证据/情节/钩子',
+    focus: '结构/压力链/钩子与高潮裁决',
   },
   {
     subagent_type: 'character-designer',
@@ -28,7 +33,7 @@ const ROLE_CATALOG = [
   },
 ];
 
-const HIGH_CONFLICT_ROLES = ['story-explorer', 'narrative-writer', 'consistency-checker'];
+const HIGH_CONFLICT_ROLES = ['story-explorer', 'story-architect', 'narrative-writer', 'consistency-checker'];
 
 function planReviewRoles({ requiredDimensions, evidenceSignals, availableAgents, budgetPolicy, reviewTargetKind }) {
   const dimensions = uniqueStrings(requiredDimensions);
@@ -38,7 +43,7 @@ function planReviewRoles({ requiredDimensions, evidenceSignals, availableAgents,
   const highConflict = hasHighConflict(signals);
   const wanted = new Set();
 
-  if (dimensions.includes('plot') || dimensions.includes('hooks') || highConflict) wanted.add('story-explorer');
+  if (dimensions.includes('plot') || dimensions.includes('hooks') || highConflict) wanted.add('story-architect');
   if (dimensions.includes('canon') || highConflict) wanted.add('consistency-checker');
   if (dimensions.includes('character') && (hasCharacterRisk(signals) || highConflict)) wanted.add('character-designer');
   if (dimensions.includes('prose') && (hasProseRisk(signals) || highConflict)) wanted.add('narrative-writer');
@@ -101,7 +106,9 @@ function acceptReviewResults({ dispatchPlan, primaryChapterKeys, result }) {
 
 function roleFor(subagentType, requestedDimensions, highConflict) {
   const definition = ROLE_CATALOG.find((role) => role.subagent_type === subagentType);
-  const dimensions = definition.dimensions.filter((dimension) => requestedDimensions.includes(dimension));
+  const dimensions = subagentType === 'story-explorer'
+    ? ['evidence_collection']
+    : definition.dimensions.filter((dimension) => requestedDimensions.includes(dimension));
   return {
     subagent_type: definition.subagent_type,
     dimensions,

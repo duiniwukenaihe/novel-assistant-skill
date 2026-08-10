@@ -3,31 +3,33 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const bundleVersion = require('./lib/bundle-version');
 
 const POLICY_FILE = 'config/github-public-release-files.json';
-const POLICY_NAME = 'sanitized_target_index_with_public_runtime_auto_approval';
-
-// Auto-approved public runtime roots. These are only honored AFTER the source
-// tree has been sanitized by the publisher (sanitize-github-public-tree.js)
-// and audited by public-release-audit.js — the publish script enforces that
-// ordering. Default deny still applies: anything outside these roots, or any
-// unknown top-level file in the repo root, must be opted in via
-// additionalFiles in the policy file.
-const AUTO_APPROVED_ROOTS = [
-  'scripts',
-  'skills/novel-assistant',
-  'src/internal-skills',
+const POLICY_NAME = 'explicit_review_with_exact_candidate_manifest';
+const CANDIDATE_MANIFEST = 'config/github-public-release-candidate-manifest.json';
+const BUNDLE_FILE_MANIFEST = 'config/novel-assistant-bundle-files.json';
+const BUNDLE_PREFIX = 'skills/novel-assistant/';
+const PUBLIC_RUNTIME_ENTRYPOINTS = [
+  'scripts/workflow-state-machine.js',
+  'scripts/workflow-v3.js',
+  'scripts/workflow-entry-guard.js',
+  'scripts/workflow-task-inbox.js',
+  'scripts/production-smoke-matrix.js',
+  'scripts/na-dev.js',
+  'scripts/production-release-gate.js',
+  'scripts/novel-assistant-self-update.js',
+  'scripts/novel-assistant-sync-runtime.js',
+  'scripts/behavior-eval.js',
+  'skills/novel-assistant/scripts/workflow-state-machine.js',
+  'skills/novel-assistant/scripts/workflow-v3.js',
+  'skills/novel-assistant/scripts/workflow-entry-guard.js',
+  'skills/novel-assistant/scripts/workflow-task-inbox.js',
+  'skills/novel-assistant/scripts/production-smoke-matrix.js',
+  'skills/novel-assistant/scripts/novel-assistant-self-update.js',
+  'skills/novel-assistant/scripts/novel-assistant-sync-runtime.js',
+  'skills/novel-assistant/scripts/behavior-eval.js',
 ];
-
-// Test roots that may ship with the public runtime. tests/fixtures/** is
-// explicitly excluded so demo/local content still requires explicit opt-in.
-const AUTO_APPROVED_TEST_FILES = (relative) => {
-  if (!relative.startsWith('tests/')) return false;
-  if (relative.startsWith('tests/fixtures/')) return false;
-  const base = relative.slice('tests/'.length);
-  if (base.includes('/')) return false; // only top-level files
-  return /^(test-.*\.bats|.*\.test\.mjs|.*\.test\.js)$/.test(base);
-};
 
 // Private skill trees are never publishable, even if a caller mistakenly puts
 // them in additionalFiles or they existed on an older public branch.
@@ -36,26 +38,8 @@ const HARD_DENY_PREFIXES = [
   'skills/novel-assistant/references/private-internal-skills/',
 ];
 
-// These trees are not automatically approved. Existing public files and
-// explicitly reviewed additions remain allowed so public docs and neutral test
-// fixtures can still support release verification.
-const AUTO_APPROVAL_EXCLUDED_PREFIXES = [
-  'docs/',
-  'reports/',
-  'tests/fixtures/',
-];
-
 function hasPrefix(relative, prefixes) {
   return prefixes.some((prefix) => relative.startsWith(prefix));
-}
-
-function isAutoApprovedPublicRuntime(relative) {
-  if (hasPrefix(relative, HARD_DENY_PREFIXES)
-      || hasPrefix(relative, AUTO_APPROVAL_EXCLUDED_PREFIXES)) return false;
-  if (AUTO_APPROVED_ROOTS.some((root) => relative === root || relative.startsWith(`${root}/`))) {
-    return true;
-  }
-  return AUTO_APPROVED_TEST_FILES(relative);
 }
 
 function parseArgs(argv) {
@@ -88,8 +72,12 @@ function walkFiles(root, base = '') {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     if (!base && entry.name === '.git') return [];
     const relative = base ? `${base}/${entry.name}` : entry.name;
+    if (entry.isSymbolicLink()) {
+      throw new Error(`symbolic link is not allowed in release source: ${relative}`);
+    }
     if (entry.isDirectory()) return walkFiles(root, relative);
-    return entry.isFile() ? [relative] : [];
+    if (entry.isFile()) return [relative];
+    throw new Error(`unsupported source entry in release source: ${relative}`);
   }).sort();
 }
 
@@ -142,11 +130,29 @@ function copyFile(sourceRoot, targetRoot, relative) {
   return true;
 }
 
+function sha256(file) {
+  return require('crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+function writeCandidateManifest(targetRoot, approvedFiles) {
+  const files = {};
+  for (const relative of approvedFiles) {
+    const target = path.join(targetRoot, relative);
+    if (fs.existsSync(target) && fs.statSync(target).isFile()) files[relative] = sha256(target);
+  }
+  const target = path.join(targetRoot, CANDIDATE_MANIFEST);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${JSON.stringify({
+    schemaVersion: '1.0.0',
+    policy: POLICY_NAME,
+    files,
+  }, null, 2)}\n`);
+}
+
 function classifySourceFiles(sourceFiles, baselineFiles, policy) {
   const baselineSet = new Set(baselineFiles);
   const additionalSet = new Set(policy.additionalFiles);
   const removedSet = new Set(policy.removedFiles);
-  const autoApproved = [];
   const explicitAdditions = [];
   const inherited = [];
   const skippedUnapproved = [];
@@ -164,18 +170,69 @@ function classifySourceFiles(sourceFiles, baselineFiles, policy) {
       inherited.push(relative);
       continue;
     }
-    if (isAutoApprovedPublicRuntime(relative)) {
-      autoApproved.push(relative);
-      continue;
-    }
     skippedUnapproved.push(relative);
   }
   return {
-    autoApproved: [...new Set(autoApproved)].sort(),
     explicitAdditions: [...new Set(explicitAdditions)].sort(),
     inherited: [...new Set(inherited)].sort(),
     skippedUnapproved: [...new Set(skippedUnapproved)].sort(),
   };
+}
+
+function resolveRelativeDependency(sourceRoot, sourceFiles, from, specifier) {
+  const base = path.resolve(path.dirname(path.join(sourceRoot, from)), specifier);
+  const candidates = [base, `${base}.js`, `${base}.json`, path.join(base, 'index.js')];
+  for (const candidate of candidates) {
+    const relative = path.relative(sourceRoot, candidate).replace(/\\/gu, '/');
+    if (!relative || relative.startsWith('../') || path.isAbsolute(relative)) continue;
+    if (sourceFiles.has(relative)) return relative;
+  }
+  throw new Error(`public runtime dependency is missing from source: ${from} -> ${specifier}`);
+}
+
+function runtimeDependencyClosure(sourceRoot, sourceFiles) {
+  const closure = new Set();
+  const pending = PUBLIC_RUNTIME_ENTRYPOINTS.filter((entry) => sourceFiles.has(entry));
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (closure.has(current)) continue;
+    closure.add(current);
+    const text = fs.readFileSync(path.join(sourceRoot, current), 'utf8');
+    for (const match of text.matchAll(/require\(\s*(['"])(\.{1,2}\/[\w./-]+)\1\s*\)/gu)) {
+      const dependency = resolveRelativeDependency(sourceRoot, sourceFiles, current, match[2]);
+      if (!closure.has(dependency)) pending.push(dependency);
+    }
+  }
+  return [...closure].sort();
+}
+
+function v3VerificationTests(sourceRoot, sourceFiles) {
+  const runner = 'scripts/na-dev.js';
+  if (!sourceFiles.has(runner)) return [];
+  const text = fs.readFileSync(path.join(sourceRoot, runner), 'utf8');
+  const start = text.indexOf("case 'verify-v3-short':");
+  const end = text.indexOf("case 'verify':", start);
+  if (start < 0 || end < 0) return [];
+  return [...new Set([...text.slice(start, end).matchAll(/'(tests\/[^']+\.bats)'/gu)]
+    .map((match) => match[1]))].sort();
+}
+
+function publicBundleSourceInputs(sourceRoot, sourceFiles) {
+  if (!sourceFiles.has(BUNDLE_FILE_MANIFEST)) return [];
+  const { exactPaths } = bundleVersion.bundleInputMatchers(
+    sourceRoot,
+    'novel-assistant',
+    { includePrivate: false },
+  );
+  return [...exactPaths]
+    .filter((relative) => sourceFiles.has(relative) && !hasPrefix(relative, HARD_DENY_PREFIXES))
+    .sort();
+}
+
+function publicBundledFiles(sourceFiles) {
+  return [...sourceFiles]
+    .filter((relative) => relative.startsWith(BUNDLE_PREFIX) && !hasPrefix(relative, HARD_DENY_PREFIXES))
+    .sort();
 }
 
 function main() {
@@ -197,11 +254,30 @@ function main() {
   const approved = new Set([
     ...classification.inherited,
     ...classification.explicitAdditions,
-    ...classification.autoApproved,
   ]);
-  // removedFiles always win over inherited/auto-approval/explicit addition.
+  // removedFiles always win over inherited and explicit additions.
   for (const relative of policy.removedFiles) approved.delete(relative);
   if (fs.existsSync(path.join(args.sourceRoot, POLICY_FILE))) approved.add(POLICY_FILE);
+  const requiredRuntime = runtimeDependencyClosure(args.sourceRoot, sourceFileSet);
+  const missingRuntime = requiredRuntime.filter((relative) => !approved.has(relative));
+  if (missingRuntime.length > 0) {
+    throw new Error(`public runtime dependency missing from release policy: ${missingRuntime.join(', ')}`);
+  }
+  const requiredV3Tests = v3VerificationTests(args.sourceRoot, sourceFileSet);
+  const missingV3Tests = requiredV3Tests.filter((relative) => !approved.has(relative));
+  if (missingV3Tests.length > 0) {
+    throw new Error(`public V3 verification test missing from release policy: ${missingV3Tests.join(', ')}`);
+  }
+  const requiredBundleInputs = publicBundleSourceInputs(args.sourceRoot, sourceFileSet);
+  const missingBundleInputs = requiredBundleInputs.filter((relative) => !approved.has(relative));
+  if (missingBundleInputs.length > 0) {
+    throw new Error(`public bundle source input missing from release policy: ${missingBundleInputs.join(', ')}`);
+  }
+  const requiredBundledFiles = publicBundledFiles(sourceFileSet);
+  const missingBundledFiles = requiredBundledFiles.filter((relative) => !approved.has(relative));
+  if (missingBundledFiles.length > 0) {
+    throw new Error(`public bundled file missing from release policy: ${missingBundledFiles.join(', ')}`);
+  }
   const targetEntries = topLevelEntries(args.targetRoot);
   const approvedFiles = [...approved].filter((relative) => sourceFileSet.has(relative)).sort();
   const result = {
@@ -212,10 +288,7 @@ function main() {
     policy: POLICY_NAME,
     sourceFiles: sourceFiles.length,
     baselineTrackedFiles: baselineFiles.length,
-    autoApprovedRuntimeRoots: [...AUTO_APPROVED_ROOTS],
     hardDenyPrefixes: [...HARD_DENY_PREFIXES],
-    autoApprovalExcludedPrefixes: [...AUTO_APPROVAL_EXCLUDED_PREFIXES],
-    autoApprovedRuntimeFiles: classification.autoApproved,
     explicitAdditionalFiles: classification.explicitAdditions,
     inheritedBaselineFiles: classification.inherited,
     removedFiles: policy.removedFiles,
@@ -224,6 +297,11 @@ function main() {
     skippedUnapprovedFiles: classification.skippedUnapproved.slice(0, 100),
     removedTopLevelEntries: targetEntries,
     copiedTopLevelEntries: [...new Set(approvedFiles.map((relative) => relative.split('/')[0]))].sort(),
+    candidateManifest: CANDIDATE_MANIFEST,
+    runtimeDependencyCount: requiredRuntime.length,
+    requiredV3VerificationTests: requiredV3Tests,
+    publicBundleSourceInputCount: requiredBundleInputs.length,
+    publicBundledFileCount: requiredBundledFiles.length,
     preserved: ['.git']
   };
 
@@ -232,6 +310,7 @@ function main() {
       fs.rmSync(path.join(args.targetRoot, name), { recursive: true, force: true });
     }
     for (const relative of approvedFiles) copyFile(args.sourceRoot, args.targetRoot, relative);
+    writeCandidateManifest(args.targetRoot, approvedFiles);
   }
 
   if (args.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

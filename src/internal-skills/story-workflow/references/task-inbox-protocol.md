@@ -163,9 +163,15 @@ durable task 的 `next_candidates` 推荐保存对象而不是裸字符串：
 - 默认候选只放当前业务任务的下一步；检查更新、更新本地 skill、迁移章节结构等维护动作只在用户明确要求时出现。
 - 如果落盘状态显示存在未完成任务，候选要按“继续未完成任务 / 开启新的任务”分组；继续项必须标出来源文件或断点，不得凭聊天记忆猜测，也不得自动替用户推进旧任务。
 
+### V3 短篇任务动作合同
+
+焦点任务同时满足 `short_write + engine_version=3 + task_schema_version=3 + workflow_contract_version=3` 时，V3 Engine 是当前任务的唯一动作权威。没有 `pending_action` 时，任务收件箱必须返回 `status=current_v3_task_actions` 与 `selection_contract=v3_task_action_projection`；通常第 1 项执行 `workflow-v3.js describe-stage`，第 2 项执行 `workflow-v3.js show`。`planning_confirmation` 是例外：第 1 项必须执行 `workflow-v3.js run-current-stage --expected-version <当前版本>`，原子落盘“采用当前方案 / 进入 Chat 修改方案”两个选择；不得继续调用 `describe-stage` 后停在原地。若作者已经选择进入 Chat，收件箱必须原样返回 `selection_contract=v3_planning_chat_input` 的三项投影（输入修改要求 / 查看当前规划 / 返回确认选择），不得用通用四项菜单重包。不得将 V3 当前任务动作回退到 workflow-state-machine.js。
+
+有已提交选择时，`workflow-v3.js show` 返回的文本和四字段绑定必须原样转发；作者的自由意见只能调用 `workflow-v3.js submit-feedback`。V3 的阶段产物与作者反馈不使用 V2 `resolve-action`，也不得根据裸数字猜测上一级菜单。
+
 ## Workflow State Machine
 
-`workflow-state-machine.js` is the authoritative state machine / 状态机 helper for multi-step workflows. Before creating, resuming, advancing, completing, blocking, or rendering numbered choices for `long_write`、`short_write`、`review_repair`、`long_analyze`、`long_scan`、`short_scan`、`short_analyze`、`cover`、`download_import`、`deslop` 或 `setup_update`，先调用：
+`workflow-state-machine.js` is the authoritative state machine / 状态机 helper for non-V3 workflows. Before creating, resuming, advancing, completing, blocking, or rendering numbered choices for `long_write`、V2 `short_write`、`review_repair`、`long_analyze`、`long_scan`、`short_scan`、`short_analyze`、`cover`、`download_import`、`deslop` 或 `setup_update`，先调用：
 
 ```bash
 node scripts/workflow-state-machine.js inspect --project-root <book-root> --json
@@ -209,8 +215,8 @@ node scripts/workflow-stage-controller.js advance \
 
 边界：
 
-- **仅短篇推进用 `advance`。** 长篇（`long_write`）仍必须用 `workflow-state-machine.js apply-result`，因为长篇有 lifecycle 门、review plan 校验、task_family 主分支校验和章节事务，controller 不覆盖这些。
-- `resolve-action`（编号选择解析）和 `inspect`（首屏 / 恢复对账）仍按上文用 `workflow-state-machine.js`；`advance` 只替代"写完结果包后推进到下一阶段"这一步。
+- **仅 V2 短篇推进用 `advance`。** 长篇（`long_write`）仍必须用 `workflow-state-machine.js apply-result`，因为长篇有 lifecycle 门、review plan 校验、task_family 主分支校验和章节事务，controller 不覆盖这些。
+- V2 的 `resolve-action`（编号选择解析）和 `inspect`（首屏 / 恢复对账）仍按上文用 `workflow-state-machine.js`；V3 短篇按本协议前述 V3 动作合同执行。
 - 调用 `advance` 前不要先 `inspect` 全量任务——`advance` 自己会解析权威任务，预读只是重复消耗。
 
 ## 全局任务收件箱
@@ -237,7 +243,7 @@ node scripts/workflow-entry-guard.js --project-root <book-root> --takeover-sessi
 
 展开未完成任务后，任务卡数字与阶段候选数字属于不同层级，但不允许制造无意义的中间页：
 
-- 恰好只有一个未完成任务且它就是当前焦点时，直接返回 `status=current_task_actions`、`selection_contract=execute_command_or_route_intent` 与该阶段四项动作。页面必须同时显示任务、当前阶段、停靠原因和可执行 `1/2/3/4`，不得只显示任务摘要。
+- 恰好只有一个未完成任务且它就是当前焦点时，V3 短篇直接返回 `status=current_v3_task_actions`、`selection_contract=v3_task_action_projection`；其他任务返回 `status=current_task_actions`、`selection_contract=execute_command_or_route_intent`。页面必须同时显示任务、当前阶段、停靠原因和可执行 `1/2/3/4`，不得只显示任务摘要。
 - 存在多个任务，或唯一任务尚未成为焦点时，才返回 `selection_contract=execute_task_card_command_or_route_intent`。用户选择任务卡只能执行 `task_cards[].execution_command`，先激活对应 workflow；禁止把任务卡数字送给 `resolve-action`。激活完成后必须立即投影所选任务的当前动作，不得再次回到任务收件箱首页。
 - 激活后若任务已经停在运行阶段，按 `stage_execution.resume_hint` 恢复，并在实际完成 `write_set` 后运行阶段完成命令。只有真正的 pending-action 菜单才允许执行带 `pending_action_id / visible_choice_hash / state_version / book_root` 的 `resolve-action`；`interaction_mode=resume_stage` 不得被转换成命令行参数。
 - Codex Desktop 不提供原生候选控件时使用纯文本兼容层，但仍必须逐字渲染 `visible_response.text` 并保存最近一次结构化候选。用户输入数字只消费该候选的 `interaction_mode` 和 `execution_command`；不得只显示 `task_cards[].display` 后结束，也不得把同一个数字重新交给首屏或上一级菜单。

@@ -256,6 +256,56 @@ NODE
     [ ! -e "$BOOK/追踪/story-system/write-policy.json" ]
 }
 
+@test "legacy short project migrates strict write policy without inventing chapter identities" {
+    rm -rf "$BOOK/正文"
+    mkdir -p "$BOOK/正文"
+    printf '# 第一节\n旧短篇正文必须保持原样。\n' > "$BOOK/正文/第001节.md"
+    printf '# 小节大纲\n- 第1节：开篇。\n' > "$BOOK/小节大纲.md"
+    before_section="$(shasum -a 256 "$BOOK/正文/第001节.md" | awk '{print $1}')"
+    before_outline="$(shasum -a 256 "$BOOK/小节大纲.md" | awk '{print $1}')"
+
+    node "$MIGRATE" preview --project-root "$BOOK" --resume-intent "继续当前短篇审阅" --json > "$TMP_DIR/short-preview.json"
+
+    node - "$TMP_DIR/short-preview.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'write_policy_migration_preview') throw new Error(JSON.stringify(out));
+if (out.project_kind !== 'short') throw new Error(JSON.stringify(out));
+if (out.conflicts.some(item => item.code === 'missing_active_chapter_identity')) throw new Error(JSON.stringify(out.conflicts));
+if (out.chapter_identities.length !== 0) throw new Error(JSON.stringify(out.chapter_identities));
+NODE
+
+    node "$MIGRATE" confirm --project-root "$BOOK" --preview-id "$(preview_id "$TMP_DIR/short-preview.json")" --confirm --resume-intent "继续当前短篇审阅" --json > "$TMP_DIR/short-confirm.json"
+    node "$MIGRATE" apply --project-root "$BOOK" --snapshot "$(snapshot_id "$TMP_DIR/short-confirm.json")" --resume-intent "继续当前短篇审阅" --json > "$TMP_DIR/short-apply.json"
+
+    [ "$before_section" = "$(shasum -a 256 "$BOOK/正文/第001节.md" | awk '{print $1}')" ]
+    [ "$before_outline" = "$(shasum -a 256 "$BOOK/小节大纲.md" | awk '{print $1}')" ]
+    node - "$TMP_DIR/short-apply.json" "$BOOK/追踪/story-system/chapter-identities.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const registry = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+if (out.status !== 'strict_current' || !out.continuation_command) throw new Error(JSON.stringify(out));
+if (registry.schemaVersion !== '1.0.0' || !Array.isArray(registry.chapters) || registry.chapters.length !== 0) throw new Error(JSON.stringify(registry));
+NODE
+}
+
+@test "legacy short migration becomes stale when section prose changes after confirmation" {
+    rm -rf "$BOOK/正文"
+    mkdir -p "$BOOK/正文"
+    printf '# 第一节\n确认前正文。\n' > "$BOOK/正文/第001节.md"
+    printf '# 小节大纲\n- 第1节：开篇。\n' > "$BOOK/小节大纲.md"
+
+    node "$MIGRATE" preview --project-root "$BOOK" --json > "$TMP_DIR/short-stale-preview.json"
+    confirm_migration "$TMP_DIR/short-stale-preview.json"
+    printf '# 第一节\n确认后正文已经变化。\n' > "$BOOK/正文/第001节.md"
+
+    run node "$MIGRATE" apply --project-root "$BOOK" --snapshot "$(snapshot_id "$TMP_DIR/confirm.json")" --json
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'blocked_migration_preview_stale'* ]]
+    [ ! -e "$BOOK/追踪/story-system/write-policy.json" ]
+}
+
 @test "blocked migration with resume intent never recommends confirmation" {
     printf '# 第一章冲突稿\n重复章节身份。\n' > "$BOOK/正文/第1卷/第001章_冲突稿.md"
     before="$(shasum -a 256 "$BOOK/正文/第1卷/第001章_旧章.md" | awk '{print $1}')"

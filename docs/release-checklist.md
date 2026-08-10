@@ -25,7 +25,7 @@ bash scripts/run-public-release-tests.sh
 
 ## 行为验收门禁
 
-发布候选必须有当前 bundle 的真实宿主行为证据。门禁只读取报告，不自动启动 Claude/Codex/ZCode：
+发布候选必须有当前 bundle 的真实宿主行为证据。发布行为矩阵固定为 Claude + ZCode；Codex 由独立的三端安装门验证。门禁只读取报告，不自动启动宿主：
 
 ```bash
 node scripts/behavior-eval-release-gate.js --json
@@ -35,9 +35,9 @@ node scripts/release-status.js --json
 需要补报告时，先生成 dry-run 计划，再显式确认 paid run：
 
 ```bash
-node scripts/na-dev.js behavior-eval-plan --scenario route-single-entry --hosts claude,codex,zcode --json
+node scripts/na-dev.js behavior-eval-plan --scenario route-single-entry --hosts claude,zcode --json
 RUN_ID=paid-route-single-entry-001
-node scripts/na-dev.js behavior-eval-run --execute-paid --paid-confirmation "$RUN_ID" --max-budget-usd 10 --scenario route-single-entry --hosts claude,codex,zcode --run-id "$RUN_ID" --json
+node scripts/na-dev.js behavior-eval-run --execute-paid --paid-confirmation "$RUN_ID" --max-budget-usd 10 --scenario route-single-entry --hosts claude,zcode --run-id "$RUN_ID" --json
 ```
 
 必须覆盖六类场景：单入口路由、只写指定节、审阅范围恢复、退化早停、阶段修复门、章节提交冲突。任一场景缺失、非 paid、bundle 过期、host usage/cost 不是宿主实测，均不能发布。

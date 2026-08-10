@@ -30,6 +30,7 @@ node scripts/short-review-entry.js --project-root <book-root> --json --compact
 - `status=blocked_review_source_missing`：没有可审阅的正式正文，停止并提示定位或导入正文。
 - `status=ready_for_professional_review_with_plan_risk`：创建/恢复 `workflow_type=short_review`，继续只读正文审阅，并把 `plan_repair_checklist.sections[]` 逐节展示；规划兑现结论标为暂定，不得把格式字段缺失直接判成剧情失败。
 - `status=ready_for_professional_review`：创建/恢复 `workflow_type=short_review`，按 workflow packet 的封闭 `read_set` 生成紧凑审阅计划，再进入逐节验收。
+- 短篇不得调用长篇章节批次工具 `review-batch-evidence-scan.js`；短篇的逐节证据由本入口、正式 `正文/第NNN节.md` 与全篇总编辑合同负责，不能因缺少长篇章节身份索引而得到 `coveredChapters=0`。
 - 禁止猜测 `short-plan-contract.js` 参数、重复运行同一预检、用 `TaskCreate/TaskUpdate` 复制 workflow 任务，或先读取全部正文后再判断规划合同。
 - 私有增强存在时，result packet 可记录 `writing_context=private_enhanced`，但 `owner_module` 必须始终是 `story-review`。
 
@@ -174,7 +175,7 @@ node scripts/review-agent-dispatch-plan.js --scope <parent_scope> --batch <batch
 作者看到的审阅摘要只使用中文业务语言，并保持短、可执行：
 
 ```text
-审阅目标：第一卷
+审阅范围：第一卷
 完成进度：100%
 本轮结论：主线推进清楚，但人物动机与两处时间线需要复核。
 需要处理的问题：
@@ -643,7 +644,7 @@ next_requested_range: null
    - 状态断线：角色伤势、能力、资源、关系或认知跨批突变，按一致性影响标 S1-S3。
 7. **总报告合并**：`全书审查总报告.md` 必须包含上述矩阵的摘要：未回收钩子 Top、爆点兑现不足 Top、承诺-兑现断裂 Top、角色状态断线 Top、主线偏航批次，并引用 `批次交接摘要.md` 的跨批断裂结论。
 
-**Phase 1.5：可选 story-explorer 预查询**。仅当 `Effective Mode` 仍为 `full`/`lean`、当前允许 spawn 且 Agent/Task 工具可用时，才可检查 `.claude/agents/story-explorer.md` 并 spawn `story-explorer` 预查设定摘要；`solo` 或子代理递归保护场景下不得 spawn，只能直接 Read/Grep。Prompt 示例：
+**Phase 1.5：可选 story-explorer 预查询**。仅当内部执行方式允许 spawn、当前不在子代理内且 Agent/Task 工具可用时，才可检查 `.claude/agents/story-explorer.md` 并 spawn `story-explorer` 预查设定摘要；`solo` 或子代理递归保护场景下不得 spawn，只能直接 Read/Grep。`story-explorer` 只返回可定位的原文、设定与追踪证据，不输出结构 verdict，不生成修订方向，也不能代替 `story-architect` 覆盖剧情、钩子或高潮裁决。Prompt 示例：
 
 ```text
 项目目录：{dir}
@@ -819,7 +820,7 @@ next_requested_range: null
 3. 合并去重：按 `severity` 排序（S1 > S2 > S3 > S4），同级内按影响范围排序。
 4. **可选事实核查**：如果审查内容涉及需要验证的外部事实（历史年代、地理方位、职业细节等），只有在 `Effective Mode` 仍为 `full`/`lean`、当前不是子 Agent、Agent/Task 工具可用且 `.claude/agents/story-researcher.md` 已部署时，才可额外 spawn `story-researcher` 搜索验证；`solo`、missing/malformed/stale/spawn failed 降级或子代理递归保护场景下不得 spawn，只能在报告中标记“需人工事实核查”。
 5. **分歧呈现**：如果 reviewer 间有冲突意见，明确呈现分歧让用户裁决；不要自动妥协。
-6. 输出综合审查报告。报告必须列出实际模式、fallback 原因、使用的 rubric、Rubric Source、审查范围和证据不足项。
+6. 输出综合审查报告。机器结果包记录实际调度、降级原因和 rubric 来源；作者可见报告只说明审阅范围、结论、证据不足及可执行下一步。降级确实影响覆盖面时，用中文说明影响，不展示内部字段或角色名。
 
 ---
 
@@ -827,45 +828,28 @@ next_requested_range: null
 
 只有 `Effective Mode` 确实为 `full` 或 `lean` 时才使用本模板；如果 Phase 0 或运行时失败导致降级 `solo`，必须改用 solo 模式模板。
 
-注意：下列 `Requested Mode`、`Effective Mode`、`Fallback`、`Rubric`、`Rubric Source` 五个英文 key 必须逐字保留；不要改成“请求模式/实际模式/回退/评估标准”等中文 key。
+内部调度字段只保存在机器 JSON 结果包。作者可见报告使用中文业务语言，不展示模式名、Agent 名、英文键或原始状态码。
 
 ```md
 === 故事审查报告 ===
-Requested Mode: full | lean
-Effective Mode: full | lean
-Fallback: none
-Rubric: fanqie | qidian | zhihu | generic web-fiction
-Rubric Source: file | embedded fallback
-审查范围: {章节/文件/批次}
+审阅范围：{章节/文件/批次}
+完成进度：{百分比或逐节完成数}
+本轮结论：{一句自然中文结论}
 
-## Verdict Summary / 结论汇总
-- story-architect: APPROVE / CONCERNS(n) / REJECT / NOT_RUN
-- character-designer: APPROVE / CONCERNS(n) / REJECT / NOT_RUN
-- narrative-writer: APPROVE / CONCERNS(n) / REJECT / NOT_RUN
-- consistency-checker: APPROVE / CONCERNS(n) / REJECT / NOT_RUN
+## 逐节与全篇结论
+{逐节通过/有条件通过/需回炉，以及全篇综合判断}
 
-> `NOT_RUN` 只用于 lean 模式排除的 reviewer 或可选 reviewer；如果 full/lean 必需 reviewer 缺失或 spawn 失败，应降级 solo，而不是在 full/lean 报告中标记 NOT_RUN 后继续综合。
+## 需要处理的问题
+{按影响排序，用问题、正文证据、读者影响、修改方向表述}
 
-## Severity Counts
-- S1: n
-- S2: n
-- S3: n
-- S4: n
-
-## 综合评定
-APPROVE(通过) / CONCERNS(有问题) / REJECT(需重写)
-
-## 发现的问题
-{按统一 Findings Schema 或等价表格列出所有问题}
-
-## Agent 分歧（如有）
-{列出 reviewer 间不同意见和证据}
+## 判断分歧（如有）
+{用业务语言列出不同判断及各自证据}
 
 ## 证据不足 / 需补充
 {缺失设定、缺失大纲、无法核查事实等}
 
-## 修改建议
-{按 S1→S4 优先级排列}
+## 下一步建议
+{确认方案、继续讨论、查看依据或暂停}
 ```
 
 ---
@@ -889,16 +873,13 @@ solo 必须执行基础检查：
 
 ### solo 模式输出格式
 
-注意：下列 `Requested Mode`、`Effective Mode`、`Fallback`、`Rubric`、`Rubric Source` 五个英文 key 必须逐字保留；不要改成“请求模式/实际模式/回退/评估标准”等中文 key。
+内部调度字段只保存在机器 JSON 结果包；作者可见简版报告同样使用中文业务语言。
 
 ```md
 === 故事审查报告（solo）===
-Requested Mode: {full | lean | solo}
-Effective Mode: solo
-Fallback: none | missing agents -> solo | malformed agents -> solo | stale agents -> solo | agent tool unavailable -> solo | spawn failed -> solo | subagent recursion guard -> solo
-Rubric: fanqie | qidian | zhihu | generic web-fiction
-Rubric Source: file | embedded fallback
-审查范围: {章节/文件}
+审阅范围：{章节/文件}
+本轮结论：{一句自然中文结论}
+覆盖说明：{仅在证据或能力不足时说明未覆盖项及影响}
 
 ## 基础检查结果
 

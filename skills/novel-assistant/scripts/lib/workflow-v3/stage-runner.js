@@ -18,13 +18,14 @@
 //      asked to commit a tampered version.
 //
 // Stage boundary (BEFORE any service call):
-//   2. creative_entry / planning_confirmation / section_repair have specific
-//      engine-owned or apply-result paths. The run-stage entry point is for
-//      staged-artifact stages only and refuses these three ids outright so
-//      the durable task.json stays byte-for-byte unchanged.
+//   2. creative_entry and planning_confirmation have engine-owned paths. The
+//      run-stage entry point is for staged-artifact stages and refuses those
+//      ids plus section_repair outright; section_repair instead uses the
+//      run-current-stage path so its input digest is checked atomically with
+//      the Engine transition.
 //
 // Service boundary:
-//   3. After rejecting the two boundaries, the runner re-reads task.json and
+//   3. After enforcing those boundaries, the runner re-reads task.json and
 //      validates expected-version + current_stage BEFORE dispatch. Only then
 //      does it call the matching professional service. The service returns a
 //      Task 1 StageResult; the runner forwards it to engine.applyStageResult
@@ -42,14 +43,17 @@ const crypto = require('crypto');
 
 const engine = require('./engine');
 const { withWorkflowExecutionLock } = require('./execution-lock');
+const { renderCommittedInteraction } = require('./interaction-arbiter');
 const { finalizePlanningStage } = require('../short-production/planning');
 const {
   finalizeBrief,
   finalizeDraft,
+  finalizeRepair,
   runMachineGate,
   runStoryGate,
   acceptSection,
 } = require('../short-production/section-loop');
+const { finalizeFeedbackPlanningPatch } = require('../short-production/feedback-planning');
 const {
   assembleStory,
   finalizeEditorialReview,
@@ -75,8 +79,9 @@ const CONTEXT_EVIDENCE_OVERRIDE_FIELDS = Object.freeze([
 ]);
 
 // Stages that are NOT invokable through the staged-artifact run-stage entry
-// point. These author-driven stages advance through apply-result after the
-// corresponding author choice or prose revision is ready.
+// point. creative_entry and planning_confirmation advance through apply-result;
+// section_repair advances only through run-current-stage, which binds the
+// repair service to the candidate digest recorded on entry.
 const REFUSED_STAGES = Object.freeze([
   'creative_entry', 'planning_confirmation', 'section_repair',
 ]);
@@ -85,7 +90,7 @@ const REFUSED_STAGES = Object.freeze([
 // stage id (or a typo) is rejected before the service is ever called.
 const SUPPORTED_STAGES = Object.freeze([
   'material_positioning', 'setting', 'section_outline',
-  'section_brief', 'section_draft', 'machine_gate', 'story_gate', 'section_accept',
+  'feedback_apply_patch', 'section_brief', 'section_draft', 'machine_gate', 'story_gate', 'section_accept',
   'assembly', 'editorial_review', 'deslop', 'final_check',
 ]);
 
@@ -155,16 +160,55 @@ function runCurrentStage(input = {}) {
     throw error;
   }
   const stage = String(task.current_stage || '');
-  if (stage === 'section_repair') {
-    const applied = engine.applyStageResult(projectRoot, workflowId, expectedVersion, {
-      kind: 'completed',
-      code: 'short_section_repair_ready',
-      stage_id: stage,
-    });
-    return { ok: true, stage_result: { kind: 'completed', code: 'short_section_repair_ready', stage_id: stage }, ...applied };
+  if (stage === 'planning_confirmation') {
+    return runPlanningConfirmation({ projectRoot, workflowId, expectedVersion });
   }
   const contract = describeTaskStage(task, projectRoot);
   return runStageWithContext({ projectRoot, workflowId, expectedVersion, stage, context: contract.context });
+}
+
+function runPlanningConfirmation({ projectRoot, workflowId, expectedVersion }) {
+  return withWorkflowExecutionLock(projectRoot, 'workflow-v3-planning-confirmation', (capability) => {
+    const task = engine.readTask(projectRoot, workflowId);
+    if (Number(task.state_version) !== Number(expectedVersion)) {
+      const error = new Error('durable task changed before stage execution');
+      error.code = 'WORKFLOW_TASK_CONFLICT';
+      error.status = 'blocked_workflow_state_conflict';
+      throw error;
+    }
+    if (String(task.current_stage || '') !== 'planning_confirmation') {
+      throw new Error(`stage_mismatch:expected=planning_confirmation:current=${task.current_stage || ''}`);
+    }
+    if (task.pending_action && String(task.pending_action.status || '') === 'pending') {
+      return {
+        ok: true,
+        stage_result: planningConfirmationResult(),
+        task,
+        visible_response: renderCommittedInteraction(task),
+      };
+    }
+    const stageResult = planningConfirmationResult();
+    const applied = engine.applyStageResult(projectRoot, workflowId, expectedVersion, stageResult, capability);
+    return {
+      ok: true,
+      stage_result: stageResult,
+      task: applied.task,
+      visible_response: applied.visible_response,
+    };
+  });
+}
+
+function planningConfirmationResult() {
+  return {
+    kind: 'needs_author_choice',
+    code: 'planning_confirmation_required',
+    stage_id: 'planning_confirmation',
+    question: '小节大纲已经通过检查并写入正式资产。请确认采用当前方案，或进入 Chat 说明需要调整的内容。',
+    options: [
+      { action_id: 'accept_planning', label: '采用当前方案，开始第 1 节 Brief' },
+      { action_id: 'modify_planning_in_chat', label: '进入 Chat 修改方案' },
+    ],
+  };
 }
 
 function describeCurrentStage(input = {}) {
@@ -267,6 +311,14 @@ function describeTaskStage(task, projectRoot) {
   const stage = String((task || {}).current_stage || '');
   const taskDir = String((task || {}).task_dir || '');
   const attempt = String((((task || {}).stage_execution || {}).stage_attempt_id) || 'current');
+  if (stage === 'planning_confirmation') {
+    return {
+      section_index: 0,
+      write_set: [],
+      source_files: ['素材卡.md', '设定.md', '小节大纲.md'],
+      context: {},
+    };
+  }
   if (stage === 'assembly') {
     return { section_index: 0, write_set: [], source_files: [], context: {} };
   }
@@ -293,6 +345,24 @@ function describeTaskStage(task, projectRoot) {
   if (stage === 'final_check') {
     return { section_index: 0, write_set: [], source_files: ['正文.md'], context: {} };
   }
+  if (stage === 'feedback_apply_patch') {
+    const acceptedPlan = activeAcceptedFeedbackPlan(task, 0) || {};
+    const planningAssets = Array.isArray(((acceptedPlan || {}).projection_plan || {}).planning_assets)
+      ? acceptedPlan.projection_plan.planning_assets.map(String).filter(Boolean)
+      : [];
+    if (!planningAssets.length) throw new Error('feedback_planning_assets_required');
+    const attempt = safePathSegment((((task || {}).stage_execution || {}).stage_attempt_id) || 'attempt');
+    const stagedAssets = planningAssets.map(canonical => ({
+      canonical,
+      staged: `${taskDir}/artifacts/planning/feedback_apply_patch/${attempt}/${canonical}`,
+    }));
+    return {
+      section_index: Number((task || {}).current_section_index || 0),
+      write_set: stagedAssets.map(item => item.staged),
+      source_files: planningAssets,
+      context: { staged_assets: stagedAssets },
+    };
+  }
   const planning = PLANNING_STAGE_CONTRACTS[stage];
   if (planning) {
     const stagedRel = `${taskDir}/artifacts/planning/${stage}/${attempt}/${planning.target}`;
@@ -309,16 +379,13 @@ function describeTaskStage(task, projectRoot) {
   const briefRel = `写作Brief_第${padded}节.md`;
   const draftRel = `草稿_第${padded}节_候选.md`;
   const evidenceRel = `${String(task.task_dir || '')}/artifacts/section-${padded}-story-review-pass.json`;
-  const acceptedPlan = activeAcceptedFeedbackPlan(task, sectionIndex) || {};
-  const planningAssets = String(acceptedPlan.projection_status || '') === 'completed'
-    ? []
-    : Array.isArray(((acceptedPlan || {}).projection_plan || {}).planning_assets)
-    ? acceptedPlan.projection_plan.planning_assets.map(String).filter(Boolean)
-    : [];
   if (stage === 'section_brief') {
     return {
       section_index: sectionIndex,
-      write_set: [...new Set([...planningAssets, briefRel])],
+      // Planning feedback has its own feedback_apply_patch transaction stage.
+      // A Brief can only be authored after that transaction has completed;
+      // allowing planning assets here revives the old mixed write boundary.
+      write_set: [briefRel],
       source_files: [],
       context: { brief_rel: briefRel, section_index: sectionIndex },
     };
@@ -364,6 +431,12 @@ function digestFile(file) {
   }
 }
 
+function safePathSegment(value) {
+  return String(value || 'attempt')
+    .replace(/[^A-Za-z0-9._-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '') || 'attempt';
+}
+
 function currentSectionIndex(task, projectRoot, stage) {
   const candidates = [
     Number((((task || {}).stage_execution || {}).section_index) || 0),
@@ -386,9 +459,16 @@ function buildResumeHint(task, contract) {
   const stage = String((task || {}).current_stage || '');
   const assemblyRevalidation = String((((task || {}).feedback_revision_queue || {}).source_stage) || '') === 'full_story_assembly';
   if (stage === 'assembly') return '已完成逐节采用；直接运行 stage_completion_command 生成正式合稿。';
+  if (stage === 'feedback_apply_patch') return '只在 write_set 中完成已确认方案对应的暂存规划资产；完成后运行 stage_completion_command，由事务一次回写全部资产。';
   if (stage === 'editorial_review') return '先运行 stage_completion_command 生成全篇证据包；再只填写 write_set 中的盲读卡与编辑裁决卡并重跑。';
   if (stage === 'deslop') return '只在 write_set 中生成全篇表达精修暂存稿，保持剧情、节数与节序不变；随后运行 stage_completion_command。';
   if (stage === 'final_check') return '本阶段不改文件，直接运行 stage_completion_command 完成终检。';
+  if (stage === 'planning_confirmation') {
+    return '先阅读已写入正式资产的“小节大纲.md”；运行 stage_completion_command 后，只会出现“采用当前方案”与“进入 Chat 修改方案”两个作者选择。';
+  }
+  if (stage === 'section_outline') {
+    return '只在 write_set 中完成当前“小节大纲.md”暂存稿；每节用自然中文标题（第1节或第一节均可），写清场景动作、主角选择、可见阻力、至少两步因果推进、情绪或压力变化和节尾钩子；首节另写开场钩子与全篇承诺，末节另写现实后果、关系收束和主题回扣。不得写 YAML、JSON、S00/B01 或正文；不得直接覆盖正式规划文件，完成后立即运行 stage_completion_command。';
+  }
   if (PLANNING_STAGE_CONTRACTS[stage]) {
     return `只在 write_set 中完成当前“${PLANNING_STAGE_CONTRACTS[stage].target}”暂存稿；不得直接覆盖正式规划文件，完成后立即运行 stage_completion_command。`;
   }
@@ -437,6 +517,18 @@ function dispatchStage({ projectRoot, task, stage, context }) {
       });
     case 'section_draft':
       return finalizeDraft({
+        projectRoot,
+        task,
+        draft: String(context.draft_rel || ''),
+      });
+    case 'feedback_apply_patch':
+      return finalizeFeedbackPlanningPatch({
+        projectRoot,
+        task,
+        stagedAssets: Array.isArray(context.staged_assets) ? context.staged_assets : [],
+      });
+    case 'section_repair':
+      return finalizeRepair({
         projectRoot,
         task,
         draft: String(context.draft_rel || ''),

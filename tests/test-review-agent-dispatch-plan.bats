@@ -19,14 +19,14 @@ teardown() {
 const path = require('path');
 const { planReviewRoles } = require(path.join(process.argv[2], 'scripts/lib/review-role-policy.js'));
 
-const available = ['story-explorer', 'character-designer', 'narrative-writer', 'consistency-checker', 'professional-reader'];
+const available = ['story-explorer', 'story-architect', 'character-designer', 'narrative-writer', 'consistency-checker', 'professional-reader'];
 const roleNames = (plan) => plan.roles.map((role) => role.subagent_type);
 
 const lean = planReviewRoles({
   requiredDimensions: ['plot', 'canon'], evidenceSignals: [], availableAgents: available, budgetPolicy: {},
 });
 if (lean.mode !== 'agent_dispatch') throw new Error(lean.mode);
-if (JSON.stringify(roleNames(lean)) !== JSON.stringify(['story-explorer', 'consistency-checker'])) throw new Error(JSON.stringify(lean));
+if (JSON.stringify(roleNames(lean)) !== JSON.stringify(['story-architect', 'consistency-checker'])) throw new Error(JSON.stringify(lean));
 if (lean.deferredDimensions.length !== 0) throw new Error(JSON.stringify(lean.deferredDimensions));
 
 const character = planReviewRoles({
@@ -48,13 +48,15 @@ if (!fullStory.roles.find(role => role.subagent_type === 'professional-reader').
 const conflict = planReviewRoles({
   requiredDimensions: ['plot', 'canon', 'prose'], evidenceSignals: ['high_conflict'], availableAgents: available, budgetPolicy: {},
 });
-if (JSON.stringify(roleNames(conflict)) !== JSON.stringify(['story-explorer', 'narrative-writer', 'consistency-checker'])) throw new Error(JSON.stringify(conflict));
+if (JSON.stringify(roleNames(conflict)) !== JSON.stringify(['story-explorer', 'story-architect', 'narrative-writer', 'consistency-checker'])) throw new Error(JSON.stringify(conflict));
+const explorer = conflict.roles.find(role => role.subagent_type === 'story-explorer');
+if (!explorer.independent_evidence || explorer.dimensions.includes('plot') || explorer.dimensions.includes('hooks')) throw new Error(JSON.stringify(explorer));
 if (conflict.retryPolicy !== 'missing_dimension_once') throw new Error(conflict.retryPolicy);
 NODE
 }
 
 @test "review agent dispatch adds one reader pass for full story scopes" {
-    node "$SCRIPT" --scope "全篇" --batch "全篇" --target-kind short_story --dimensions plot,canon --agents-available story-explorer,consistency-checker,professional-reader --json > "$TMP_DIR/out-reader-plan.json"
+    node "$SCRIPT" --scope "全篇" --batch "全篇" --target-kind short_story --dimensions plot,canon --agents-available story-architect,consistency-checker,professional-reader --json > "$TMP_DIR/out-reader-plan.json"
 
     node - "$TMP_DIR/out-reader-plan.json" <<'NODE'
 const fs=require('fs');
@@ -67,7 +69,7 @@ NODE
 }
 
 @test "review agent dispatch planner retains valid roles when an optional agent is missing" {
-    node "$SCRIPT" --scope "1-3" --batch "1-3" --dimensions plot,canon,character --risk character_drift --agents-available story-explorer,consistency-checker --json > "$TMP_DIR/out-review-agent-plan.json"
+    node "$SCRIPT" --scope "1-3" --batch "1-3" --dimensions plot,canon,character --risk character_drift --agents-available story-architect,consistency-checker --json > "$TMP_DIR/out-review-agent-plan.json"
 
     node - "$TMP_DIR/out-review-agent-plan.json" <<'NODE'
 const fs = require('fs');
@@ -78,7 +80,7 @@ if (out.parent_scope !== '1-3') throw new Error(`parent scope lost: ${out.parent
 if (out.batch_scope !== '1-3') throw new Error(`batch scope lost: ${out.batch_scope}`);
 if (out.execution_plan.mode !== 'agent_dispatch') throw new Error(`wrong mode: ${out.execution_plan.mode}`);
 const agents = out.execution_plan.agents.map(a => a.subagent_type).sort();
-for (const required of ['story-explorer', 'consistency-checker']) {
+for (const required of ['story-architect', 'consistency-checker']) {
   if (!agents.includes(required)) throw new Error(`missing ${required}`);
 }
 if (agents.includes('character-designer')) throw new Error(`unavailable optional agent was dispatched: ${agents}`);
@@ -93,15 +95,15 @@ NODE
 
 @test "review agent dispatch planner only uses roles in a persisted dispatch plan" {
     cat > "$TMP_DIR/dispatch-plan.json" <<'JSON'
-{"mode":"agent_dispatch","roles":[{"subagent_type":"story-explorer","dimensions":["plot"]},{"subagent_type":"consistency-checker","dimensions":["canon"]}],"deferredDimensions":["prose"],"retryPolicy":"missing_dimension_once"}
+{"mode":"agent_dispatch","roles":[{"subagent_type":"story-explorer","dimensions":["evidence_collection"],"independent_evidence":true},{"subagent_type":"story-architect","dimensions":["plot"]},{"subagent_type":"consistency-checker","dimensions":["canon"]}],"deferredDimensions":["prose"],"retryPolicy":"missing_dimension_once"}
 JSON
-    node "$SCRIPT" --scope "1-3" --batch "1-3" --agents-available story-explorer,consistency-checker,narrative-writer --dispatch-plan "$TMP_DIR/dispatch-plan.json" --json > "$TMP_DIR/out-review-agent-persisted.json"
+    node "$SCRIPT" --scope "1-3" --batch "1-3" --agents-available story-explorer,story-architect,consistency-checker,narrative-writer --dispatch-plan "$TMP_DIR/dispatch-plan.json" --json > "$TMP_DIR/out-review-agent-persisted.json"
 
     node - "$TMP_DIR/out-review-agent-persisted.json" <<'NODE'
 const fs = require('fs');
 const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const agents = out.execution_plan.agents.map((agent) => agent.subagent_type).sort();
-if (JSON.stringify(agents) !== JSON.stringify(['consistency-checker', 'story-explorer'])) throw new Error(JSON.stringify(out.execution_plan));
+if (JSON.stringify(agents) !== JSON.stringify(['consistency-checker', 'story-architect', 'story-explorer'])) throw new Error(JSON.stringify(out.execution_plan));
 if (agents.includes('narrative-writer')) throw new Error('dispatcher invented an unplanned role');
 if (!out.execution_plan.deferred_dimensions.includes('prose')) throw new Error(JSON.stringify(out.execution_plan));
 NODE

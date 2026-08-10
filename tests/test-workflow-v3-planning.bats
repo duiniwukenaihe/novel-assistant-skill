@@ -186,6 +186,138 @@ assert.ok(commits.some((commit) => commit.status === 'accepted'
 NODE
 }
 
+@test "Chinese-numbered outline headings project a usable short plan sequence" {
+    node - "$REPO" <<'NODE'
+const assert = require('assert');
+const path = require('path');
+const repo = process.argv[2];
+const { outlineSectionCount } = require(path.join(repo, 'scripts/lib/short-project-state.js'));
+const { outlineSections } = require(path.join(repo, 'scripts/lib/short-plan-contract.js'));
+
+// Hosts commonly write natural Chinese headings. The planning transaction must
+// recognize them as the same two-section sequence used by later V3 stages.
+const outline = '# 小节大纲\n\n## 第一节：发现异常\n- 场景动作：主角当面拒绝撤回。\n\n## 第二节：公开复核\n- 场景动作：主角提交核验材料。\n';
+assert.deepEqual(outlineSections(outline).map((section) => section.number), [1, 2]);
+assert.equal(outlineSectionCount(outline), 2);
+NODE
+}
+
+@test "V3 planning confirmation offers adoption or Chat revision and accepts Chinese section titles" {
+    node - "$REPO" "$PROJECT" <<'NODE'
+const assert = require('assert');
+const { spawnSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const [repo, root] = process.argv.slice(2);
+const engine = require(path.join(repo, 'scripts/lib/workflow-v3/engine.js'));
+const store = require(path.join(repo, 'scripts/lib/workflow-v3/task-store.js'));
+const runner = require(path.join(repo, 'scripts/lib/workflow-v3/stage-runner.js'));
+const { projectV3TaskActions } = require(path.join(repo, 'scripts/lib/workflow-v3/task-action-facade.js'));
+
+const workflowId = 'wf-planning-confirmation-author-path';
+const task = store.createTaskRecord(root, {
+  workflow_id: workflowId,
+  workflow_type: 'short_write',
+  current_stage: 'planning_confirmation',
+  user_goal: '写短篇',
+});
+fs.mkdirSync(path.join(root, '追踪', 'story-system', 'short'), { recursive: true });
+fs.writeFileSync(path.join(root, '追踪', 'story-system', 'short', 'project-state.json'), `${JSON.stringify({
+  schema_version: '2.0.0',
+  project_id: 'neutral-project',
+  active_write_workflow_id: workflowId,
+  plan_path: '小节大纲.md',
+  plan_revision: 1,
+  planned_sections: 2,
+  current_section_index: 1,
+  narrative: { planned_sections: 2 },
+}, null, 2)}\n`);
+fs.writeFileSync(path.join(root, '小节大纲.md'), '# 小节大纲\n\n## 第一节：发现异常\n- 场景动作：主角保留记录。\n\n## 第二节：公开复核\n- 场景动作：主角提交材料。\n');
+
+// Before the choice exists, the resume action must execute the confirmation
+// path, not describe a stage that cannot decide anything.
+const initialView = projectV3TaskActions({ projectRoot: root, task });
+assert.match(initialView.options[0].execution_command, /run-current-stage/u);
+assert.doesNotMatch(initialView.options[0].execution_command, /describe-stage/u);
+
+const opened = runner.runCurrentStage({
+  projectRoot: root,
+  workflowId,
+  expectedVersion: task.state_version,
+});
+assert.equal(opened.stage_result.kind, 'needs_author_choice');
+assert.equal(opened.task.current_stage, 'planning_confirmation');
+assert.deepEqual(opened.task.pending_action.options.map((option) => option.action_id), [
+  'accept_planning', 'modify_planning_in_chat',
+]);
+assert.match(opened.visible_response.text, /Chat 修改/u);
+
+engine.resolveAuthorInput(root, workflowId, opened.task.state_version, {
+  ...opened.visible_response.binding,
+  choice: 2,
+});
+const chatTask = engine.readTask(root, workflowId);
+assert.equal(chatTask.current_stage, 'planning_confirmation');
+const chatView = projectV3TaskActions({ projectRoot: root, task: chatTask });
+assert.equal(chatView.selection_contract, 'v3_planning_chat_input');
+assert.equal(chatView.options.length, 3);
+assert.equal(chatView.options[0].interaction_mode, 'chat_input');
+assert.match(chatView.visible_response, /直接在 Chat 中说明/u);
+const inbox = spawnSync(process.execPath, [
+  path.join(repo, 'scripts', 'workflow-task-inbox.js'),
+  '--project-root', root,
+  '--action', 'show_unfinished_tasks',
+  '--json',
+], { encoding: 'utf8' });
+assert.equal(inbox.status, 0, inbox.stderr);
+const inboxView = JSON.parse(inbox.stdout);
+assert.equal(inboxView.status, 'current_v3_task_actions', JSON.stringify(inboxView));
+assert.equal(inboxView.selection_contract, 'v3_planning_chat_input', JSON.stringify(inboxView));
+assert.match(inboxView.visible_response, /直接在 Chat 中说明/u);
+
+const reopened = runner.runCurrentStage({
+  projectRoot: root,
+  workflowId,
+  expectedVersion: chatTask.state_version,
+});
+engine.resolveAuthorInput(root, workflowId, reopened.task.state_version, {
+  ...reopened.visible_response.binding,
+  choice: 1,
+});
+const accepted = engine.readTask(root, workflowId);
+assert.equal(accepted.current_stage, 'section_brief');
+assert.equal(Number(accepted.current_section_index), 1);
+assert.equal(accepted.stage_execution.stage_id, 'section_brief');
+assert.equal(Number(accepted.stage_execution.section_index), 1);
+const lock = JSON.parse(fs.readFileSync(path.join(root, '追踪', 'story-system', 'short', 'section-title-lock.json'), 'utf8'));
+assert.deepEqual(lock.sections.map((section) => section.title), ['发现异常', '公开复核']);
+NODE
+}
+
+@test "V3 section outline resume states the natural blueprint fields before a host writes" {
+    node - "$REPO" "$PROJECT" <<'NODE'
+const assert = require('assert');
+const path = require('path');
+const [repo, root] = process.argv.slice(2);
+const engine = require(path.join(repo, 'scripts/lib/workflow-v3/engine.js'));
+const runner = require(path.join(repo, 'scripts/lib/workflow-v3/stage-runner.js'));
+
+let task = engine.createTask(root, {
+  workflow_id: 'wf-outline-resume-fields', workflow_type: 'short_write', user_goal: '写短篇',
+});
+for (const stage of ['creative_entry', 'material_positioning', 'setting']) {
+  task = engine.applyStageResult(root, task.workflow_id, task.state_version, {
+    kind: 'completed', code: 'advance', stage_id: stage,
+  }).task;
+}
+const contract = runner.describeCurrentStage({ projectRoot: root, workflowId: task.workflow_id });
+assert.equal(contract.stage_id, 'section_outline');
+assert.match(contract.resume_hint, /场景动作/u);
+assert.match(contract.resume_hint, /至少两步因果推进/u);
+assert.match(contract.resume_hint, /主题回扣/u);
+NODE
+}
+
 @test "V3 first missing-protagonist failure is retryable_internal and Engine persists retry_state in task.json" {
     node - "$REPO" "$PROJECT" "$SETTING_NO_PROTAGONIST" <<'NODE'
 const assert = require('assert');

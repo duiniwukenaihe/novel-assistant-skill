@@ -779,6 +779,42 @@ if(out.direct_intent) throw new Error('V2 business intent bypassed migration');
 if(!String((out.visible_response||{}).text||'').includes('升级')) throw new Error(JSON.stringify(out.visible_response));
 NODE
 }
+
+@test "ambiguous V2 short checkpoint offers only a read-only migration preview" {
+    task_file="$BOOK/追踪/workflow/tasks/wf-entry-v2-ambiguous/task.json"
+    mkdir -p "$(dirname "$task_file")"
+    cat > "$task_file" <<'JSON'
+{
+  "workflow_id":"wf-entry-v2-ambiguous",
+  "workflow_type":"short_write",
+  "task_dir":"追踪/workflow/tasks/wf-entry-v2-ambiguous",
+  "state_version":2,
+  "status":"running",
+  "current_stage":"section_machine_gate",
+  "current_step":"section_machine_gate",
+  "stage_execution":{"status":"running","stage_id":"section_machine_gate"}
+}
+JSON
+    write_focus_pointer wf-entry-v2-ambiguous
+
+    output="$(node "$SCRIPT" --project-root "$BOOK" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/v2-ambiguous-entry.json"
+    node - "$TMP_DIR/v2-ambiguous-entry.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'short_workflow_migration_pending') throw new Error(JSON.stringify(out));
+if ((out.short_workflow_migration || {}).compatibility_status !== 'preview_required') throw new Error(JSON.stringify(out.short_workflow_migration));
+const options = ((out.visible_response || {}).options || []);
+const primary = options[0];
+if (!primary || primary.action !== 'inspect_short_workflow_migration') throw new Error(JSON.stringify(primary));
+if (!/查看升级预览/.test(String(primary.label || ''))) throw new Error(JSON.stringify(primary));
+if (String(primary.execution_command || '').includes('--confirm')) throw new Error(JSON.stringify(primary));
+if (options.some((option) => /升级并恢复/.test(String(option.label || '')) || String(option.execution_command || '').includes('--confirm'))) {
+  throw new Error(JSON.stringify(options));
+}
+NODE
+}
+
 @test "entry guard surfaces write-policy migration before legacy task authority when no strict policy exists" {
     book="$TMP_DIR/book-policy-gate"
     mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/设定" "$book/细纲" "$book/追踪/workflow"
@@ -848,6 +884,102 @@ if (!String(visible.text || '').includes('下一步')) throw new Error('authorit
 if (String(JSON.stringify(out)).includes('repair_runtime_guard')) throw new Error('task-authority loss was downgraded to repair_runtime_guard');
 // Primary option must carry an execute_command label in Chinese, not just the action id.
 if (!/[一-鿿]/.test(primary.label || '')) throw new Error('primary option label must be Chinese');
+NODE
+}
+
+@test "bare legacy recovery entry explains the required intent without exposing an empty recovery command" {
+    book="$TMP_DIR/book-authority-bare-entry"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/设定" "$book/细纲" \
+             "$book/追踪/workflow" "$book/追踪/story-system/transactions" \
+             "$book/追踪/story-system/commits"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '# 设定\n' > "$book/设定/index.md"
+    printf '{"mode":"strict","current":{"chapter_commit":"required"}}\n' > "$book/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$book/追踪/story-system/chapter-identities.json"
+    : > "$book/追踪/story-system/projection-log.jsonl"
+    : > "$book/追踪/story-system/transactions/.keep"
+    : > "$book/追踪/story-system/commits/.keep"
+    printf '{"task_id":"legacy_longform_checkpoint_20260101","task_type":"legacy continuity repair","status":"phase_pending"}\n' \
+        > "$book/追踪/workflow/current-task.json"
+
+    output="$(node "$SCRIPT" --project-root "$book" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/authority-bare-entry.json"
+
+    node - "$TMP_DIR/authority-bare-entry.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'blocked_task_authority_missing') throw new Error(JSON.stringify(out));
+const primary = ((out.visible_response || {}).options || [])[0];
+if (!primary || primary.action !== 'provide_recovery_intent') throw new Error(JSON.stringify(primary));
+if (primary.execution_command !== '') throw new Error(JSON.stringify(primary));
+if (primary.interaction_mode !== 'semantic_only') throw new Error(JSON.stringify(primary));
+if (!/明确|说明|恢复意图/.test(String((out.visible_response || {}).text || ''))) {
+  throw new Error(JSON.stringify(out.visible_response));
+}
+NODE
+}
+
+@test "legacy review recovery requires a numeric chapter range before exposing a command" {
+    book="$TMP_DIR/book-review-authority-no-scope"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/追踪/workflow" \
+             "$book/追踪/story-system/transactions" "$book/追踪/story-system/commits"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '{"mode":"strict","current":{"chapter_commit":"required"}}\n' > "$book/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$book/追踪/story-system/chapter-identities.json"
+    : > "$book/追踪/story-system/projection-log.jsonl"
+    : > "$book/追踪/story-system/transactions/.keep"
+    : > "$book/追踪/story-system/commits/.keep"
+    printf '{"task_id":"legacy_review_checkpoint_20260101","task_type":"review_repair","status":"phase_pending"}\n' \
+        > "$book/追踪/workflow/current-task.json"
+
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "审阅当前正文" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/review-authority-no-scope.json"
+    node - "$TMP_DIR/review-authority-no-scope.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'blocked_task_authority_missing') throw new Error(JSON.stringify(out));
+const primary = ((out.visible_response || {}).options || [])[0];
+if (!primary || primary.execution_command !== '' || primary.interaction_mode !== 'semantic_only') {
+  throw new Error(JSON.stringify(primary));
+}
+if (!/范围|第.*章/.test(String((out.visible_response || {}).text || ''))) {
+  throw new Error(JSON.stringify(out.visible_response));
+}
+NODE
+}
+
+@test "unknown legacy type stays read-only in the entry guard even with an explicit intent" {
+    book="$TMP_DIR/book-unknown-legacy-type"
+    mkdir -p "$book/正文/第1卷" "$book/大纲/第1卷" "$book/追踪/workflow" \
+             "$book/追踪/story-system/transactions" "$book/追踪/story-system/commits"
+    printf '# 第001章\n' > "$book/正文/第1卷/第001章.md"
+    printf '# 细纲\n' > "$book/大纲/第1卷/细纲_第001章.md"
+    printf '{"mode":"strict","current":{"chapter_commit":"required"}}\n' > "$book/追踪/story-system/write-policy.json"
+    printf '{"chapter_identities":[]}\n' > "$book/追踪/story-system/chapter-identities.json"
+    : > "$book/追踪/story-system/projection-log.jsonl"
+    : > "$book/追踪/story-system/transactions/.keep"
+    : > "$book/追踪/story-system/commits/.keep"
+    printf '{"task_id":"legacy_unknown_type_20260101","task_type":"unknown prose task","status":"phase_pending"}\n' \
+        > "$book/追踪/workflow/current-task.json"
+
+    output="$(node "$SCRIPT" --project-root "$book" --user-intent "继续当前长篇修订" --json)"
+    printf '%s\n' "$output" > "$TMP_DIR/unknown-legacy-type.json"
+
+    node - "$TMP_DIR/unknown-legacy-type.json" <<'NODE'
+const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (out.status !== 'blocked_task_authority_missing') throw new Error(JSON.stringify(out));
+if ((out.legacy_status || {}).pointer_kind !== 'malformed_unrecognized') throw new Error(JSON.stringify(out.legacy_status));
+for (const option of ((out.visible_response || {}).options || [])) {
+  if (String(option.execution_command || '').includes('legacy-task-authority-recover.js')) {
+    throw new Error(JSON.stringify(option));
+  }
+}
+if (!/类型|无法识别|确认/.test(String((out.visible_response || {}).text || ''))) {
+  throw new Error(JSON.stringify(out.visible_response));
+}
 NODE
 }
 

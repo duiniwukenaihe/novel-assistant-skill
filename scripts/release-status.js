@@ -14,11 +14,13 @@ const {
 const SCHEMA_VERSION = '1.0.0';
 
 function parseArgs(argv) {
-  const args = { repoRoot: process.cwd(), json: false };
+  const args = { repoRoot: process.cwd(), json: false, verifyBundle: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--json') {
       args.json = true;
+    } else if (arg === '--verify-bundle') {
+      args.verifyBundle = true;
     } else if (arg === '--repo-root') {
       args.repoRoot = path.resolve(argv[++i]);
     } else if (arg === '--help' || arg === '-h') {
@@ -150,21 +152,22 @@ function remoteTrackingRef(repoRoot, remoteName, branchName) {
   return result.stdout || null;
 }
 
-function bundleVersion(repoRoot) {
+function bundleVersion(repoRoot, options = {}) {
+  const verifyContent = options.verifyContent === true;
   const manifestPath = path.join(repoRoot, 'skills', 'novel-assistant', 'novel-assistant-manifest.json');
   if (!fs.existsSync(manifestPath)) return { status: 'missing', manifestPath };
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   const sourceTreeId = manifest.sourceTreeId ? String(manifest.sourceTreeId) : null;
-  const computedSourceTreeId = sourceTreeId
+  const computedSourceTreeId = verifyContent && sourceTreeId
     ? computeManifestSourceTreeId(repoRoot, manifest.bundleName || 'novel-assistant', manifest.sourceLayout)
     : null;
   const sourceInputDigest = manifest.sourceInputDigest ? String(manifest.sourceInputDigest) : null;
-  const computedSourceInputDigest = sourceInputDigest
+  const computedSourceInputDigest = verifyContent && sourceInputDigest
     ? computeManifestSourceInputDigest(repoRoot, manifest.bundleName || 'novel-assistant', manifest.sourceLayout)
     : null;
   const currentCommit = sourceCommit(repoRoot);
   const bundleId = String(manifest.bundleId || '');
-  const computedBundleId = computeBundleId(path.dirname(manifestPath));
+  const computedBundleId = verifyContent ? computeBundleId(path.dirname(manifestPath)) : null;
   const sourceTreeCurrent = sourceTreeId && computedSourceTreeId ? sourceTreeId === computedSourceTreeId : null;
   const sourceInputCurrent = sourceInputDigest && computedSourceInputDigest
     ? sourceInputDigest === computedSourceInputDigest
@@ -172,8 +175,10 @@ function bundleVersion(repoRoot) {
   const manifestSourceState = String(manifest.sourceState || '');
   const repositoryState = sourceState(repoRoot);
   const currentSourceState = releaseSourceState(repoRoot, manifest.bundleName || 'novel-assistant');
-  const contentCurrent = bundleId === computedBundleId && sourceTreeCurrent === true && sourceInputCurrent !== false;
-  const releaseReady = contentCurrent && manifestSourceState === 'clean' && currentSourceState === 'clean';
+  const contentCurrent = verifyContent
+    ? bundleId === computedBundleId && sourceTreeCurrent === true && sourceInputCurrent !== false
+    : null;
+  const releaseReady = verifyContent && contentCurrent && manifestSourceState === 'clean' && currentSourceState === 'clean';
   return {
     status: 'present',
     manifestPath,
@@ -195,18 +200,22 @@ function bundleVersion(repoRoot) {
     sourceCommitLag: Boolean(currentCommit && manifest.sourceCommit && manifest.sourceCommit !== currentCommit),
     contentCurrent,
     releaseReady,
-    releaseStatus: releaseReady
-      ? 'candidate_ready'
-      : contentCurrent
-        ? 'candidate_rebuild_required'
-        : 'candidate_content_stale',
+    releaseStatus: !verifyContent
+      ? 'candidate_content_unverified'
+      : releaseReady
+        ? 'candidate_ready'
+        : contentCurrent
+          ? 'candidate_rebuild_required'
+          : 'candidate_content_stale',
   };
 }
 
-function buildStatus(repoRoot) {
+function buildStatus(repoRoot, options = {}) {
   const resolvedRoot = path.resolve(repoRoot);
   const githubRemote = githubRemoteInfo(resolvedRoot);
-  const behaviorGate = behaviorGateInfo(resolvedRoot);
+  const currentBundle = bundleVersion(resolvedRoot, { verifyContent: options.verifyBundle === true });
+  const productionRelease = productionReleaseInfo(resolvedRoot, currentBundle);
+  const behaviorGate = behaviorGateInfo(productionRelease);
   return {
     schemaVersion: SCHEMA_VERSION,
     repoRoot: resolvedRoot,
@@ -218,23 +227,62 @@ function buildStatus(repoRoot) {
       main: remoteTrackingRef(resolvedRoot, githubRemote.name, 'main'),
       publicRelease: remoteTrackingRef(resolvedRoot, githubRemote.name, 'github/public-release')
     },
-    bundleVersion: bundleVersion(resolvedRoot),
+    bundleVersion: currentBundle,
     behaviorGate,
+    productionRelease,
     privateRisk: privateRisk(resolvedRoot)
   };
 }
 
-function behaviorGateInfo(repoRoot) {
+function behaviorGateInfo(productionRelease) {
+  const behavior = (productionRelease.gates || []).find((gate) => gate.id === 'behavior_eval');
+  return behavior || {
+    status: 'unavailable',
+    reason: productionRelease.reason || 'missing_production_release_receipt',
+  };
+}
+
+function productionReleaseInfo(repoRoot, currentBundle) {
   try {
-    // Optional so release-status remains usable in minimal fixtures that copy only
-    // release-status.js and bundle-version.js.
-    const { evaluateGate } = require('./behavior-eval-release-gate');
-    return evaluateGate(repoRoot);
-  } catch (error) {
-    if (error && error.code === 'MODULE_NOT_FOUND' && /behavior-eval-release-gate/.test(String(error.message || ''))) {
-      return { status: 'unavailable', reason: 'behavior_eval_release_gate_not_installed' };
+    // Status is read-only and fast: it consumes the last explicit production
+    // gate receipt instead of running public-tree scans or deterministic tests.
+    const { readProductionReleaseReceipt } = require('./production-release-gate');
+    const result = readProductionReleaseReceipt(repoRoot);
+    const receiptBundleId = String(((result.bundle || {}).bundleId) || '');
+    const receiptCurrent = currentBundle.sourceState === 'clean'
+      && currentBundle.currentSourceState === 'clean'
+      && receiptBundleId === currentBundle.bundleId
+      && String(((result.bundle || {}).sourceTreeId) || '') === String(currentBundle.sourceTreeId || '')
+      && String(((result.bundle || {}).sourceInputDigest) || '') === String(currentBundle.sourceInputDigest || '');
+    if (result.status === 'pass' && !receiptCurrent) {
+      return {
+        status: 'blocked',
+        release_ready: false,
+        reason: 'production_release_receipt_stale',
+        receipt: result.receipt,
+      };
     }
-    return { status: 'error', error: error.message };
+    return {
+      status: result.status,
+      release_ready: Boolean(result.release_ready),
+      profile: result.profile,
+      reason: result.reason || '',
+      receipt: result.receipt || '',
+      required: result.required || [],
+      gates: (result.gates || []).map((gate) => ({
+        id: gate.id,
+        status: gate.status,
+        summary: gate.summary || '',
+        findings: Array.isArray(gate.findings) ? gate.findings : [],
+      })),
+      blockers: result.blockers || [],
+      bundle: result.bundle || null,
+    };
+  } catch (error) {
+    if (error && error.code === 'MODULE_NOT_FOUND' && /production-release-gate/.test(String(error.message || ''))) {
+      return { status: 'unavailable', release_ready: false, reason: 'production_release_gate_not_installed' };
+    }
+    return { status: 'error', release_ready: false, error: error.message };
   }
 }
 
@@ -250,6 +298,13 @@ function printText(status) {
   console.log(`bundle: ${status.bundleVersion.bundleId || 'unknown'} source tree: ${status.bundleVersion.sourceTreeId || 'unknown'}`);
   console.log(`release candidate: ${status.bundleVersion.releaseStatus || 'unknown'}`);
   console.log(`behavior gate: ${(status.behaviorGate || {}).status || 'unknown'}`);
+  const production = status.productionRelease || {};
+  console.log(`production release gate: ${production.status || 'unknown'} (release_ready=${production.release_ready === true})`);
+  if (Array.isArray(production.gates)) {
+    for (const gate of production.gates) {
+      console.log(`  - ${gate.id}: ${gate.status}`);
+    }
+  }
   console.log(`private risk: ${status.privateRisk.status}`);
   if (status.privateRisk.present.length > 0) {
     console.log(`private paths: ${status.privateRisk.present.join(', ')}`);
@@ -260,20 +315,31 @@ function printText(status) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('Usage: node scripts/release-status.js [--repo-root PATH] [--json]');
+    console.log('Usage: node scripts/release-status.js [--repo-root PATH] [--verify-bundle] [--json]');
     return;
   }
-  const status = buildStatus(args.repoRoot);
+  const status = buildStatus(args.repoRoot, { verifyBundle: args.verifyBundle });
   if (args.json) {
     process.stdout.write(`${JSON.stringify(status)}\n`);
   } else {
     printText(status);
   }
+  const production = status.productionRelease || {};
+  if (production.status && production.status !== 'pass') {
+    process.exit(2);
+  }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error.message);
-  process.exit(2);
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error.message);
+    process.exit(2);
+  }
 }
+
+module.exports = {
+  buildStatus,
+  productionReleaseInfo,
+};

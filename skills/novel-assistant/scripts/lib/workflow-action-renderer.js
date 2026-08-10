@@ -660,7 +660,9 @@ function decoratePendingAction(action) {
   });
   return {
     ...action,
-    interaction_profile: compactOptions ? 'numeric_compact_choice' : 'numeric_four_choice',
+    interaction_profile: compactOptions
+      ? 'numeric_compact_choice'
+      : options.length === 4 ? 'numeric_four_choice' : 'numeric_choice',
     options,
     created_at: action.created_at || now.toISOString(),
     expires_at: action.expires_at || new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
@@ -693,22 +695,19 @@ function normalizeVisibleOptions(input, freeTextEnabled, compactOptions = false)
   const existingInbox = raw.find((item) => String(item.action_id || item.action || '') === 'show_task_inbox');
   const options = [primary, ...business];
 
-  if (options.length >= 3 && options.length < 4 && existingPause) options.push(existingPause);
   const primaryAction = String(primary.action_id || primary.action || '');
-  if (options.length < 4 && primaryAction !== 'inspect_current_state') options.push(existingInspect || {
+  if (options.length === 1 && primaryAction !== 'inspect_current_state') options.push(existingInspect || {
     action_id: 'inspect_current_state', label: '查看当前进度与依据', risk_level: 'low', requires_user_confirm: false,
   });
-  if (options.length < 4) options.push(existingPause || {
-    action_id: 'pause', label: '暂停并保存断点', risk_level: 'low', requires_user_confirm: false,
-  });
-  if (options.length < 4) options.push(freeTextEnabled
-    ? (existingFree || { action_id: 'free_text', label: '输入其他要求', risk_level: 'low', requires_user_confirm: false })
-    : (existingInbox || { action_id: 'show_task_inbox', label: '返回任务列表', risk_level: 'low', requires_user_confirm: false }));
+  if (existingInspect && !options.some(item => String(item.action_id || item.action || '') === 'inspect_current_state')) options.push(existingInspect);
+  if (existingPause && !options.some(item => String(item.action_id || item.action || '') === 'pause')) options.push(existingPause);
+  if (freeTextEnabled && !options.some(item => String(item.action_id || item.action || '') === 'free_text')) {
+    options.push(existingFree || { action_id: 'free_text', label: '输入其他要求', risk_level: 'low', requires_user_confirm: false });
+  } else if (!freeTextEnabled && existingInbox) {
+    options.push(existingInbox);
+  }
 
   const chosen = options.slice(0, 4);
-  while (chosen.length < 4) {
-    chosen.push({ action_id: 'show_task_inbox', label: '返回任务列表', risk_level: 'low', requires_user_confirm: false });
-  }
   return chosen.map((item, index) => {
     const recommended = index === 0;
     const label = String(item.label || `选项 ${index + 1}`).replace(/（推荐）/gu, '').trim();
@@ -762,7 +761,9 @@ function renderPendingActionText(action, intro = '') {
   const lines = (Array.isArray(pending.options) ? pending.options : [])
     .slice(0, 4)
     .map((item, index) => `${index + 1}. ${String(item.label || `选项 ${index + 1}`)}`);
-  return [String(intro || '').trim(), String(pending.question || '请选择下一步').trim(), '', ...lines, '', '回复 1/2/3/4。']
+  const replyRange = lines.map((_, index) => index + 1).join('/');
+  const replyHint = replyRange ? `回复 ${replyRange}。` : '请直接说明你的要求。';
+  return [String(intro || '').trim(), String(pending.question || '请选择下一步').trim(), '', ...lines, '', replyHint]
     .filter((line, index, values) => line !== '' || (index > 0 && values[index - 1] !== ''))
     .join('\n')
     .trim();
@@ -850,6 +851,7 @@ module.exports = {
   buildShortSettingCandidatePendingAction,
   decoratePendingAction,
   normalizeRecommendations,
+  normalizeVisibleOptions,
   normalizeSelectedAction,
   projectTaskActionView,
   renderPendingActionText,

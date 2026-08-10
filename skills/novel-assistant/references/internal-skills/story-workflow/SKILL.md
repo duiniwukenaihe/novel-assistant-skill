@@ -77,11 +77,17 @@ description: |
 ## 阶段路由
 
 1. 更新确认已收束后，先读取 `task-inbox-protocol.md`，执行 `workflow-entry-guard.js`，并根据真实状态决定首屏、恢复或业务路由。
-2. 已有活动任务时，用户输入的自然语言作品意见必须先落入当前任务，不能只把助手摘要留在聊天里。V3 短篇由 `workflow-entry-guard.js --user-intent <用户原文> --write` 调用 `workflow-v3.js submit-feedback`，逐字保存并返回 `v3_feedback_recorded / analyze_v3_feedback`；助手完成影响分析后，用 `workflow-v3.js propose-feedback` 持久化方案并生成“采用方案 / 继续讨论 / 查看依据 / 暂停并保存”四项确认。只有 `accept_feedback_plan` 被当前四字段绑定消费后，才能投影到 memory、设定、大纲、Brief、正文和修订队列。V2 与非短篇任务继续走 `workflow-state-machine.js resolve-action --project-root . --input <用户原文> --bind-current --json`。不得用 `workflow-task-inbox.js` 代替反馈入账，也不得把 V3 意见回落到已冻结的 V2 状态机。
-3. 需要创建、恢复、推进、阻塞或解析编号时，仍以 `workflow-state-machine.js` 为权威；进入执行前读取 `runner-execution-protocol.md`。
+2. 已有活动任务时，用户输入的自然语言作品意见必须先落入当前任务，不能只把助手摘要留在聊天里。V3 短篇由 `workflow-entry-guard.js --user-intent <用户原文> --write` 调用 `workflow-v3.js submit-feedback`，逐字保存并返回 `v3_feedback_recorded / analyze_v3_feedback`；助手完成影响分析后，用 `workflow-v3.js propose-feedback` 持久化方案并生成“采用方案 / 继续讨论 / 查看依据 / 暂停并保存”四项确认。只有 `accept_feedback_plan` 被当前四字段绑定消费后，才能投影到 memory、设定、大纲、Brief、正文和修订队列。新项目的 `planning_confirmation` 是作者对已展示规划的确认：确认成功必须在同一工作流锁内从已接受的 `小节大纲.md` 写入当前 `section-title-lock.json`，再进入 Brief；绝不允许测试、宿主或助手在确认后手工补写标题锁。涉及设定或大纲时，先进入 `feedback_apply_patch`：该阶段只允许写受控暂存规划资产，必须核验完整资产集、确认时的来源摘要与标题确认边界，并以单笔事务回写全部正式规划；事务证据、项目状态、人物记忆和反馈队列完成后才进入 Brief。不得把规划文件混入 Brief 的 `write_set`，不得先改正文再补规划。标题发生变化时，方案确认必须展示完整新标题清单；标题未变才可继承原确认。V2 与非短篇任务继续走 `workflow-state-machine.js resolve-action --project-root . --input <用户原文> --bind-current --json`。不得用 `workflow-task-inbox.js` 代替反馈入账，也不得把 V3 意见回落到已冻结的 V2 状态机。
+3. 非 V3 的任务在创建、恢复、推进、阻塞或解析编号时，以 `workflow-state-machine.js` 为权威；进入执行前读取 `runner-execution-protocol.md`。
 4. L3 只执行 packet 指定的专业模块。若结果涉及正式资产或短篇根资产，必须先读取 `canonical-write-protocol.md`；事务证据不足不得写入或关闭阶段。
 5. 应用 result packet、处理缺失回执、生成完成声明或下一步候选前，必须读取 `completion-evidence-protocol.md`。
 6. 任何状态不依赖聊天记忆；`追踪/workflow/current-task.json`、任务目录、收件箱和结果回执是恢复依据。
+
+### V3 短篇任务动作合同
+
+焦点任务同时满足 `short_write + engine_version=3 + task_schema_version=3 + workflow_contract_version=3` 时，`workflow-task-inbox.js` 必须使用 V3 动作投影。没有 `pending_action` 时返回 `selection_contract=v3_task_action_projection` 和 `status=current_v3_task_actions`：通常继续执行 `workflow-v3.js describe-stage`，查看执行 `workflow-v3.js show`；只有 `planning_confirmation` 的继续必须执行 `workflow-v3.js run-current-stage --expected-version <当前版本>`，先落盘“采用当前方案 / 进入 Chat 修改方案”两个选择，不能把确认阶段伪装成普通阶段描述。作者选择进入 Chat 后，返回 `selection_contract=v3_planning_chat_input`：第 1 项是直接输入修改意见，不得补造第 4 项；随后按返回的 V3 stage contract 执行。不得将 V3 当前任务动作回退到 workflow-state-machine.js。
+
+有已提交选择时，`workflow-v3.js show` 的文本与四字段绑定是唯一可见菜单，收件箱和宿主不得重建。作者自由意见由 guard 传给 `workflow-v3.js submit-feedback`，再由 `workflow-v3.js propose-feedback` / 已提交绑定处理；不得用 V2 `resolve-action` 吸收 V3 数字或反馈。
 
 ### 已授权审阅的连续执行
 

@@ -71,7 +71,36 @@ if (result.protagonist !== '阿岚' || !result.characters.some(item => item.name
 if (result.characters.some(item => item.name === '五个核心爆点')) throw new Error(JSON.stringify(result));
 NODE
 
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "short character contract accepts level-two numbered protagonist and opponent profiles" {
+  cat > "$BOOK/设定.md" <<'EOF'
+# 设定
+
+## 一、第一人称主角：林砚（社区档案员）
+第一人称“我”，二十七岁社区档案员。目标是在公开听证前保住原始赔偿清单并查清改名责任；最怕自己的程序坚持害同事失业，缺陷是过度相信补一份登记表就能解决问题。
+### 行动边界
+能力边界是没有调查权、不能录音或动用媒体。最终主动选择是亲自在听证席提交证据并接受越级的纪律代价。
+
+## 二、主要对手：周启明（项目负责人）
+他的目标是保住更新项目工期和个人升迁，认为把清单改成历史问题能避免补偿重算；拥有审批权限、项目材料和公开发言资源。
+### 代价与边界
+他不能公开销毁原件，失败会失去签字权与审计信用。升级路径从要求撤件到在听证前反指定性。
+
+## 人物关系与责任债
+林砚受周启明项目材料约束，周启明利用她对同事的愧疚施压；两人的利益冲突必须在公开核验中落到具体责任。
+EOF
+
+  run node - "$MODULE" "$BOOK/设定.md" <<'NODE'
+const fs = require('fs');
+const api = require(process.argv[2]);
+const text = fs.readFileSync(process.argv[3], 'utf8');
+process.stdout.write(JSON.stringify(api.analyzeShortCharacterContract(text)));
+NODE
+
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | jq -e '.status == "pass" and .protagonist == "林砚" and .pressure_actor == "周启明"'
 }
 
 @test "accepted character contract projects compact active cast memory" {

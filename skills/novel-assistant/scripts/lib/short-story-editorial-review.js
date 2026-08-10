@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { collectShortReviewStaticEvidence } = require('./short-review-static-evidence');
 
 const SCHEMA_VERSION = '1.0.0';
 const VALID_DECISIONS = new Set(['pass', 'revise']);
@@ -49,6 +50,7 @@ function buildShortStoryEvidencePack(projectRoot, options = {}) {
   const outlineText = readText(path.join(root, '小节大纲.md'));
   const characterHints = extractCharacterHints(settingText, sections);
   const identityHints = extractIdentityHints(settingText);
+  const staticEvidence = collectShortReviewStaticEvidence(storyPath);
   return {
     schemaVersion: SCHEMA_VERSION,
     status: 'ok',
@@ -69,6 +71,8 @@ function buildShortStoryEvidencePack(projectRoot, options = {}) {
       ending_excerpt: excerpt(section.body, 180, true),
     })),
     structural_signals: structuralSignals,
+    static_findings: staticEvidence.static_findings,
+    detector_status: staticEvidence.detector_status,
     character_hints: characterHints,
     identity_hints: identityHints,
     planning_excerpts: {
@@ -83,7 +87,7 @@ function buildShortStoryEvidencePack(projectRoot, options = {}) {
       'protagonist_identity_setup_and_payoff',
       'climax_runway_aftermath_and_title_promise',
     ],
-    note: '结构信号是定位线索，不等于故事结论；总编辑必须引用正文原句作证。',
+    note: '结构信号和静态检测都是定位线索，不等于故事结论；总编辑必须引用正文原句作证。',
   };
 }
 
@@ -320,13 +324,13 @@ function validateAssessment(value, prefix, fields, findings) {
 
 function collectReaderEvidenceQuotes(reader) {
   const quotes = [];
-  for (const row of (reader || {}).section_reader_response || []) quotes.push((row || {}).evidence_quote);
-  for (const row of (reader || {}).drop_off_points || []) quotes.push((row || {}).evidence_quote);
-  for (const row of (reader || {}).character_impressions || []) quotes.push(...((row || {}).evidence_quotes || []));
-  for (const row of (reader || {}).identity_continuity || []) quotes.push(...((row || {}).evidence_quotes || []));
-  for (const row of (reader || {}).supporting_character_reality || []) quotes.push(...((row || {}).evidence_quotes || []));
-  for (const row of (reader || {}).reveal_aftershock || []) quotes.push(...((row || {}).later_evidence_quotes || []));
-  quotes.push(...(((((reader || {}).promise_response) || {}).evidence_quotes) || []));
+  for (const row of arrayValues((reader || {}).section_reader_response)) quotes.push((row || {}).evidence_quote);
+  for (const row of arrayValues((reader || {}).drop_off_points)) quotes.push((row || {}).evidence_quote);
+  for (const row of arrayValues((reader || {}).character_impressions)) quotes.push(...arrayValues((row || {}).evidence_quotes));
+  for (const row of arrayValues((reader || {}).identity_continuity)) quotes.push(...arrayValues((row || {}).evidence_quotes));
+  for (const row of arrayValues((reader || {}).supporting_character_reality)) quotes.push(...arrayValues((row || {}).evidence_quotes));
+  for (const row of arrayValues((reader || {}).reveal_aftershock)) quotes.push(...arrayValues((row || {}).later_evidence_quotes));
+  quotes.push(...arrayValues((((reader || {}).promise_response) || {}).evidence_quotes));
   return quotes.map(value => String(value || '').trim()).filter(Boolean);
 }
 
@@ -335,11 +339,11 @@ function collectEditorialEvidenceQuotes(card) {
   const opening = card.opening_assessment || {};
   const ending = card.climax_ending_assessment || {};
   quotes.push(opening.evidence_quote, ending.climax_quote, ending.ending_quote);
-  for (const row of card.section_function_matrix || []) quotes.push((row || {}).evidence_quote);
-  for (const row of card.character_arc_matrix || []) quotes.push(...((row || {}).evidence_quotes || []));
-  for (const row of card.identity_payoff_matrix || []) quotes.push((row || {}).setup_quote, (row || {}).payoff_quote);
-  for (const row of card.reveal_aftershock_matrix || []) quotes.push(...((row || {}).evidence_quotes || []));
-  for (const row of card.findings || []) quotes.push((row || {}).evidence_quote);
+  for (const row of arrayValues(card.section_function_matrix)) quotes.push((row || {}).evidence_quote);
+  for (const row of arrayValues(card.character_arc_matrix)) quotes.push(...arrayValues((row || {}).evidence_quotes));
+  for (const row of arrayValues(card.identity_payoff_matrix)) quotes.push((row || {}).setup_quote, (row || {}).payoff_quote);
+  for (const row of arrayValues(card.reveal_aftershock_matrix)) quotes.push(...arrayValues((row || {}).evidence_quotes));
+  for (const row of arrayValues(card.findings)) quotes.push((row || {}).evidence_quote);
   return quotes.map(value => String(value || '').trim()).filter(Boolean);
 }
 
@@ -347,6 +351,8 @@ function readStoryTextFromPack(pack) {
   const file = String(pack.__story_file || '');
   return file && fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
 }
+
+function arrayValues(value) { return Array.isArray(value) ? value : []; }
 
 function attachEvidenceRuntime(pack, storyFile) {
   return Object.defineProperty(pack, '__story_file', { value: storyFile, enumerable: false });

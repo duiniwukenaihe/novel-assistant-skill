@@ -10,6 +10,7 @@ const shortProjectState = require('../short-project-state');
 const { createStageAttemptId } = require('./task-store');
 const legacyProject = require('./migrations/legacy-short-project');
 const migration = require('./migrations/v2-to-v3');
+const { classifyLegacyWorkflow } = require('../legacy-workflow-type');
 
 const ENGINE_VERSION = 3;
 const TASK_SCHEMA_VERSION = 3;
@@ -58,7 +59,15 @@ function classifyTask(task) {
       reason: 'v3_contract_versions_current',
     });
   }
-  if (String((task || {}).workflow_type || '') !== 'short_write') {
+  const legacyType = classifyLegacyWorkflow(task);
+  if (legacyType.status !== 'supported') {
+    return compatibility('unsupported', {
+      workflow_id: String(task.workflow_id || ''),
+      state_version: Number(task.state_version || 0),
+      reason: legacyType.reason,
+    });
+  }
+  if (legacyType.workflow_type !== 'short_write') {
     return compatibility('unsupported', {
       workflow_id: String((task || {}).workflow_id || ''),
       state_version: Number((task || {}).state_version || 0),
@@ -88,7 +97,8 @@ function buildMigrationPlan(projectRoot, workflowId) {
   if (resolved.status !== 'ok') throw gatewayError('COMPATIBILITY_TASK_UNAVAILABLE', resolved.message);
   const task = resolved.task;
   if (isV3Task(task)) throw gatewayError('COMPATIBILITY_ALREADY_CURRENT', 'task already uses V3');
-  if (String(task.workflow_type || '') !== 'short_write') {
+  const legacyType = classifyLegacyWorkflow(task);
+  if (legacyType.status !== 'supported' || legacyType.workflow_type !== 'short_write') {
     throw gatewayError('COMPATIBILITY_WORKFLOW_UNSUPPORTED', 'only V2 short_write tasks can migrate');
   }
   const mapped = mapV2Checkpoint(task, {});
@@ -392,6 +402,7 @@ function gatewayError(code, message, fields = {}) {
 module.exports = {
   applyMigration,
   buildMigrationPlan,
+  classifyTask,
   collectProtectedAssetDigests,
   inspectCompatibility,
   mapV2Checkpoint,

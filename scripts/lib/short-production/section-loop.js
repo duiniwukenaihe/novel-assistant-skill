@@ -135,6 +135,29 @@ function finalizeBrief(context = {}) {
     });
   }
 
+  const briefRel = String(context.brief || `写作Brief_第${pad(sectionIndex)}节.md`);
+  const execution = task.stage_execution && typeof task.stage_execution === 'object' ? task.stage_execution : {};
+  const memoryCheck = checkShortMemoryStage({
+    projectRoot: root,
+    task,
+    execution,
+    sectionIndex,
+    stageId,
+  });
+  if (memoryCheck.blocking) {
+    return stageResult({
+      kind: 'blocked',
+      code: 'short_memory_context_refresh_required',
+      stage_id: stageId,
+      failure_family: 'memory_context_stale',
+      section_index: sectionIndex,
+      brief: briefRel,
+      memory_status: memoryCheck.memory_status,
+      stale_sources: memoryCheck.stale_sources,
+      instruction: memoryCheck.instruction,
+    });
+  }
+
   const titleLock = readJson(shortStateFile(root, 'section-title-lock.json')) || {};
   const titleEntry = (Array.isArray(titleLock.sections) ? titleLock.sections : [])
     .find((item) => Number((item || {}).section_index) === sectionIndex);
@@ -161,7 +184,6 @@ function finalizeBrief(context = {}) {
     });
   }
 
-  const briefRel = String(context.brief || `写作Brief_第${pad(sectionIndex)}节.md`);
   const briefFile = safeProjectFile(root, briefRel);
   if (!briefFile || !fs.existsSync(briefFile) || !fs.statSync(briefFile).isFile()) {
     return stageResult({
@@ -393,6 +415,62 @@ function finalizeDraft(context = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// finalizeRepair
+// ---------------------------------------------------------------------------
+
+// A repair is only complete when the candidate prose differs from the exact
+// bytes that caused the workflow to enter section_repair. The Engine records
+// that input digest when it routes from a gate to section_repair; this service
+// is deliberately read-only and returns a StageResult for the Engine to apply.
+function finalizeRepair(context = {}) {
+  const root = path.resolve(context.projectRoot || '');
+  const task = context.task && typeof context.task === 'object' ? context.task : {};
+  const stageId = 'section_repair';
+  const draftRel = String(context.draft || '');
+  const draftFile = safeProjectFile(root, draftRel);
+  if (!draftFile || !fs.existsSync(draftFile) || !fs.statSync(draftFile).isFile()) {
+    return stageResult({
+      kind: 'blocked',
+      code: 'awaiting_short_draft',
+      stage_id: stageId,
+      failure_family: 'draft_missing',
+      draft: draftRel,
+      instruction: '只修改当前节候选稿，然后重新运行本阶段。',
+    });
+  }
+  if (!fs.readFileSync(draftFile, 'utf8').trim()) {
+    return stageResult({
+      kind: 'blocked',
+      code: 'awaiting_short_draft',
+      stage_id: stageId,
+      failure_family: 'draft_empty',
+      draft: draftRel,
+      instruction: '当前候选稿为空；恢复当前节正文后重新运行本阶段。',
+    });
+  }
+  const execution = task.stage_execution && typeof task.stage_execution === 'object' ? task.stage_execution : {};
+  const beforeDigest = String(execution.draft_input_digest || '');
+  const afterDigest = digestFile(draftFile);
+  if (!beforeDigest || beforeDigest === afterDigest) {
+    return stageResult({
+      kind: 'blocked',
+      code: 'awaiting_short_draft_change',
+      stage_id: stageId,
+      failure_family: 'draft_unchanged',
+      draft: draftRel,
+      instruction: '候选稿相对进入回炉前未发生变化；只修改当前节正文后重新运行本阶段。',
+    });
+  }
+  return stageResult({
+    kind: 'completed',
+    code: 'short_section_repair_ready',
+    stage_id: stageId,
+    draft: draftRel,
+    draft_digest: afterDigest,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // runMachineGate
 // ---------------------------------------------------------------------------
 
@@ -615,6 +693,8 @@ function runStoryGate(context = {}) {
         code: 'short_story_value_gate_revision_required',
         stage_id: stageId,
         section_index: sectionIndex,
+        draft: draftRel,
+        draft_digest: draftDigest,
         evidence: evidenceRel,
         outline_contract_digest: outlineContract.contract_digest,
         findings,
@@ -1694,6 +1774,7 @@ function arrayValue(value) {
 module.exports = {
   finalizeBrief,
   finalizeDraft,
+  finalizeRepair,
   runMachineGate,
   runStoryGate,
   acceptSection,

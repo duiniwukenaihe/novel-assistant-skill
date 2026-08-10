@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { analyzeShortCharacterContract } = require('./short-character-contract');
-const { readShortProjectState } = require('./short-project-state');
+const { parseShortSectionOrdinal, readShortProjectState } = require('./short-project-state');
 
 const REQUIRED_ASSETS = Object.freeze(['素材卡.md', '设定.md', '小节大纲.md']);
 const REQUIRED_SECTION_SIGNALS = Object.freeze([
@@ -63,12 +63,12 @@ function readJson(file) {
 
 function outlineSections(text) {
   const source = String(text || '');
-  const heading = /^#{1,6}\s*第\s*0*(\d+)\s*节[^\n]*$/gm;
+  const heading = /^#{1,6}\s*第\s*([0-9０-９一二三四五六七八九十百千两〇零]+)\s*节[^\n]*$/gmu;
   const matches = Array.from(source.matchAll(heading));
   return matches.map((match, index) => ({
-    number: Number(match[1]),
+    number: parseShortSectionOrdinal(match[1]),
     body: source.slice(match.index, matches[index + 1] ? matches[index + 1].index : source.length),
-  }));
+  })).filter((section) => section.number > 0);
 }
 
 function legacyOutlineSectionNumbers(text) {
@@ -399,7 +399,10 @@ function analyzeHookAndPressureChain(sections, preservedSections) {
     if (!previous) continue;
     const previousHook = labeledValue(previous.body, ['节尾钩子', '停顿钩', '结尾回扣', '代价收束', 'handoff_out']);
     const handoff = labeledValue(section.body, ['承接上节', '上节承接', '接力入', 'handoff_in']);
-    if (previousHook && handoff && storySignalOverlap(previousHook, handoff) < 0.2) {
+    // The section-level handoff gate already accepts a concrete Chinese anchor
+    // at 0.08. Requiring 0.20 here rejects the same valid handoff whenever the
+    // next section expands it into a fuller scene plan.
+    if (previousHook && handoff && storySignalOverlap(previousHook, handoff) < 0.08) {
       addChainFinding({ findings, protectedCurrent, finding: {
         code: 'section_hook_handoff_disconnected',
         section: section.number,
@@ -476,6 +479,7 @@ function longestEvidenceOnlyRun(events) {
 }
 
 function labeledValue(body, labels) {
+  const normalizedLabels = labels.map(normalizeOutlineLabel);
   const parsed = String(body || '').split(/\r?\n/u).map((line) => {
     const match = line.match(/^\s*(?:[-*]\s+)?(?:\*\*)?(.+?)(?:\*\*)?\s*[：:]\s*(.+?)\s*$/u);
     if (!match) return null;
@@ -485,16 +489,46 @@ function labeledValue(body, labels) {
   // Callers list canonical contract fields first and explanatory aliases later.
   // Prefer the last occurrence of the highest-priority label so a final contract
   // block can override an earlier planning note without duplicating machine data.
-  for (const label of labels.map(normalizeOutlineLabel)) {
+  for (const label of normalizedLabels) {
     for (let index = parsed.length - 1; index >= 0; index -= 1) {
       if (parsed[index].label === label) return parsed[index].value;
     }
   }
-  for (const label of labels.map(normalizeOutlineLabel)) {
+  const multiline = multilineLabeledBlocks(body);
+  for (const label of normalizedLabels) {
+    for (let index = multiline.length - 1; index >= 0; index -= 1) {
+      if (multiline[index].label === label) return multiline[index].value;
+    }
+  }
+  for (const label of normalizedLabels) {
     const blocks = headingBlocks(body).filter((item) => item.label === label);
     if (blocks.length) return blocks[blocks.length - 1].value;
   }
   return '';
+}
+
+function multilineLabeledBlocks(body) {
+  const lines = String(body || '').split(/\r?\n/u);
+  const blocks = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^(\s*)(?:[-*]\s+)?(?:\*\*)?(.+?)(?:\*\*)?\s*[：:]\s*$/u);
+    if (!match) continue;
+    const indent = match[1].length;
+    const content = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const next = lines[cursor];
+      const nextField = next.match(/^(\s*)(?:[-*]\s+)?(?:\*\*)?(.+?)(?:\*\*)?\s*[：:]\s*$/u);
+      if (nextField && nextField[1].length <= indent) break;
+      if (/^\s*#{1,6}\s+/u.test(next)) break;
+      content.push(next);
+    }
+    const value = content
+      .map((line) => line.trim().replace(/^(?:[-*]|\d+[.、)])\s*/u, ''))
+      .filter(Boolean)
+      .join('；');
+    if (value) blocks.push({ label: normalizeOutlineLabel(match[2]), value });
+  }
+  return blocks;
 }
 
 function headingListItems(body, labels) {

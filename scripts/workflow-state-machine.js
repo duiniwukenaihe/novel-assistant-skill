@@ -996,7 +996,7 @@ function buildNewTask(args, tpl, extra) {
         task.review_plan_path = reference.path;
         task.review_plan_digest = reference.digest;
       }
-      task.review_batches = buildReviewBatchState(task.workflow_id, task.scope, task.task_dir, reviewPlan);
+      task.review_batches = buildReviewBatchState(task.workflow_id, reviewPlan.parent_scope, task.task_dir, reviewPlan);
     }
   }
   return task;
@@ -8868,8 +8868,9 @@ function applyResult(args) {
       }]);
     }
   }
-  const reviewPlanValidation = validateTaskReviewPlan(root, task);
-  if (reviewPlanValidation.blocked) return reviewPlanValidation.blocked;
+  let reviewPlanValidation = validateTaskReviewPlan(root, task);
+  const deferredReviewPlanRefresh = canRefreshReviewPlanAfterAcceptedRepair(task, result, reviewPlanValidation);
+  if (reviewPlanValidation.blocked && !deferredReviewPlanRefresh) return reviewPlanValidation.blocked;
   if (reviewPlanValidation.legacy) return blockedLegacyReviewPlan(task);
   if (Number(task.result_contract_version || 1) >= 2 && !resolveSafeProjectFile(root, resultFile)) {
     return blocked('blocked_result_packet_path_unsafe', 'v2 result packet 必须位于项目目录内。');
@@ -8901,6 +8902,10 @@ function applyResult(args) {
   const validation = validateResultAgainstTask(task, result, root, resultFile, registryCheck.template);
   if (validation.status !== 'ok') {
     return validation;
+  }
+  if (deferredReviewPlanRefresh) {
+    reviewPlanValidation = refreshReviewPlanAfterAcceptedRepair(root, task, result);
+    if (reviewPlanValidation.blocked) return reviewPlanValidation.blocked;
   }
   const longChapterProseBinding = stampLongChapterProseBinding(root, task, result, resultFile);
   if (longChapterProseBinding) return longChapterProseBinding;
@@ -9081,6 +9086,44 @@ function applyResult(args) {
       resultHistory,
     },
   });
+}
+
+function canRefreshReviewPlanAfterAcceptedRepair(task, result, validation) {
+  return String((task || {}).workflow_type || '') === 'review_repair'
+    && String((task || {}).current_stage || '') === 'execute_repair'
+    && String((result || {}).stage_id || '') === 'execute_repair'
+    && String((result || {}).step_status || '') === 'completed'
+    && String((((result || {}).chapter_commit || {}).mode) || '') === 'transactional'
+    && String((((validation || {}).blocked || {}).status) || '') === 'blocked_review_plan_stale';
+}
+
+function refreshReviewPlanAfterAcceptedRepair(root, task, result) {
+  const previousPath = String((task || {}).review_plan_path || '');
+  const previousDigest = String((task || {}).review_plan_digest || '');
+  const reviewPlan = buildInitialReviewPlan(root, task);
+  const refreshNumber = Number((task || {}).state_version || 0) + 1;
+  const refreshPath = `${task.task_dir}/review-plan.recheck-${String(refreshNumber).padStart(4, '0')}.json`;
+  const reference = writeReviewPlan(root, { ...task, review_plan_path: refreshPath }, reviewPlan);
+  task.review_plan_history = [
+    ...(Array.isArray(task.review_plan_history) ? task.review_plan_history : []),
+    {
+      path: previousPath,
+      digest: previousDigest,
+      replaced_after_stage: 'execute_repair',
+      accepted_commit_id: String((((result || {}).chapter_commit || {}).accepted_commit_id) || ''),
+      replaced_at: new Date().toISOString(),
+    },
+  ].filter(item => item.path && item.digest).slice(-20);
+  task.review_plan_path = reference.path;
+  task.review_plan_digest = reference.digest;
+  task.review_plan_refresh = {
+    source_stage: 'execute_repair',
+    accepted_commit_id: String((((result || {}).chapter_commit || {}).accepted_commit_id) || ''),
+    previous_digest: previousDigest,
+    current_digest: reference.digest,
+    refreshed_at: new Date().toISOString(),
+  };
+  return validateTaskReviewPlan(root, task);
 }
 
 function finalizeAcceptedResult({

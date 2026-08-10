@@ -7,7 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const USAGE = `Usage: node scripts/production-smoke-matrix.js [--repo-root <dir>] [--json]
+const USAGE = `Usage: node scripts/production-smoke-matrix.js [--repo-root <dir>] [--receipt-out <file>] [--json]
        node scripts/production-smoke-matrix.js --route-reference <user-intent> [--bundle] [--json]
 
 Runs deterministic production smoke checks for novel-assistant skill routing:
@@ -19,6 +19,7 @@ const jsonOutput = args.includes('--json');
 const routeReferenceIntent = readOption('--route-reference');
 const routeReferenceLayer = args.includes('--bundle') ? 'bundle' : 'source';
 const repoRoot = path.resolve(readOption('--repo-root') || path.join(__dirname, '..'));
+const deterministicReceiptOut = readOption('--receipt-out');
 const WORKFLOW_ENTRY = 'src/internal-skills/story-workflow/SKILL.md';
 const WORKFLOW_REFERENCES = 'src/internal-skills/story-workflow/references';
 const ENTRY_RUNTIME = 'skills/novel-assistant/references/entry-runtime-contract.md';
@@ -1815,6 +1816,8 @@ const result = {
   findings,
 };
 
+if (deterministicReceiptOut) writeDeterministicReceipt(deterministicReceiptOut, result);
+
 if (jsonOutput) {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 } else {
@@ -1822,3 +1825,27 @@ if (jsonOutput) {
 }
 
 process.exit(result.status === 'pass' ? 0 : 2);
+
+function writeDeterministicReceipt(file, matrix) {
+  const manifest = readJsonFileForSmoke(
+    path.join(repoRoot, 'skills', 'novel-assistant', 'novel-assistant-manifest.json'),
+    'novel-assistant manifest',
+  );
+  const groups = [
+    ...matrix.globalChecks.map((item) => item.id),
+    ...matrix.cases.map((item) => item.id),
+  ];
+  const receipt = {
+    schemaVersion: '1.0.0',
+    status: matrix.status === 'pass' ? 'pass' : 'fail',
+    exitCode: matrix.status === 'pass' ? 0 : 2,
+    generatedAt: matrix.generatedAt,
+    bundleId: String(manifest.bundleId || ''),
+    sourceCommit: String(manifest.sourceCommit || ''),
+    testGroups: groups,
+    findingCount: matrix.findings.length,
+  };
+  const target = path.resolve(file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${JSON.stringify(receipt, null, 2)}\n`);
+}

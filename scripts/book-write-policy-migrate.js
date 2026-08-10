@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { acquireBookWriteLease, atomicWriteJson, atomicWriteText } = require('./lib/workflow-state-store');
+const { isShortStoryProject } = require('./lib/canonical-write-policy');
 
 const POLICY_FILE = '追踪/story-system/write-policy.json';
 const IDENTITY_FILE = '追踪/story-system/chapter-identities.json';
@@ -236,11 +237,15 @@ function buildConfirmIntentMenu(snapshotId, intent) {
 function previewMigration(root, options = {}) {
   const policy = readPolicy(root);
   const discoveredIdentities = discoverChapterIdentities(root);
+  const projectKind = isShortStoryProject(root) ? 'short' : 'long';
+  const protectedAssetHashes = projectKind === 'short' ? discoverShortProtectedAssets(root) : [];
   const authorities = readChapterAuthorities(root);
-  const sourceState = migrationSourceState(root, discoveredIdentities);
+  const sourceState = migrationSourceState(root, discoveredIdentities, projectKind, protectedAssetHashes);
   const sourceFingerprint = hashJson(sourceState);
   const initialPreviewId = `write-policy-${sourceFingerprint.slice(7, 23)}`;
-  const unresolvedResolution = resolveChapterIdentities(root, discoveredIdentities, authorities);
+  const unresolvedResolution = resolveChapterIdentities(root, discoveredIdentities, authorities, {
+    allowEmpty: projectKind === 'short',
+  });
   const selectionManifest = options.selectionManifest || (options.selectionFile
     ? readSelectionManifest(path.resolve(options.selectionFile))
     : null);
@@ -286,6 +291,7 @@ function previewMigration(root, options = {}) {
     fingerprint,
     source_fingerprint: sourceFingerprint,
     selection_applied: selectionApplied,
+    project_kind: projectKind,
     policy_mode: policy.mode,
     conflicts,
     chapter_identities: chapterIdentities,
@@ -293,7 +299,9 @@ function previewMigration(root, options = {}) {
       snapshot_id: previewId,
       file: relativeSnapshotFile(previewId),
       metadata: trackedMetadata(root),
-      prose_hashes: discoveredIdentities.map(identity => ({ path: identity.path, hash: identity.content_hash })),
+      prose_hashes: projectKind === 'short'
+        ? protectedAssetHashes
+        : discoveredIdentities.map(identity => ({ path: identity.path, hash: identity.content_hash })),
     },
   };
   if (selectionApplied) result.selections = selections;
@@ -374,6 +382,7 @@ function confirmMigration(root, args) {
       metadata_before: captureMetadata(root),
       prose_hashes: preview.rollback_snapshot.prose_hashes,
       chapter_identities: preview.chapter_identities,
+      project_kind: preview.project_kind,
       selections: preview.selections || [],
       all_candidates: preview.all_candidates || [],
       authority_evidence: preview.authority_evidence || [],
@@ -516,7 +525,12 @@ function readPolicy(root) {
   }
 }
 
-function migrationSourceState(root, discoveredIdentities = discoverChapterIdentities(root)) {
+function migrationSourceState(
+  root,
+  discoveredIdentities = discoverChapterIdentities(root),
+  projectKind = isShortStoryProject(root) ? 'short' : 'long',
+  protectedAssetHashes = projectKind === 'short' ? discoverShortProtectedAssets(root) : [],
+) {
   const activeCandidates = discoveredIdentities.map(identity => ({
     volume: identity.volume,
     chapter: identity.chapter,
@@ -530,7 +544,12 @@ function migrationSourceState(root, discoveredIdentities = discoverChapterIdenti
     const content = fs.readFileSync(file);
     return { path: relative, exists: true, content_base64: content.toString('base64') };
   });
-  return { active_candidates: activeCandidates, authority_files: authorityFiles };
+  return {
+    project_kind: projectKind,
+    active_candidates: activeCandidates,
+    protected_assets: protectedAssetHashes,
+    authority_files: authorityFiles,
+  };
 }
 
 function readSelectionManifest(file) {
@@ -674,6 +693,30 @@ function discoverChapterIdentities(root) {
   return identities.sort((left, right) => left.volume.localeCompare(right.volume, 'zh-Hans-CN') || left.chapter - right.chapter || left.path.localeCompare(right.path));
 }
 
+function discoverShortProtectedAssets(root) {
+  const files = [];
+  for (const relative of ['正文.md', '小节大纲.md', '设定.md']) {
+    const file = path.join(root, relative);
+    if (!fs.existsSync(file)) continue;
+    const stat = fs.lstatSync(file);
+    if (!stat.isSymbolicLink() && stat.isFile()) files.push(file);
+  }
+
+  const proseRoot = path.join(root, '正文');
+  if (fs.existsSync(proseRoot)) {
+    const stat = fs.lstatSync(proseRoot);
+    if (!stat.isSymbolicLink() && stat.isDirectory()) {
+      walkFiles(proseRoot, (file) => {
+        if (/^第\s*0*\d+\s*节.*\.(?:md|txt)$/iu.test(path.basename(file))) files.push(file);
+      });
+    }
+  }
+
+  return [...new Set(files.map(file => path.resolve(file)))]
+    .map(file => ({ path: relativePosix(root, file), hash: hashFile(file) }))
+    .sort((left, right) => left.path.localeCompare(right.path, 'zh-Hans-CN'));
+}
+
 function isArchivedChapterCopy(relative) {
   const parts = String(relative || '').split('/');
   const base = parts.at(-1) || '';
@@ -746,7 +789,7 @@ function readChapterAuthorities(root) {
   return { pathsBySource, conflicts };
 }
 
-function resolveChapterIdentities(root, identities, authorities) {
+function resolveChapterIdentities(root, identities, authorities, options = {}) {
   const grouped = new Map();
   for (const identity of identities) {
     const key = chapterIdentityKey(identity.volume, identity.chapter);
@@ -756,7 +799,7 @@ function resolveChapterIdentities(root, identities, authorities) {
 
   const resolved = [];
   const conflicts = [];
-  if (!identities.length) {
+  if (!identities.length && !options.allowEmpty) {
     conflicts.push({
       code: 'missing_active_chapter_identity',
       path: '正文',

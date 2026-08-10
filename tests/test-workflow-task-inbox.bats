@@ -315,6 +315,23 @@ JSON
     ! grep -q 'repair execution plan' "$TMP_DIR/out.json"
 }
 
+@test "workflow task inbox translates a V3 editorial review stage for authors" {
+    mkdir -p "$TMP_DIR/book/追踪/workflow/tasks/wf-editorial-review"
+    cat > "$TMP_DIR/book/追踪/workflow/tasks/wf-editorial-review/task.json" <<'JSON'
+{
+  "workflow_id":"wf-editorial-review","workflow_type":"short_write","status":"running",
+  "task_dir":"追踪/workflow/tasks/wf-editorial-review","user_goal":"中性短篇目标",
+  "current_stage":"editorial_review","current_step":"editorial_review",
+  "lifecycle":{"status":"active"}
+}
+JSON
+
+    node "$SCRIPT" --project-root "$TMP_DIR/book" --json > "$TMP_DIR/out.json"
+
+    grep -q '"visible_stage": "全篇审阅"' "$TMP_DIR/out.json"
+    ! grep -q 'editorial review' "$TMP_DIR/out.json"
+}
+
 @test "workflow task inbox translates stale stored next-action labels" {
     mkdir -p "$TMP_DIR/book/追踪/workflow/tasks/wf-stale-label"
     cat > "$TMP_DIR/book/追踪/workflow/tasks/wf-stale-label/task.json" <<'JSON'
@@ -1169,8 +1186,9 @@ if(out.current_task.id!=='short-running-001') throw new Error(JSON.stringify(out
 if(!String(out.visible_response||'').includes('当前任务：继续短篇第 6 节')) throw new Error(JSON.stringify(out));
 if(String(out.visible_response||'').includes('ready_for_current_stage')) throw new Error(JSON.stringify(out));
 if(!String(out.visible_response||'').includes('1. 从断点继续修订当前小节（推荐）')) throw new Error(JSON.stringify(out));
-if(!String(out.visible_response||'').includes('4. 输入其他要求')) throw new Error(JSON.stringify(out));
-if((out.next_actions||[]).length!==4) throw new Error(JSON.stringify(out.next_actions));
+if(!String(out.visible_response||'').includes('3. 输入其他要求')) throw new Error(JSON.stringify(out));
+if(String(out.visible_response||'').includes('4. 输入其他要求')) throw new Error(JSON.stringify(out));
+if((out.next_actions||[]).length!==3) throw new Error(JSON.stringify(out.next_actions));
 const resume=out.next_actions[0];
 if(resume.interaction_mode!=='resume_stage') throw new Error(JSON.stringify(resume));
 if(String(resume.execution_command||'').includes('resolve-action')) throw new Error(JSON.stringify(resume));
@@ -1178,7 +1196,7 @@ if(!String(resume.resume_hint||'').includes('只读取当前阶段包')) throw n
 const inspect=out.next_actions[1];
 if(inspect.interaction_mode!=='execute_command') throw new Error(JSON.stringify(inspect));
 if(inspect.execution_command!=='node scripts/workflow-state-machine.js inspect --project-root . --json') throw new Error(JSON.stringify(inspect));
-if(out.next_actions[2].interaction_mode!=='semantic_only'||out.next_actions[3].interaction_mode!=='semantic_only') throw new Error(JSON.stringify(out.next_actions));
+if(out.next_actions[2].interaction_mode!=='semantic_only') throw new Error(JSON.stringify(out.next_actions));
 NODE
 }
 

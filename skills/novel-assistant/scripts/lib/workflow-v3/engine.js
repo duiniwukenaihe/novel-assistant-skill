@@ -33,6 +33,13 @@ const {
   initializeEditorialLengthRevisionQueue,
 } = require('../short-feedback-revision-queue');
 const { projectAcceptedShortPlanningFeedback } = require('../short-planning-memory');
+const { buildEditorialFeedbackDraft } = require('../short-editorial-feedback');
+const {
+  parseShortSectionOrdinal,
+  readShortProjectState,
+  resolveShortStateRelative,
+} = require('../short-project-state');
+const { atomicWriteJson } = require('../workflow-state-store');
 
 function createTask(projectRoot, input = {}) {
   const workflowId = String(input.workflow_id || '');
@@ -97,6 +104,7 @@ function projectEditorialReviewCompatibility(task, result, source = 'workflow_v3
     review_card_path: String(result.review_card_path || ''),
     review_card_sha256: String(result.review_card_sha256 || ''),
     receipt_path: String(result.receipt_path || ''),
+    findings: JSON.parse(JSON.stringify(findings)),
     accepted_at: new Date().toISOString(),
   };
   task.short_full_story_review_projection = {
@@ -162,7 +170,18 @@ function applyStageResultUnderLock(projectRoot, workflowId, expectedVersion, res
   // cannot be overtaken before the mutation runs.
   assertNotCompleted(current);
 
-  const prepared = prepareInteraction(current, result);
+  const editorialFeedbackDraft = stageId === 'editorial_review'
+    && String((result || {}).decision || '') === 'revise'
+    && String((result || {}).code || '') === 'short_story_editorial_revision_required'
+    ? buildEditorialFeedbackDraft(current, result)
+    : null;
+  if (editorialFeedbackDraft && editorialFeedbackDraft.status !== 'feedback_draft_ready') {
+    throw new Error('editorial_feedback_draft_required');
+  }
+  const transitionResult = editorialFeedbackDraft
+    ? { ...result, ...editorialFeedbackDraft.interaction_result }
+    : result;
+  const prepared = prepareInteraction(current, transitionResult);
 
   // commitTask takes the project lock, commits exactly once, and rereads the
   // committed bytes back UNDER THE SAME LOCK, returning that causal snapshot.
@@ -203,8 +222,16 @@ function applyStageResultUnderLock(projectRoot, workflowId, expectedVersion, res
     if (['deslop', 'final_check'].includes(previousStage)) {
       recoverEditorialReviewCompatibility(projectRoot, draft);
     }
-    draft.current_stage = nextNode(draft, result);
-    if (previousStage === 'section_brief' && String(result.kind || '') === 'completed') {
+    const planningConfirmationAccepted = previousStage === 'planning_confirmation'
+      && String(result.kind || '') === 'completed'
+      && String(result.code || '') === 'planning_confirmed';
+    if (planningConfirmationAccepted) {
+      advancePlanningConfirmation(projectRoot, draft, transitionResult);
+    } else {
+      draft.current_stage = nextNode(draft, transitionResult);
+    }
+    if (['section_brief', 'feedback_apply_patch'].includes(previousStage)
+      && String(result.kind || '') === 'completed') {
       projectAcceptedV3FeedbackPlan(projectRoot, draft, result);
     }
     if (previousStage === 'assembly'
@@ -224,6 +251,23 @@ function applyStageResultUnderLock(projectRoot, workflowId, expectedVersion, res
     if (previousStage === 'editorial_review'
       && ['short_story_editorial_passed', 'short_story_editorial_revision_required'].includes(String(result.code || ''))) {
       projectEditorialReviewCompatibility(draft, result);
+    }
+    if (editorialFeedbackDraft) {
+      const previousFeedback = draft.pending_feedback && typeof draft.pending_feedback === 'object'
+        ? draft.pending_feedback
+        : null;
+      if (previousFeedback
+          && String(previousFeedback.id || '') !== String(editorialFeedbackDraft.pending_feedback.id || '')) {
+        draft.feedback_history = [
+          ...(Array.isArray(draft.feedback_history) ? draft.feedback_history : []),
+          {
+            ...JSON.parse(JSON.stringify(previousFeedback)),
+            archived_at: new Date().toISOString(),
+            archive_reason: 'superseded_by_editorial_recheck',
+          },
+        ];
+      }
+      draft.pending_feedback = JSON.parse(JSON.stringify(editorialFeedbackDraft.pending_feedback));
     }
     if (String(result.kind || '') === 'completed'
       && previousStage === 'section_accept'
@@ -246,12 +290,18 @@ function applyStageResultUnderLock(projectRoot, workflowId, expectedVersion, res
         ? result.next_section
         : result.section_index)
         || ((draft.stage_execution || {}).section_index)
+        || draft.current_section_index
         || 0);
+      const repairInputDigest = String(result.draft_digest || '');
+      if (draft.current_stage === 'section_repair' && !repairInputDigest) {
+        throw new Error('section_repair_draft_digest_required');
+      }
       draft.stage_execution = {
         status: 'running',
         stage_id: draft.current_stage,
         stage_attempt_id: store.createStageAttemptId(String(draft.workflow_id || ''), String(draft.current_stage || '')),
         ...(Number.isInteger(sectionIndex) && sectionIndex > 0 ? { section_index: sectionIndex } : {}),
+        ...(draft.current_stage === 'section_repair' ? { draft_input_digest: repairInputDigest } : {}),
       };
     }
     if (completing) {
@@ -291,7 +341,9 @@ function applyStageResultUnderLock(projectRoot, workflowId, expectedVersion, res
       delete draft.retry_state;
     }
     if (prepared.pending_action) {
-      draft.pending_action = prepared.pending_action;
+      draft.pending_action = editorialFeedbackDraft
+        ? { ...prepared.pending_action, feedback_id: editorialFeedbackDraft.pending_feedback.id }
+        : prepared.pending_action;
     } else {
       delete draft.pending_action;
     }
@@ -415,9 +467,11 @@ function proposeAuthorFeedbackPlanUnderLock(projectRoot, workflowId, expectedVer
   const feedbackId = String(input.feedback_id || '').trim();
   const summary = String(input.summary || '').trim();
   const impactLevel = String(input.impact_level || '').trim();
+  const titleList = normalizeFeedbackSectionTitles(input.section_titles);
   if (!feedbackId) throw new Error('feedback_id_required');
   if (!summary) throw new Error('feedback_plan_summary_required');
   if (!impactLevel) throw new Error('feedback_plan_impact_level_required');
+  if (impactLevel === 'needs_analysis') throw new Error('feedback_plan_impact_level_requires_author_classification');
   if (!Array.isArray(input.affected_sections)
       || input.affected_sections.length === 0
       || input.affected_sections.some(value => !Number.isInteger(Number(value)) || Number(value) < 1)) {
@@ -427,6 +481,9 @@ function proposeAuthorFeedbackPlanUnderLock(projectRoot, workflowId, expectedVer
     if (!Array.isArray(value) || value.some(item => !String(item || '').trim())) {
       throw new Error(`feedback_plan_${field}_invalid`);
     }
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'section_titles') && !titleList) {
+    throw new Error('feedback_plan_section_titles_invalid');
   }
 
   let receipt = null;
@@ -443,11 +500,15 @@ function proposeAuthorFeedbackPlanUnderLock(projectRoot, workflowId, expectedVer
     if (draft.pending_action) archivePendingAction(draft, 'feedback_plan_replaced');
 
     const plan = JSON.parse(JSON.stringify(input));
+    if (titleList) plan.section_titles = titleList;
+    const titleConfirmation = titleList
+      ? `\n小节标题变更（作者确认后才会回写）：\n${titleList.map(item => `- 第${item.section_index}节：${item.title || '（无标题）'}`).join('\n')}`
+      : '';
     const interaction = prepareInteraction(draft, {
       kind: 'needs_author_choice',
       code: 'confirm_feedback_plan',
       stage_id: String(draft.current_stage || ''),
-      question: `建议方案：${summary}\n请选择如何处理。`,
+      question: `建议方案：${summary}${titleConfirmation}\n请选择如何处理。`,
       options: [
         { action_id: 'accept_feedback_plan', label: '采用方案' },
         { action_id: 'continue_feedback_chat', label: '继续讨论' },
@@ -475,6 +536,19 @@ function proposeAuthorFeedbackPlanUnderLock(projectRoot, workflowId, expectedVer
   return { task: committed, feedback_receipt: receipt, visible_response: renderCommittedInteraction(committed) };
 }
 
+function normalizeFeedbackSectionTitles(value) {
+  if (!Array.isArray(value)) return null;
+  const rows = value.map(item => ({
+    section_index: Number((item || {}).section_index),
+    title: String((item || {}).title || '').trim().replace(/\s+/gu, ' '),
+  })).sort((left, right) => left.section_index - right.section_index);
+  if (!rows.length
+      || rows.some((item, index) => !Number.isInteger(item.section_index)
+        || item.section_index !== index + 1)
+      || new Set(rows.map(item => item.section_index)).size !== rows.length) return null;
+  return rows;
+}
+
 function archivePendingAction(task, reason) {
   const history = Array.isArray(task.interaction_history) ? task.interaction_history.slice() : [];
   history.push({
@@ -493,6 +567,78 @@ function currentSectionIndex(task) {
     Number(((task || {}).pending_feedback || {}).section_index),
   ];
   return candidates.find((value) => Number.isInteger(value) && value > 0) || 0;
+}
+
+// Planning confirmation is an author decision, not a display-only hop. Bind
+// the title list that the approved canonical outline actually contains before
+// entering the first Brief. This is intentionally separate from feedback
+// planning: a later title change still requires the explicit title list on the
+// accepted feedback plan.
+function bindConfirmedShortSectionTitles(projectRoot, task) {
+  const root = path.resolve(projectRoot || '');
+  const state = readShortProjectState(root) || {};
+  const outlineRel = safeProjectRelative(state.plan_path || '小节大纲.md');
+  const outlineFile = outlineRel ? path.join(root, outlineRel) : '';
+  if (!outlineFile || !fs.existsSync(outlineFile) || !fs.statSync(outlineFile).isFile()) {
+    throw new Error('planning_confirmation_outline_missing');
+  }
+  const sections = parseConfirmedOutlineTitles(fs.readFileSync(outlineFile, 'utf8'));
+  const plannedSections = Number(state.planned_sections || ((state.narrative || {}).planned_sections) || 0);
+  if (!plannedSections || sections.length !== plannedSections
+      || sections.some((item, index) => item.section_index !== index + 1)) {
+    throw new Error('planning_confirmation_section_titles_invalid');
+  }
+  const lockRel = resolveShortStateRelative(root, 'section-title-lock.json', { forWrite: true });
+  const lockFile = path.join(root, lockRel);
+  const sourceDigest = crypto.createHash('sha256').update(fs.readFileSync(outlineFile)).digest('hex');
+  atomicWriteJson(lockFile, {
+    schema_version: '1.0.0',
+    status: 'confirmed',
+    workflow_id: String(task.workflow_id || ''),
+    project_id: String(state.project_id || ''),
+    plan_revision: Number(state.plan_revision || 0),
+    planned_sections: plannedSections,
+    source_outline: outlineRel,
+    source_digest: sourceDigest,
+    confirmation_basis: 'planning_confirmation',
+    confirmed_at: new Date().toISOString(),
+    sections: sections.map((item) => ({
+      ...item,
+      confirmed: true,
+      title_source: 'user_confirmed_outline',
+    })),
+  });
+}
+
+function parseConfirmedOutlineTitles(text) {
+  const rows = [];
+  for (const line of String(text || '').split(/\r?\n/u)) {
+    const match = line.trim().match(/^#{1,6}\s*第\s*([0-9０-９一二三四五六七八九十百千两〇零]+)\s*节(?:\s*[:：·｜-]\s*(.*))?$/u);
+    if (!match) continue;
+    const sectionIndex = parseShortSectionOrdinal(match[1]);
+    if (!Number.isInteger(sectionIndex) || sectionIndex < 1) continue;
+    rows.push({ section_index: sectionIndex, title: String(match[2] || '').trim() });
+  }
+  return rows.sort((left, right) => left.section_index - right.section_index);
+}
+
+function advancePlanningConfirmation(projectRoot, task, result) {
+  task.current_stage = nextNode(task, result);
+  bindConfirmedShortSectionTitles(projectRoot, task);
+  const state = readShortProjectState(projectRoot) || {};
+  const sectionIndex = Number(state.current_section_index || 1);
+  if (!Number.isInteger(sectionIndex) || sectionIndex < 1) {
+    throw new Error('planning_confirmation_current_section_invalid');
+  }
+  task.current_section_index = sectionIndex;
+  task.scope = `第${sectionIndex}节`;
+  return sectionIndex;
+}
+
+function safeProjectRelative(value) {
+  const relative = String(value || '').trim().replace(/\\/g, '/').replace(/^\.\//u, '');
+  if (!relative || relative.startsWith('/') || relative.split('/').includes('..')) return '';
+  return relative;
 }
 
 function resolveAuthorInputUnderLock(projectRoot, workflowId, expectedVersion, input = {}) {
@@ -524,6 +670,7 @@ function resolveAuthorInputUnderLock(projectRoot, workflowId, expectedVersion, i
     // binding (status pending, workflow/version/hash) before mapping the number.
     selection = consumeBinding(draft, input.choice);
     applyFeedbackDecision(draft, pending, selection, resolvedAt, projectRoot);
+    applyPlanningConfirmationDecision(draft, pending, selection, projectRoot);
     // Durable resolution metadata: the frozen selection and a resolve-time
     // timestamp land in task.json so a recovery read can re-establish the
     // settled choice without re-asking the host.
@@ -536,6 +683,29 @@ function resolveAuthorInputUnderLock(projectRoot, workflowId, expectedVersion, i
     return draft;
   });
   return selection;
+}
+
+function applyPlanningConfirmationDecision(task, pending, selection, projectRoot) {
+  if (String(task.current_stage || '') !== 'planning_confirmation'
+      || !Array.isArray((pending || {}).options)
+      || !pending.options.some((option) => String((option || {}).action_id || '') === 'accept_planning')) return;
+  const actionId = String((selection || {}).action_id || '');
+  if (actionId === 'accept_planning') {
+    const sectionIndex = advancePlanningConfirmation(projectRoot, task, {
+      kind: 'completed',
+      code: 'planning_confirmed',
+      stage_id: 'planning_confirmation',
+    });
+    task.stage_execution = {
+      status: 'running',
+      stage_id: task.current_stage,
+      stage_attempt_id: store.createStageAttemptId(String(task.workflow_id || ''), task.current_stage),
+      section_index: sectionIndex,
+    };
+    return;
+  }
+  if (actionId === 'modify_planning_in_chat') return;
+  throw new Error('planning_confirmation_action_invalid');
 }
 
 function applyFeedbackDecision(task, pending, selection, decidedAt, projectRoot) {
@@ -556,13 +726,16 @@ function applyFeedbackDecision(task, pending, selection, decidedAt, projectRoot)
     const firstAffected = Number(next.accepted_plan.affected_sections[0] || 0);
     if (firstAffected > 0 && isSectionRevisionStage(task.current_stage)) {
       next.interrupted_stage = String(task.current_stage || '');
-      task.current_stage = 'section_brief';
+      const planningAssets = Array.isArray(((next.accepted_plan || {}).projection_plan || {}).planning_assets)
+        ? next.accepted_plan.projection_plan.planning_assets.map(String).filter(Boolean)
+        : [];
+      task.current_stage = planningAssets.length ? 'feedback_apply_patch' : 'section_brief';
       task.current_section_index = firstAffected;
       task.scope = `第${firstAffected}节`;
       task.stage_execution = {
         status: 'running',
-        stage_id: 'section_brief',
-        stage_attempt_id: store.createStageAttemptId(String(task.workflow_id || ''), 'section_brief'),
+        stage_id: task.current_stage,
+        stage_attempt_id: store.createStageAttemptId(String(task.workflow_id || ''), task.current_stage),
         section_index: firstAffected,
       };
     }
@@ -651,6 +824,7 @@ function buildAcceptedFeedbackPlan(task, feedback, acceptedAt, projectRoot) {
 
 function isSectionRevisionStage(stageId) {
   return [
+    'planning_confirmation',
     'section_brief', 'section_draft', 'machine_gate', 'story_gate',
     'section_repair', 'section_accept', 'assembly', 'editorial_review',
     'deslop', 'final_check',
@@ -666,6 +840,12 @@ function projectAcceptedV3FeedbackPlan(projectRoot, task, result) {
     ? task.accepted_plan
     : feedback.accepted_plan;
   if (!accepted || typeof accepted !== 'object') return;
+  // A planning patch projects accepted feedback before it advances to
+  // section_brief. Do not try to project it again when the new Brief completes:
+  // that result deliberately contains Brief evidence, not the planning
+  // transaction receipt. Current-brief feedback stays pending until its Brief
+  // result reaches this function.
+  if (String(accepted.projection_status || '') === 'completed') return;
   const impactLevel = String(accepted.impact_level || '');
   const normalizedImpact = impactLevel === 'current_brief'
     ? 'current_brief'
@@ -676,11 +856,24 @@ function projectAcceptedV3FeedbackPlan(projectRoot, task, result) {
   const sourceBefore = Array.isArray(((accepted || {}).projection_plan || {}).source_before)
     ? accepted.projection_plan.source_before
     : [];
-  if (planningAssets.length && sourceBefore.length) {
+  if (planningAssets.length) {
+    const transaction = result.planning_transaction && typeof result.planning_transaction === 'object'
+      ? result.planning_transaction
+      : null;
+    const transactionAssets = Array.isArray((transaction || {}).artifacts) ? transaction.artifacts : [];
+    const byCanonical = new Map(transactionAssets.map(item => [String((item || {}).canonical || ''), item || {}]));
+    if (!transaction || planningAssets.some(relative => !byCanonical.has(String(relative)))) {
+      throw new Error('blocked_planning_transaction_evidence_missing');
+    }
     const beforeByPath = new Map(sourceBefore.map(item => [String((item || {}).path || ''), String((item || {}).sha256 || '')]));
-    const planningChanged = planningAssets.some(relative => (
-      digestProjectFile(projectRoot, relative) !== String(beforeByPath.get(String(relative || '')) || '')
-    ));
+    const planningChanged = planningAssets.every(relative => {
+      const canonical = String(relative || '');
+      const artifact = byCanonical.get(canonical) || {};
+      const after = digestProjectFile(projectRoot, canonical);
+      return after
+        && after === String(artifact.after_sha256 || '')
+        && after !== String(beforeByPath.get(canonical) || '');
+    });
     if (!planningChanged) throw new Error('blocked_planning_memory_evidence_missing');
   }
   const projectionResult = {

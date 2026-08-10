@@ -6,8 +6,8 @@
 // Reads an allowlisted pre-workflow `追踪/workflow/current-task.json`, including
 // the original `task_id` / `task_type` shape and a constrained
 // `type=outline_backfill` shape, produces a deterministic read-only preview, archives the original bytes, and hands control back to the current
-// state machine via `workflow-state-machine.js create --workflow-type
-// long_write`. The script owns no creative asset writes; everything it
+// state machine via a successor that preserves its exact allowlisted workflow
+// type. The script owns no creative asset writes; everything it
 // touches lives under `追踪/workflow/`. Authoritative durable state is
 // delegated to `workflow-task-authority` / `workflow-state-machine` rather
 // than constructed inline.
@@ -19,13 +19,13 @@ const path = require('path');
 
 const { resolveTaskAuthority, readFocusedTask } = require('./lib/workflow-task-authority');
 const { acquireNamedProjectLock } = require('./lib/workflow-state-store');
+const { classifyLegacyWorkflow } = require('./lib/legacy-workflow-type');
 
 const RECOVERY_LOCK_NAME = 'legacy-recovery.lock';
 const RECOVERY_LOCK_OWNER = 'legacy-task-authority-recover';
 const RECOVERY_LOCK_TTL_MS = 5 * 60 * 1000;
 
 const SCHEMA_VERSION = '1.0.0';
-const WORKFLOW_TYPE = 'long_write';
 const SNAPSHOT_DIR = '追踪/workflow/archived';
 const SNAPSHOT_KIND = 'legacy-recovery';
 const TASKS_DIR = '追踪/workflow/tasks';
@@ -364,7 +364,47 @@ function loadLegacySource(root) {
       normalized.reason,
     );
   }
-  return { bytes, task: normalized.task, sourcePath: focusPath };
+  return {
+    bytes,
+    task: normalized.task,
+    sourcePath: focusPath,
+    classification: classifyLegacyWorkflow(normalized.task),
+  };
+}
+
+function requireLegacyWorkflowType(source) {
+  const classification = source && source.classification;
+  if (classification && classification.status === 'supported' && classification.workflow_type) {
+    return String(classification.workflow_type);
+  }
+  throw recoveryFailure(
+    'blocked_legacy_task_type_confirmation_required',
+    `旧任务类型无法安全确认：${String((classification || {}).reason || 'legacy_type_missing')}。请先明确这是短篇、长篇还是审阅任务。`,
+  );
+}
+
+function resolveSnapshotWorkflowType(snapshot) {
+  const declared = String((snapshot || {}).successor_workflow_type || (snapshot || {}).source_workflow_type || '');
+  const classification = declared
+    ? classifyLegacyWorkflow({ workflow_type: declared })
+    : classifyLegacyWorkflow({ task_type: (snapshot || {}).source_task_type });
+  if (classification.status === 'supported' && classification.workflow_type) return String(classification.workflow_type);
+  throw recoveryFailure(
+    'blocked_legacy_task_type_confirmation_required',
+    `恢复快照缺少可验证的任务类型：${String(classification.reason || 'legacy_type_missing')}。请先明确任务类型。`,
+  );
+}
+
+function workflowTypeLabel(workflowType) {
+  if (workflowType === 'short_write') return '短篇写作';
+  if (workflowType === 'long_write') return '长篇写作';
+  if (workflowType === 'review_repair') return '审阅修复';
+  return '写作任务';
+}
+
+function successorScopeMatches(workflowType, durableScope, snapshotScope) {
+  return workflowType === 'short_write'
+    || normalizedDurableScope(durableScope) === String(snapshotScope || '');
 }
 
 function computePreviewId(sourceHash, protectedHashes, intent) {
@@ -441,13 +481,17 @@ function buildRecoveryVisibleResponse(intent, previewId) {
 function runPreview(root, intent) {
   requireInside(root, path.join(root, FOCUS_POINTER), 'current-task pointer');
   const source = loadLegacySource(root);
+  if (source.classification.status !== 'supported') return buildUnsupportedTypePreview(source);
+  const scope = extractResumeScope(intent);
+  if (source.classification.workflow_type === 'review_repair' && scope === SCOPE_UNSPECIFIED) {
+    return buildMissingReviewScopePreview(source);
+  }
   const sourceHash = sha256(source.bytes);
   const protectedHashes = computeProtectedHashes(root);
   const previewId = computePreviewId(sourceHash, protectedHashes, intent);
   if (!PREVIEW_ID_PATTERN.test(previewId)) {
     throw recoveryFailure('blocked_legacy_task_authority_recovery', 'computed preview_id failed safety check');
   }
-  const scope = extractResumeScope(intent);
   const visible = buildRecoveryVisibleResponse(intent, previewId);
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -455,12 +499,78 @@ function runPreview(root, intent) {
     preview_id: previewId,
     task_id: source.task.task_id,
     task_type: source.task.task_type,
+    workflow_type: source.classification.workflow_type,
     resume_intent: intent,
     scope,
     source_hash: sourceHash,
     protected_hashes: protectedHashes,
     visible_response: visible,
     read_only: true,
+  };
+}
+
+function buildUnsupportedTypePreview(source) {
+  const classification = source && source.classification ? source.classification : {};
+  const options = [
+    {
+      number: 1,
+      label: '查看旧任务记录',
+      description: '只读查看当前旧任务，确认其原始类型。',
+      interaction_mode: 'informational',
+    },
+    {
+      number: 2,
+      label: '明确任务类型后重新恢复',
+      description: '请说明这是短篇、长篇还是审阅任务；未确认前不生成恢复命令。',
+      interaction_mode: 'semantic_only',
+    },
+  ];
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'blocked_legacy_task_type_confirmation_required',
+    task_id: String(((source || {}).task || {}).task_id || ''),
+    task_type: String(((source || {}).task || {}).task_type || ((source || {}).task || {}).type || ''),
+    reason: String(classification.reason || 'legacy_type_missing'),
+    read_only: true,
+    visible_response: {
+      render_mode: 'text_numbers',
+      status: 'blocked_legacy_task_type_confirmation_required',
+      selection_contract: 'route_intent_only',
+      options,
+      text: `旧任务类型无法安全确认：${String(classification.reason || 'legacy_type_missing')}。\n1. 查看旧任务记录\n2. 明确任务类型后重新恢复\n\n请直接说明任务类型；未确认前不会生成或执行迁移。`,
+    },
+  };
+}
+
+function buildMissingReviewScopePreview(source) {
+  const options = [
+    {
+      number: 1,
+      label: '查看旧任务记录',
+      description: '只读查看当前旧审阅任务及其原始范围信息。',
+      interaction_mode: 'informational',
+    },
+    {
+      number: 2,
+      label: '明确审阅章节范围后重新恢复',
+      description: '请说明例如“审阅第 1 至 3 章”；未明确前不生成恢复命令。',
+      interaction_mode: 'semantic_only',
+    },
+  ];
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'blocked_legacy_review_scope_required',
+    task_id: String(((source || {}).task || {}).task_id || ''),
+    task_type: String(((source || {}).task || {}).task_type || ''),
+    workflow_type: 'review_repair',
+    read_only: true,
+    visible_response: {
+      render_mode: 'text_numbers',
+      status: 'blocked_legacy_review_scope_required',
+      selection_contract: 'route_intent_only',
+      options,
+      text: '旧审阅任务缺少不可变章节范围。请直接说明例如“审阅第 1 至 3 章”；未确认范围前不会生成或执行迁移。\n1. 查看旧任务记录\n2. 明确审阅章节范围后重新恢复',
+    },
   };
 }
 
@@ -529,6 +639,7 @@ function runConfirm(root, args) {
     };
   }
   const source = loadLegacySource(root);
+  const workflowType = requireLegacyWorkflowType(source);
   const sourceHash = sha256(source.bytes);
   const protectedHashes = computeProtectedHashes(root);
   const expectedId = computePreviewId(sourceHash, protectedHashes, args.resumeIntent);
@@ -579,6 +690,8 @@ function runConfirm(root, args) {
     scope: extractResumeScope(args.resumeIntent),
     source_task_id: source.task.task_id,
     source_task_type: source.task.task_type,
+    source_workflow_type: workflowType,
+    successor_workflow_type: workflowType,
     source_path: relativePosix(root, source.sourcePath),
     source_hash: sourceHash,
     protected_hashes: protectedHashes,
@@ -619,7 +732,7 @@ function buildReconfirmVisibleResponse(snapshot, snapshotPath, root, applyComman
   if (journalStatus === 'applied') {
     const durable = {
       workflow_id: String(snapshot.successor_workflow_id || ''),
-      workflow_type: WORKFLOW_TYPE,
+      workflow_type: resolveSnapshotWorkflowType(snapshot),
       user_goal: String(snapshot.resume_intent || ''),
       task_dir: String(snapshot.successor_task_dir || ''),
     };
@@ -818,7 +931,7 @@ function archiveFileFor(sourceTaskId) {
   return `${SNAPSHOT_DIR}/${sourceTaskId}.current-task.json`;
 }
 
-function callStateMachineCreate(root, intent, scope) {
+function callStateMachineCreate(root, intent, scope, workflowType) {
   if (process.env.NOVEL_ASSISTANT_LEGACY_RECOVER_FAIL === 'successor_create') {
     throw recoveryFailure(
       'blocked_legacy_task_authority_recovery',
@@ -826,16 +939,31 @@ function callStateMachineCreate(root, intent, scope) {
     );
   }
   const scopeArg = String(scope || SCOPE_UNSPECIFIED);
-  const args = [
-    path.join(__dirname, 'workflow-state-machine.js'),
-    'create',
-    '--workflow-type', WORKFLOW_TYPE,
-    '--project-root', root,
-    '--scope', scopeArg,
-    '--user-goal', intent,
-    '--reason', 'legacy_task_authority_recovery',
-    '--json',
-  ];
+  if (workflowType === 'review_repair' && scopeArg === SCOPE_UNSPECIFIED) {
+    throw recoveryFailure(
+      'blocked_legacy_review_scope_required',
+      '旧审阅任务缺少不可变章节范围；请先明确例如“审阅第 1 至 3 章”。',
+    );
+  }
+  const args = workflowType === 'short_write'
+    ? [
+      path.join(__dirname, 'workflow-v3.js'),
+      'create-short',
+      '--project-root', root,
+      '--profile', 'public',
+      '--user-goal', intent,
+      '--json',
+    ]
+    : [
+      path.join(__dirname, 'workflow-state-machine.js'),
+      'create',
+      '--workflow-type', workflowType,
+      '--project-root', root,
+      '--scope', scopeArg,
+      '--user-goal', intent,
+      '--reason', 'legacy_task_authority_recovery',
+      '--json',
+    ];
   const result = cp.spawnSync(process.execPath, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
   if (result.error) {
     throw recoveryFailure(
@@ -865,7 +993,7 @@ function callStateMachineCreate(root, intent, scope) {
       'state machine create did not return a successor workflow_id/task_dir',
     );
   }
-  if (String(successor.workflow_type || '') !== WORKFLOW_TYPE) {
+  if (String(successor.workflow_type || '') !== workflowType) {
     throw recoveryFailure(
       'blocked_legacy_task_authority_recovery',
       `state machine create returned unexpected workflow_type: ${successor.workflow_type}`,
@@ -877,13 +1005,14 @@ function callStateMachineCreate(root, intent, scope) {
       `state machine create returned mismatched user_goal: ${JSON.stringify(successor.user_goal)}`,
     );
   }
-  if (String(successor.scope || '') !== scopeArg) {
+  if (workflowType !== 'short_write' && String(successor.scope || '') !== scopeArg) {
     throw recoveryFailure(
       'blocked_legacy_task_authority_recovery',
       `state machine create returned mismatched scope: expected ${JSON.stringify(scopeArg)}, got ${JSON.stringify(successor.scope)}`,
     );
   }
-  if (String(((successor.lifecycle || {}).switch_reason) || '') !== 'legacy_task_authority_recovery') {
+  if (workflowType !== 'short_write'
+      && String(((successor.lifecycle || {}).switch_reason) || '') !== 'legacy_task_authority_recovery') {
     throw recoveryFailure(
       'blocked_legacy_task_authority_recovery',
       'state machine create did not preserve the legacy recovery origin marker',
@@ -1061,6 +1190,7 @@ function runApplyLocked(root, args) {
     args.snapshot,
     { allowSourceHashDrift },
   );
+  const workflowType = resolveSnapshotWorkflowType(snapshot);
   if (String(snapshot.resume_intent || '') !== String(args.resumeIntent || '')) {
     throw recoveryFailure(
       'blocked_legacy_task_authority_recovery',
@@ -1100,7 +1230,7 @@ function runApplyLocked(root, args) {
   if (reapply) {
     // Use the official focus authority: a stale or malformed pointer must
     // never be trusted just because its task.json exists at the expected path.
-    return runReapply(root, snapshot, snapshotPath, pointer);
+    return runReapply(root, snapshot, snapshotPath, pointer, workflowType);
   }
   const { currentBytes } = revalidateSnapshot(root, snapshot);
   // Preflight archive conflict BEFORE deleting the focus pointer or
@@ -1138,7 +1268,7 @@ function runApplyLocked(root, args) {
   fs.rmSync(focusPath, { force: true });
   let createOutcome;
   try {
-    createOutcome = callStateMachineCreate(root, snapshot.resume_intent, snapshot.scope);
+    createOutcome = callStateMachineCreate(root, snapshot.resume_intent, snapshot.scope, workflowType);
   } catch (error) {
     // Restore the original focus pointer so the legacy file is byte-identical.
     if (fs.existsSync(backupPath)) {
@@ -1162,6 +1292,7 @@ function runApplyLocked(root, args) {
     successor_candidate_workflow_id: successor.workflow_id,
     successor_candidate_task_dir: successor.task_dir,
     successor_candidate_user_goal: String(successor.user_goal || ''),
+    successor_candidate_workflow_type: workflowType,
   };
   atomicWriteJson(snapshotPath, candidateSnapshot);
   // Defect A: post-create verification must TERMINATE the apply on failure.
@@ -1202,6 +1333,7 @@ function runApplyLocked(root, args) {
     status: 'applied',
     successor_workflow_id: successor.workflow_id,
     successor_task_dir: successor.task_dir,
+    successor_workflow_type: workflowType,
     archive_path: archiveRelative,
     archive_sha256: sha256(currentBytes),
     applied_at: new Date().toISOString(),
@@ -1371,7 +1503,7 @@ function runCrashRecovery(root, snapshot, snapshotPath, args) {
       {
         number: 1,
         label: '重新应用任务权威恢复（推荐）',
-        description: `使用原意图 ${snapshot.resume_intent} 重新创建后续 long_write 任务。`,
+        description: `使用原意图 ${snapshot.resume_intent} 重新创建后续 ${workflowTypeLabel(resolveSnapshotWorkflowType(snapshot))}任务。`,
         recommended: true,
         interaction_mode: 'execute_command',
         execution_workdir: '.',
@@ -1400,7 +1532,7 @@ function runCrashRecovery(root, snapshot, snapshotPath, args) {
     ],
     text: [
       '1. 重新应用任务权威恢复（推荐）',
-      `   使用原意图 ${snapshot.resume_intent} 重新创建后续 long_write 任务。`,
+      `   使用原意图 ${snapshot.resume_intent} 重新创建后续 ${workflowTypeLabel(resolveSnapshotWorkflowType(snapshot))}任务。`,
       '2. 继续执行任务权威恢复',
       '   跳过应用阶段，直接进入任务入口。',
       `3. 查看本次恢复快照`,
@@ -1426,7 +1558,7 @@ function runCrashRecovery(root, snapshot, snapshotPath, args) {
   };
 }
 
-function runReapply(root, snapshot, snapshotPath, pointer) {
+function runReapply(root, snapshot, snapshotPath, pointer, workflowType) {
   const pointerId = String(pointer.workflow_id || '');
   const snapshotStatus = String(snapshot.status || '');
   const snapshotBound = String(snapshot.successor_workflow_id || '');
@@ -1436,7 +1568,7 @@ function runReapply(root, snapshot, snapshotPath, pointer) {
   //   (b) status=applying with a recorded successor_candidate_workflow_id
   //       that exactly matches the pointer, the candidate was NOT in
   //       preexisting_workflow_ids, officially resolves, workflow_type is
-  //       long_write, and user_goal equals snapshot.resume_intent.
+  //       snapshot workflow type, and user_goal equals snapshot.resume_intent.
   // In every other case the recovery fails closed.
   if (snapshotStatus === 'applied') {
     if (!snapshotBound) {
@@ -1475,7 +1607,7 @@ function runReapply(root, snapshot, snapshotPath, pointer) {
       );
     }
     // The official authority + workflow_type + user_goal verification is the
-    // last gate so a same-goal but unrelated long_write task can never be
+    // last gate so a same-goal but unrelated successor task can never be
     // rebound as the recovered successor.
     const authority = resolveTaskAuthority(root, pointerId);
     if (authority.status !== 'ok') {
@@ -1485,10 +1617,10 @@ function runReapply(root, snapshot, snapshotPath, pointer) {
       );
     }
     const durable = authority.task;
-    if (String(durable.workflow_type || '') !== WORKFLOW_TYPE) {
+    if (String(durable.workflow_type || '') !== workflowType) {
       throw recoveryFailure(
         'blocked_legacy_task_authority_recovery',
-        `bound successor workflow_type mismatch: expected ${WORKFLOW_TYPE}, got ${durable.workflow_type}`,
+        `bound successor workflow_type mismatch: expected ${workflowType}, got ${durable.workflow_type}`,
       );
     }
     if (String(durable.user_goal || '') !== String(snapshot.resume_intent || '')) {
@@ -1497,7 +1629,7 @@ function runReapply(root, snapshot, snapshotPath, pointer) {
         `bound successor user_goal ${JSON.stringify(durable.user_goal)} does not match snapshot resume_intent ${JSON.stringify(snapshot.resume_intent)}`,
       );
     }
-    if (normalizedDurableScope(durable.scope) !== String(snapshot.scope)) {
+    if (!successorScopeMatches(workflowType, durable.scope, snapshot.scope)) {
       throw recoveryFailure(
         'blocked_legacy_task_authority_recovery',
         `bound successor scope ${JSON.stringify(durable.scope)} does not match snapshot scope ${JSON.stringify(snapshot.scope)}`,
@@ -1521,7 +1653,7 @@ function runReapply(root, snapshot, snapshotPath, pointer) {
   }
   const durable = authority.task;
   // Gap 2: for status=applied, the snapshot already binds a successor; the
-  // durable task must STILL carry workflow_type=long_write, user_goal exactly
+  // durable task must STILL carry the snapshot workflow type, user_goal exactly
   // snapshot.resume_intent, AND task_dir exactly snapshot.successor_task_dir.
   // Without these checks, an attacker (or a partially mutated state machine)
   // could rotate the durable task.json's metadata while keeping the same id,
@@ -1529,10 +1661,10 @@ function runReapply(root, snapshot, snapshotPath, pointer) {
   // task_dir. The applying branch already verifies type+goal; we extend it
   // here to task_dir as well so the two branches share the same trust story.
   if (snapshotStatus === 'applied') {
-    if (String(durable.workflow_type || '') !== WORKFLOW_TYPE) {
+    if (String(durable.workflow_type || '') !== workflowType) {
       throw recoveryFailure(
         'blocked_legacy_task_authority_recovery',
-        `bound successor workflow_type mismatch: expected ${WORKFLOW_TYPE}, got ${JSON.stringify(durable.workflow_type)}`,
+        `bound successor workflow_type mismatch: expected ${workflowType}, got ${JSON.stringify(durable.workflow_type)}`,
       );
     }
     if (String(durable.user_goal || '') !== String(snapshot.resume_intent || '')) {
@@ -1547,7 +1679,7 @@ function runReapply(root, snapshot, snapshotPath, pointer) {
         `bound successor task_dir ${JSON.stringify(durable.task_dir)} does not match snapshot successor_task_dir ${JSON.stringify(snapshot.successor_task_dir)}`,
       );
     }
-    if (normalizedDurableScope(durable.scope) !== String(snapshot.scope)) {
+    if (!successorScopeMatches(workflowType, durable.scope, snapshot.scope)) {
       throw recoveryFailure(
         'blocked_legacy_task_authority_recovery',
         `bound successor scope ${JSON.stringify(durable.scope)} does not match snapshot scope ${JSON.stringify(snapshot.scope)}`,
@@ -1592,6 +1724,7 @@ function runReapply(root, snapshot, snapshotPath, pointer) {
       status: 'applied',
       successor_workflow_id: pointerId,
       successor_task_dir: durable.task_dir,
+      successor_workflow_type: workflowType,
       archive_path: snapshot.archive_path || archiveFileFor(snapshot.source_task_id),
       archive_sha256: typeof snapshot.source_bytes_base64 === 'string' && snapshot.source_bytes_base64.length > 0
         ? sha256(Buffer.from(snapshot.source_bytes_base64, 'base64'))
@@ -1627,7 +1760,7 @@ function buildApplyVisibleResponse(durable, snapshot, snapshotPath, root) {
   const options = [
     {
       number: 1,
-      label: '继续执行任务权威恢复后的长篇写作（推荐）',
+      label: `继续执行任务权威恢复后的${workflowTypeLabel(String((durable || {}).workflow_type || ''))}（推荐）`,
       description: `使用原意图 ${resumeIntent} 继续任务。`,
       recommended: true,
       interaction_mode: 'execute_command',
@@ -1714,5 +1847,6 @@ module.exports = {
   normalizeLegacyTaskAuthority,
   parseArgs,
   recoveryFailure,
+  SCOPE_UNSPECIFIED,
   shellQuote,
 };

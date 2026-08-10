@@ -1,17 +1,19 @@
 name: Publish GitHub release artifact
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
         description: Existing version tag to publish (vX.Y.Z)
         required: true
         type: string
+      behavior_evidence_run_id:
+        description: Successful self-hosted public behavior-evidence workflow run ID for this exact tag commit
+        required: true
+        type: string
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
@@ -24,6 +26,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      EVIDENCE_ROOT: ${{ runner.temp }}/novel-assistant-release-evidence
+      PUBLIC_EVIDENCE_ROOT: ${{ runner.temp }}/novel-assistant-public-behavior-evidence
+      PUBLIC_INSTALL_HOME: ${{ runner.temp }}/novel-assistant-public-install
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,6 +39,21 @@ jobs:
         with:
           node-version: 20
 
+      - name: Resolve immutable release commit
+        id: candidate
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Download hash-bound public behavior evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: novel-assistant-behavior-evidence-${{ steps.candidate.outputs.commit }}
+          run-id: ${{ inputs.behavior_evidence_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ env.PUBLIC_EVIDENCE_ROOT }}
+
+      - name: Check behavior evidence artifact layout
+        run: test -d "$PUBLIC_EVIDENCE_ROOT/behavior-eval"
+
       - name: Validate release tag and changelog
         run: |
           git tag --points-at HEAD | grep -Fxq "$RELEASE_TAG"
@@ -43,7 +63,26 @@ jobs:
         run: node scripts/public-release-audit.js --json
 
       - name: Run focused production smoke
-        run: node scripts/production-smoke-matrix.js --json
+        run: |
+          node scripts/production-smoke-matrix.js --repo-root . \
+            --receipt-out "$EVIDENCE_ROOT/private/production-repair/github-${GITHUB_RUN_ID}/deterministic/summary.json" \
+            --json
+
+      - name: Verify isolated public installation mirrors
+        run: |
+          for host in claude codex zcode; do
+            target="$PUBLIC_INSTALL_HOME/.$host/skills/novel-assistant"
+            mkdir -p "$(dirname "$target")"
+            rsync -a --delete skills/novel-assistant/ "$target/"
+          done
+
+      - name: Enforce unified production release gate
+        run: |
+          node scripts/production-release-gate.js --repo-root . --profile public \
+            --evidence-root "$EVIDENCE_ROOT" \
+            --public-evidence-root "$PUBLIC_EVIDENCE_ROOT" \
+            --install-root "$PUBLIC_INSTALL_HOME" \
+            --json
 
       - name: Verify public workflow ownership
         run: |

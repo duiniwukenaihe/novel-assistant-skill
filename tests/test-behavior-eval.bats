@@ -44,6 +44,41 @@ NODE
     rm -rf "$tmp" "$REPO/reports/behavior-eval/$run_id"
 }
 
+@test "evaluation prompt defers an update menu and still requires the result packet" {
+    run node - "$SCRIPT" <<'NODE'
+const assert = require('assert/strict');
+const path = require('path');
+const runner = require(path.resolve(process.argv[2]));
+const prompt = runner.buildPrompt(
+  { id: 'route-single-entry', fixture: 'empty-project', assertions: ['route', 'visible_response'] },
+  0,
+  { runnerPacketRel: '.behavior-eval/scenario.json', resultPacketRel: '.behavior-eval/result.json' },
+);
+assert.match(prompt, /2\. 暂不更新/);
+assert.match(prompt, /must write \.behavior-eval\/result\.json/i);
+NODE
+
+    [ "$status" -eq 0 ]
+}
+
+@test "paid evaluation materializes an explicit candidate skill in project-local host roots" {
+    tmp="$(mktemp -d)"
+    fake_bin="$tmp/bin"
+    run_id="candidate-skill-${BASHPID}"
+    make_fake_hosts "$fake_bin" success claude zcode
+    rm -rf "$REPO/reports/behavior-eval/$run_id"
+
+    run env "PATH=$fake_bin" "$NODE_BIN" "$SCRIPT" run --execute-paid --paid-confirmation "$run_id" --max-budget-usd 10 --scenario route-single-entry --hosts claude,zcode --skill-dir "$REPO/skills/novel-assistant" --run-id "$run_id" --json
+
+    [ "$status" -eq 0 ]
+    project="$REPO/reports/behavior-eval/$run_id/project"
+    for host in claude zcode; do
+        cmp "$REPO/skills/novel-assistant/novel-assistant-manifest.json" "$project/$host/.$host/skills/novel-assistant/novel-assistant-manifest.json"
+        cmp "$REPO/skills/novel-assistant/SKILL.md" "$project/$host/.$host/skills/novel-assistant/SKILL.md"
+    done
+    rm -rf "$tmp" "$REPO/reports/behavior-eval/$run_id"
+}
+
 @test "paid execution requires a positive aggregate budget before artifacts or hosts" {
     tmp="$(mktemp -d)"
     fake_bin="$tmp/bin"
@@ -87,7 +122,7 @@ if (result.output.runId !== process.argv[2] || result.status !== "pass") throw n
 
     [ "$status" -eq 1 ]
     [[ "$output" == *'blocked_host_unavailable'* ]]
-    [ ! -e "$REPO/reports/behavior-eval/$run_id/project/fake-host-invocations.log" ]
+    [ ! -e "$REPO/reports/behavior-eval/$run_id/project/claude/fake-host-invocations.log" ]
     rm -rf "$tmp" "$REPO/reports/behavior-eval/$run_id"
 }
 
@@ -114,8 +149,8 @@ for (const host of result.results) {
   }
 }
 ' "$output"
-    [ -f "$REPO/reports/behavior-eval/$run_id/project/fixture/fixture.json" ]
-    [ -f "$REPO/reports/behavior-eval/$run_id/project/artifacts/route.txt" ]
+    [ -f "$REPO/reports/behavior-eval/$run_id/project/claude/fixture/fixture.json" ]
+    [ -f "$REPO/reports/behavior-eval/$run_id/project/claude/artifacts/route.txt" ]
     node - "$REPO/reports/behavior-eval/$run_id/summary.json" "$REPO/reports/behavior-eval/$run_id" <<'NODE'
 const fs=require('fs'),crypto=require('crypto'),path=require('path');
 const summary=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));const root=process.argv[3];
@@ -126,6 +161,26 @@ for(const result of summary.results) for(const assertion of result.assertions) f
   if(actual!==evidence.sha256) throw new Error(`stale archived evidence: ${result.host}:${evidence.path}`);
 }
 NODE
+    rm -rf "$tmp" "$REPO/reports/behavior-eval/$run_id"
+}
+
+@test "each host must create its own evidence instead of reusing a prior host packet" {
+    tmp="$(mktemp -d)"
+    fake_bin="$tmp/bin"
+    run_id="isolated-host-evidence-${BASHPID}"
+    make_fake_hosts "$fake_bin" success claude
+    make_fake_hosts "$fake_bin" no-result zcode
+    rm -rf "$REPO/reports/behavior-eval/$run_id"
+
+    run env "PATH=$fake_bin" "$NODE_BIN" "$SCRIPT" run --execute-paid --paid-confirmation "$run_id" --max-budget-usd 10 --scenario route-single-entry --hosts claude,zcode --run-id "$run_id" --json
+
+    [ "$status" -eq 1 ]
+    node -e '
+const result = JSON.parse(process.argv[1]);
+const claude = result.results.find((item) => item.host === "claude");
+const zcode = result.results.find((item) => item.host === "zcode");
+if (claude.status !== "pass" || zcode.status !== "fail" || !/result packet/.test(zcode.reason || "")) throw new Error(JSON.stringify(result));
+' "$output"
     rm -rf "$tmp" "$REPO/reports/behavior-eval/$run_id"
 }
 
@@ -499,6 +554,38 @@ if (!Array.isArray(plan.commands) || plan.commands.length !== 2) throw new Error
 ' "$output"
 }
 
+@test "plan can place public candidate evidence under an explicit external reports root" {
+    external_root="$BATS_TEST_TMPDIR/public-candidate-evidence"
+    run node "$SCRIPT" plan --scenario route-single-entry --hosts claude --run-id public-evidence-plan --reports-root "$external_root" --json
+
+    [ "$status" -eq 0 ]
+    node -e '
+const plan = JSON.parse(process.argv[1]);
+const expected = process.argv[2];
+if (plan.output.absoluteDirectory !== `${expected}/behavior-eval/public-evidence-plan`) throw new Error(JSON.stringify(plan.output));
+if (plan.output.directory !== "behavior-eval/public-evidence-plan/") throw new Error(JSON.stringify(plan.output));
+' "$output" "$external_root"
+    [ ! -e "$external_root/behavior-eval/public-evidence-plan" ]
+}
+
+@test "paid run writes evidence to an external reports root even when the root canonicalizes" {
+    tmp="$(mktemp -d)"
+    fake_bin="$tmp/bin"
+    external_root="/tmp/novel-assistant-behavior-eval-${BASHPID}"
+    run_id="external-run-${BASHPID}"
+    make_fake_hosts "$fake_bin" success claude
+    rm -rf "$external_root"
+
+    run env "PATH=$fake_bin" "$NODE_BIN" "$SCRIPT" run \
+      --execute-paid --paid-confirmation "$run_id" --max-budget-usd 10 \
+      --scenario route-single-entry --hosts claude --run-id "$run_id" \
+      --reports-root "$external_root" --json
+
+    [ "$status" -eq 0 ]
+    [ -f "$external_root/behavior-eval/$run_id/summary.json" ]
+    rm -rf "$tmp" "$external_root"
+}
+
 @test "run-id accepts safe values and rejects traversal outside the report root" {
     run node "$SCRIPT" plan --scenario route-single-entry --hosts claude --run-id "release_2026.07-10" --json
 
@@ -627,7 +714,7 @@ const result = JSON.parse(process.argv[1]);
 if (result.status !== "pass") throw new Error(JSON.stringify(result));
 if (result.results[0].assertions.some((item) => item.status !== "pass")) throw new Error(JSON.stringify(result.results[0]));
 ' "$output"
-        [ -f "$REPO/reports/behavior-eval/$run_id/project/fixture/fixture.json" ]
+        [ -f "$REPO/reports/behavior-eval/$run_id/project/claude/fixture/fixture.json" ]
         rm -rf "$REPO/reports/behavior-eval/$run_id"
     done
 

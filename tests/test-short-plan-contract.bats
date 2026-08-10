@@ -120,6 +120,66 @@ NODE
   printf '%s' "$output" | jq -e '.status == "current" and .narrative_quality.status == "pass"' || { echo "$output"; false; }
 }
 
+@test "short plan contract accepts numbered causal steps below natural markdown fields" {
+  node - "$REPO_ROOT" <<'NODE'
+const assert = require('assert');
+const path = require('path');
+const { analyzeShortOutlineNarrativeQuality } = require(path.join(process.argv[2], 'scripts/lib/short-plan-contract.js'));
+const outline = `# 小节大纲
+
+## 第一节：公开复核
+- 开场钩子：复核单上的编号与屏幕记录冲突。
+- 故事承诺：主角必须在公开程序里留下可核验的证据。
+- 场景动作：主角把两份记录摊到会议桌上，当面要求主管解释。
+- 主角选择：她拒绝撤回复核，选择继续登记。
+- 可见阻力：主管要求她立刻停止，并威胁取消她的权限。
+- 因果链：
+  1. 她提交复核登记 -> 主管要求撤回
+  2. 主管要求撤回 -> 她请求第三方见证
+- 情绪目标：从迟疑到警觉。
+- 节尾钩子：第三方见证即将到场。
+
+## 第二节：记录落名
+- 承接上节：第三方见证即将到场，主角把登记簿交给对方核验。
+- 场景动作：主角逐项提交登记簿和系统日志，请主持人现场比对。
+- 主角选择：她公开签下自己的名字，拒绝把责任推给同事。
+- 可见阻力：主管把问题说成旧录入失误，要求转入内部处理。
+- 因果链：
+  1. 主持人核验登记簿 -> 审批账号被公开
+  2. 审批账号被公开 -> 主管失去切割责任的空间
+- 情绪目标：从被反指到冷静承担。
+- 现实后果：主管接受调查，错误记录进入更正程序。
+- 关系收束：她与主管保持裂痕，不再替对方背书。
+- 主题回扣：责任被写进具体记录，不再被一句旧问题覆盖。
+- 节尾钩子：更正记录等待下一次公开核验。
+`;
+const checked = analyzeShortOutlineNarrativeQuality(outline, 2);
+assert.equal(checked.status, 'pass', JSON.stringify(checked));
+NODE
+}
+
+@test "short plan contract accepts a concrete Chinese handoff without requiring near-duplicate wording" {
+  node - "$BOOK/小节大纲.md" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+  const text = fs.readFileSync(file, 'utf8')
+  .replace(
+    '- 节尾钩子：凭证空缺。',
+    '- 节尾钩子：旧纸质记录已装入透明封存袋，校验标签压在柜门上，但负责人仍坚持“重复记录”的说法，销毁批次的口头指令没有撤，后续关联人还没有机会当面核验。',
+  )
+  .replace(
+    '- 承接上节：凭证空缺的复核画面逼主角追问原始现场。',
+    '- 承接上节：透明封存袋已被推到公开复查桌上，负责人仍坚持“重复记录”的说法；主角只能让旁人当场翻开它，再追问销毁口令从哪里传下来的。',
+  );
+fs.writeFileSync(file, text);
+NODE
+
+  run node "$SCRIPT" check --project-root "$BOOK" --json
+
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s' "$output" | jq -e '.status == "current" and ([.findings[] | select(.code == "section_hook_handoff_disconnected")] | length) == 0'
+}
+
 @test "section outline contract accepts semantic combined fields without legacy labels" {
   cat > "$BOOK/小节大纲.md" <<'EOF'
 # 小节大纲

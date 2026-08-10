@@ -15,14 +15,18 @@ const REQUIRED_SCENARIOS = Object.freeze([
   'review-repair-staged-gate',
   'chapter-commit-conflict',
 ]);
-const REQUIRED_HOSTS = Object.freeze(['claude', 'codex', 'zcode']);
+// Paid release behavior evidence is intentionally independent from the
+// three-target installation mirror. The approved release matrix is Claude +
+// ZCode; Codex remains covered by deterministic installation verification.
+const REQUIRED_HOSTS = Object.freeze(['claude', 'zcode']);
 
 function parseArgs(argv) {
-  const args = { repoRoot: process.cwd(), json: false };
+  const args = { repoRoot: process.cwd(), reportsRoot: '', json: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--json') args.json = true;
     else if (arg === '--repo-root') args.repoRoot = path.resolve(argv[++i] || '');
+    else if (arg === '--reports-root') args.reportsRoot = path.resolve(argv[++i] || '');
     else if (arg === '--help' || arg === '-h') args.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
@@ -48,16 +52,17 @@ function currentBundle(repoRoot) {
   };
 }
 
-function summaryRoots(repoRoot) {
+function summaryRoots(repoRoot, reportsRoot = '') {
+  const root = reportsRoot ? path.resolve(reportsRoot) : path.join(repoRoot, 'reports');
   return [
-    path.join(repoRoot, 'reports', 'behavior-eval'),
-    path.join(repoRoot, 'reports', 'private', 'behavior-eval'),
+    path.join(root, 'behavior-eval'),
+    path.join(root, 'private', 'behavior-eval'),
   ];
 }
 
-function findSummaries(repoRoot) {
+function findSummaries(repoRoot, reportsRoot = '') {
   const files = [];
-  for (const root of summaryRoots(repoRoot)) {
+  for (const root of summaryRoots(repoRoot, reportsRoot)) {
     if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) continue;
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -75,6 +80,7 @@ function validateSummary(summary, file, bundle) {
   if (summary.status !== 'pass') findings.push('summary_not_pass');
   if (summary.paidExecution !== true) findings.push('not_paid_execution');
   if (String(((summary.release_evidence || {}).bundleId) || '') !== bundle.bundleId) findings.push('bundle_mismatch');
+  if (String(((summary.release_evidence || {}).sourceCommit) || '') !== bundle.sourceCommit) findings.push('source_commit_mismatch');
   const hosts = Array.isArray(summary.hosts) ? summary.hosts.map(String) : [];
   for (const host of REQUIRED_HOSTS) if (!hosts.includes(host)) findings.push(`missing_host:${host}`);
   const results = Array.isArray(summary.results) ? summary.results : [];
@@ -128,10 +134,10 @@ function verifyEvidenceFile(summaryFile, host, evidence) {
   }
 }
 
-function evaluateGate(repoRoot) {
+function evaluateGate(repoRoot, options = {}) {
   const root = path.resolve(repoRoot);
   const bundle = currentBundle(root);
-  const summaries = findSummaries(root)
+  const summaries = findSummaries(root, options.reportsRoot)
     .map((file) => ({ file, summary: readJson(file) }))
     .filter((item) => item.summary && !item.summary.__error)
     .map((item) => validateSummary(item.summary, item.file, bundle));
@@ -174,10 +180,10 @@ function printText(result) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log('Usage: node scripts/behavior-eval-release-gate.js [--repo-root PATH] [--json]');
+    console.log('Usage: node scripts/behavior-eval-release-gate.js [--repo-root PATH] [--reports-root PATH] [--json]');
     return 0;
   }
-  const result = evaluateGate(args.repoRoot);
+  const result = evaluateGate(args.repoRoot, { reportsRoot: args.reportsRoot });
   if (args.json) process.stdout.write(`${JSON.stringify(result)}\n`);
   else printText(result);
   return result.status === 'pass' ? 0 : 1;

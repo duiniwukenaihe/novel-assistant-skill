@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { resolveInstallTargets, verifyBundleTarget, verifyRuntimeTarget } = require('./lib/install-target-resolver');
 
 const args = parseArgs(process.argv.slice(2));
 const skillDir = path.resolve(args.skillDir || path.join(__dirname, '..'));
@@ -18,10 +19,7 @@ const apply = Boolean(args.apply);
 const channel = args.channel || '';
 const installTargets = args.installTargets.length
   ? args.installTargets.map(expandHome)
-  : [
-      path.join(os.homedir(), '.claude', 'skills', 'novel-assistant'),
-      path.join(os.homedir(), '.codex', 'skills', 'novel-assistant'),
-    ];
+  : resolveInstallTargets({});
 
 main();
 
@@ -299,9 +297,15 @@ function buildBundle(repo) {
 function syncSkill(repo, targets) {
   const src = path.join(repo, 'skills', 'novel-assistant');
   if (!fs.existsSync(path.join(src, 'SKILL.md'))) throw new Error(`缺少 skill 包：${src}`);
+  const manifest = JSON.parse(fs.readFileSync(path.join(src, 'novel-assistant-manifest.json'), 'utf8'));
+  const profile = Number(manifest.privateInternalSkillCount || 0) > 0 ? 'private' : 'public';
   for (const target of targets) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     run('rsync', ['-a', '--delete', `${src}/`, `${target}/`], { cwd: repo });
+    const verification = verifyBundleTarget(src, target);
+    if (!verification.ok) throw new Error(`安装镜像校验失败：${target} ${JSON.stringify(verification.findings)}`);
+    const runtime = verifyRuntimeTarget(target, profile);
+    if (!runtime.ok) throw new Error(`安装运行时校验失败：${target} ${JSON.stringify(runtime.findings)}`);
   }
 }
 
@@ -490,7 +494,7 @@ Options:
   --json                   Print JSON
   --apply                  Apply selected update after confirmation by caller
   --channel <stable|development>
-  --install-target <dir>   Repeatable install target. Default: Claude and Codex novel-assistant
+  --install-target <dir>   Repeatable install target. Default: Claude, Codex and ZCode novel-assistant
 
 Default mode only checks. It never pulls, merges, installs, or refreshes a book project.
 `);

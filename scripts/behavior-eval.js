@@ -26,7 +26,7 @@ const DEFAULT_TERMINATION_GRACE_MS = 3 * 1000;
 const EVENT_TEXT_LIMIT = 4096;
 const ACTIVE_PROCESS_GROUPS = new Set();
 
-const USAGE = `Usage: node scripts/behavior-eval.js <plan|run> --scenario <id> --hosts <claude,codex,zcode> [--json] [--execute-paid] [--paid-confirmation <run-id>] [--max-budget-usd <n>] [--timeout-ms <n>]
+const USAGE = `Usage: node scripts/behavior-eval.js <plan|run> --scenario <id> --hosts <claude,codex,zcode> [--reports-root <external-dir>] [--skill-dir <candidate-skill-dir>] [--json] [--execute-paid] [--paid-confirmation <run-id>] [--max-budget-usd <n>] [--timeout-ms <n>]
 
 Create behavior-evaluation contracts and explicit paid host runs.
 `;
@@ -42,7 +42,7 @@ function parseArgs(argv) {
     const arg = rest[index];
     if (arg === '--json') options.json = true;
     else if (arg === '--execute-paid') options.executePaid = true;
-    else if (['--scenario', '--hosts', '--run-id', '--paid-confirmation', '--max-budget-usd', '--timeout-ms'].includes(arg)) {
+    else if (['--scenario', '--hosts', '--run-id', '--paid-confirmation', '--max-budget-usd', '--timeout-ms', '--reports-root', '--skill-dir'].includes(arg)) {
       const value = rest[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
       options[arg.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value;
@@ -139,11 +139,7 @@ async function runEvaluation(plan, options = {}) {
   const authorization = authorizePaidRun(plan, options);
   const timeoutMs = positiveInteger(options.timeoutMs, '--timeout-ms', DEFAULT_TIMEOUT_MS);
   const terminationGraceMs = positiveInteger(options.terminationGraceMs, 'terminationGraceMs', DEFAULT_TERMINATION_GRACE_MS);
-  const runDirectory = createRunDirectory(plan.output.absoluteDirectory);
-  const projectDirectory = path.join(runDirectory, 'project');
-  fs.mkdirSync(projectDirectory, { mode: 0o700 });
-  fs.chmodSync(projectDirectory, 0o700);
-  materializeFixture(plan.scenario.fixture, projectDirectory);
+  const runDirectory = createRunDirectory(plan.output.absoluteDirectory, plan.output.reportsRoot);
   const output = { ...plan.output, absoluteDirectory: runDirectory };
   const eventLog = path.join(runDirectory, 'events.jsonl');
   const startedAt = Date.now();
@@ -159,8 +155,19 @@ async function runEvaluation(plan, options = {}) {
       maxBudgetUsd: authorization.maxBudgetUsd,
     },
   };
-  const packet = writeRunnerPacket(projectDirectory, executionPlan, timeoutMs);
-  const preflight = preflightHosts(executionPlan, projectDirectory, packet, authorization, options);
+  const hostProjects = new Map();
+  for (const host of plan.hosts) {
+    const projectDirectory = path.join(runDirectory, 'project', host);
+    fs.mkdirSync(projectDirectory, { recursive: true, mode: 0o700 });
+    fs.chmodSync(projectDirectory, 0o700);
+    materializeFixture(plan.scenario.fixture, projectDirectory);
+    materializeCandidateSkill(projectDirectory, [host], options.skillDir);
+    hostProjects.set(host, {
+      projectDirectory,
+      packet: writeRunnerPacket(projectDirectory, executionPlan, timeoutMs),
+    });
+  }
+  const preflight = preflightHosts(executionPlan, hostProjects, authorization, options);
   appendEvent(eventLog, { type: 'preflight', status: preflight.ok ? 'ready' : 'blocked', hosts: plan.hosts });
   if (!preflight.ok) return writeSummary(runDirectory, executionPlan, startedAt, preflight.results, eventLog);
 
@@ -174,7 +181,7 @@ async function runEvaluation(plan, options = {}) {
     results.push(await evaluateHost({
       hostPlan,
       plan: executionPlan,
-      projectDirectory,
+      projectDirectory: hostPlan.projectDirectory,
       runDirectory,
       eventLog,
       timeoutMs,
@@ -199,10 +206,15 @@ function authorizePaidRun(plan, options) {
   return { executePaid: true, confirmation: options.paidConfirmation, maxBudgetUsd, estimatedUsd: plan.budget.estimatedUsd };
 }
 
-function preflightHosts(plan, projectDirectory, packet, authorization, options) {
+function preflightHosts(plan, hostProjects, authorization, options) {
   const hosts = [];
   const results = [];
   for (const host of plan.hosts) {
+    const project = hostProjects.get(host);
+    if (!project) {
+      results.push(blockedResult(host, plan, 'blocked_preflight_invalid_configuration', 'host project fixture is missing'));
+      continue;
+    }
     let adapter;
     try {
       adapter = resolveEvaluationAdapter(host);
@@ -218,9 +230,9 @@ function preflightHosts(plan, projectDirectory, packet, authorization, options) 
     try {
       const invocations = [];
       for (let attempt = 0; attempt <= MAX_HEALTH_RECOVERIES; attempt += 1) {
-        invocations.push(buildInvocation({ host, adapter, executable, plan, projectDirectory, packet, authorization, attempt }));
+        invocations.push(buildInvocation({ host, adapter, executable, plan, projectDirectory: project.projectDirectory, packet: project.packet, authorization, attempt }));
       }
-      hosts.push({ host, adapter, executable, invocations });
+      hosts.push({ host, adapter, executable, invocations, projectDirectory: project.projectDirectory });
     } catch (error) {
       results.push(blockedResult(host, plan, 'blocked_preflight_invalid_configuration', error.message));
     }
@@ -455,11 +467,31 @@ function materializeFixture(fixture, projectDirectory) {
   fs.cpSync(source, path.join(projectDirectory, 'fixture'), { recursive: true, dereference: false, mode: fs.constants.COPYFILE_FICLONE });
 }
 
-function assertNoSymlink(directory) {
+function materializeCandidateSkill(projectDirectory, hosts, skillDir = '') {
+  if (!skillDir) return;
+  const source = path.resolve(String(skillDir));
+  if (!fs.existsSync(source) || fs.lstatSync(source).isSymbolicLink() || !fs.statSync(source).isDirectory()) {
+    throw blockedError('blocked_skill_dir_unavailable');
+  }
+  for (const required of ['SKILL.md', 'novel-assistant-manifest.json']) {
+    const file = path.join(source, required);
+    if (!fs.existsSync(file) || fs.lstatSync(file).isSymbolicLink() || !fs.statSync(file).isFile()) {
+      throw blockedError('blocked_skill_dir_invalid');
+    }
+  }
+  assertNoSymlink(source, 'blocked_skill_dir_symlink');
+  for (const host of hosts) {
+    const target = path.join(projectDirectory, `.${host}`, 'skills', 'novel-assistant');
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    fs.cpSync(source, target, { recursive: true, dereference: false, mode: fs.constants.COPYFILE_FICLONE });
+  }
+}
+
+function assertNoSymlink(directory, errorCode = 'blocked_fixture_symlink') {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const target = path.join(directory, entry.name);
-    if (fs.lstatSync(target).isSymbolicLink()) throw blockedError('blocked_fixture_symlink');
-    if (entry.isDirectory()) assertNoSymlink(target);
+    if (fs.lstatSync(target).isSymbolicLink()) throw blockedError(errorCode);
+    if (entry.isDirectory()) assertNoSymlink(target, errorCode);
   }
 }
 
@@ -652,13 +684,15 @@ function buildPrompt(scenario, attempt, packet) {
   const assertionFiles = scenario.assertions.map((name) => `artifacts/${name}.txt`).join(', ');
   return [
     'Use the installed /novel-assistant skill for this isolated behavior evaluation.',
+    'When a project-local novel-assistant skill is present, it is the release candidate under test and takes precedence over user-level copies.',
     `Scenario: ${scenario.id}. Fixture: ${scenario.fixture}.`,
     `Assertions: ${scenario.assertions.join(', ')}.`,
     ...(Array.isArray(scenario.requirements) && scenario.requirements.length
       ? ['Scenario requirements:', ...scenario.requirements.map((requirement, index) => `${index + 1}. ${requirement}`)]
       : []),
     `Read only ${packet.runnerPacketRel} and fixture/fixture.json. Do not search, list, or read any parent directory or repository path.`,
-    `Create only ${assertionFiles}, then write ${packet.resultPacketRel}.`,
+    'If /novel-assistant first offers an environment update, select "2. 暂不更新，继续原意图" and continue this evaluation.',
+    `Create only ${assertionFiles}. You must write ${packet.resultPacketRel} after creating them.`,
     `Write the result packet exactly as {"scenario":"${scenario.id}","assertions":[{"name":"...","status":"pass","evidence":[{"path":"artifacts/...txt","sha256":"<64 hex>"}]}]}.`,
     'It must contain one assertion per declared name and each assertion must carry the SHA-256 of its matching artifact.',
     'This is an isolated, disposable evaluation directory. Use the available write or command tool only for those declared files, then finish immediately.',
@@ -718,4 +752,4 @@ function blockedError(code) {
 
 if (require.main === module) Promise.resolve(main()).then((code) => { process.exitCode = code; });
 
-module.exports = { executeInvocation, main, parseArgs, runEvaluation, sanitizeForArtifact, terminateProcessGroup };
+module.exports = { buildPrompt, executeInvocation, main, parseArgs, runEvaluation, sanitizeForArtifact, terminateProcessGroup };

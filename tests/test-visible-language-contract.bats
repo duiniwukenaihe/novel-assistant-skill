@@ -41,3 +41,37 @@ NODE
     grep -q '"execution_mode"' "$REVIEW"
     grep -q '"raw_status"' "$REVIEW"
 }
+
+@test "author-facing full and solo report templates do not require machine dispatch keys" {
+    REVIEW="$REVIEW" node <<'NODE'
+const fs = require('fs');
+const review = fs.readFileSync(process.env.REVIEW, 'utf8');
+for (const [startLabel, endLabel] of [
+  ['## Phase 4：输出报告', '\n## lean 模式'],
+  ['### solo 模式输出格式', '\n---\n\n## 流程衔接'],
+]) {
+  const start = review.indexOf(startLabel);
+  const end = review.indexOf(endLabel, start + startLabel.length);
+  if (start < 0 || end < 0) throw new Error(`missing report block: ${startLabel}`);
+  const visible = review.slice(start, end);
+  for (const forbidden of ['Requested Mode:', 'Effective Mode:', 'Fallback:', 'Rubric Source:']) {
+    if (visible.includes(forbidden)) throw new Error(`${startLabel} leaks ${forbidden}`);
+  }
+}
+NODE
+}
+
+@test "complete short review never routes through the longform chapter evidence scanner" {
+    REVIEW="$REVIEW" node <<'NODE'
+const fs = require('fs');
+const review = fs.readFileSync(process.env.REVIEW, 'utf8');
+const start = review.indexOf('## 完整短篇生产验收');
+const end = review.indexOf('\n## ', start + 1);
+if (start < 0 || end < 0) throw new Error('missing complete short review block');
+const block = review.slice(start, end);
+if (!block.includes('review-batch-evidence-scan.js')) throw new Error('missing explicit longform scanner boundary');
+if (!/短篇.*(?:不得|禁止).*review-batch-evidence-scan\.js/u.test(block)) {
+  throw new Error('short review does not explicitly reject the longform chapter evidence scanner');
+}
+NODE
+}

@@ -22,7 +22,7 @@ Remove `-g` for a project-local install.
 
 ### Use
 
-Enter the story directory and invoke this in Claude Code, Codex, ZCode, or OpenCode:
+Enter the story directory and invoke this in Claude Code, Codex, or ZCode. OpenCode is also supported:
 
 ```text
 /novel-assistant

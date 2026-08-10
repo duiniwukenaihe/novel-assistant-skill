@@ -33,6 +33,29 @@ NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
+@test "full story evidence pack records static detector evidence without promoting it to a story verdict" {
+  run node - "$REPO/scripts/lib/short-story-editorial-review.js" "$BATS_TEST_TMPDIR/static-evidence" <<'NODE'
+const fs=require('fs'),path=require('path');const api=require(process.argv[2]);const root=process.argv[3];
+fs.mkdirSync(root,{recursive:true});
+fs.writeFileSync(path.join(root,'正文.md'),[
+  '## 第001节 起因',
+  '',
+  '林舟找到了第一份记录。',
+  '',
+  '## 第002节 异常',
+  '',
+  '作为AI，我无法继续写作。',
+].join('\n'));
+const pack=api.buildShortStoryEvidencePack(root,{workflowId:'wf-static'});
+if(pack.status!=='ok') throw new Error(JSON.stringify(pack));
+if(!Array.isArray(pack.static_findings)||!pack.static_findings.some(row=>row.detector==='degeneration'&&row.section_index===2&&row.line>0)) throw new Error(JSON.stringify(pack.static_findings));
+if(!Array.isArray(pack.detector_status)||!pack.detector_status.every(row=>['complete','unavailable'].includes(row.status))) throw new Error(JSON.stringify(pack.detector_status));
+if(pack.structural_signals.some(row=>String(row.code||'').includes('degeneration'))) throw new Error('static evidence was promoted to a structural verdict');
+if(!String(pack.note||'').includes('静态检测')) throw new Error(JSON.stringify(pack.note));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 @test "editorial review card requires every section, character agency, identity payoff and exact prose evidence" {
   run node - "$REPO/scripts/lib/short-story-editorial-review.js" "$BOOK" <<'NODE'
 const fs=require('fs'),path=require('path');const api=require(process.argv[2]);const root=process.argv[3];
@@ -73,6 +96,23 @@ const out=review.validateEditorialReviewCard(card,pack);
 if(out.status!=='invalid') throw new Error(JSON.stringify(out));
 if(!out.findings.some(item=>item.field==='reader_response.reader_profile.platform_mode')) throw new Error(JSON.stringify(out));
 if(!out.findings.some(item=>item.field==='reader_response.reader_profile.profile_basis')) throw new Error(JSON.stringify(out));
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "malformed reader evidence arrays return validation findings instead of crashing the workflow" {
+  run node - "$REPO/scripts/lib/short-story-editorial-review.js" "$BOOK" <<'NODE'
+const review=require(process.argv[2]);const root=process.argv[3];
+const pack=review.buildShortStoryEvidencePack(root,{workflowId:'wf-malformed-reader'});
+const reader={
+  reader_profile:{target_platform:'未确认',platform_mode:'general_fiction',genre_lens:[],style_lens:[],reading_scene:'mobile_continuous',profile_basis:'用户未指定'},
+  section_reader_response:[],drop_off_points:[],character_impressions:[],
+  identity_continuity:{unexpected:'object'},supporting_character_reality:[],reveal_aftershock:[],
+  promise_response:{title_expectation:'待核对',payoff_status:'partial',reader_aftertaste:'待核对',evidence_quotes:{unexpected:'object'}},
+  final_reader_state:{would_continue_or_recommend:'maybe',strongest_pull:'待核对',biggest_resistance:'证据不足'},
+};
+const out=review.validateReaderResponseCard(reader,pack);
+if(out.status!=='invalid'||!Array.isArray(out.findings)||!out.findings.length) throw new Error(JSON.stringify(out));
 NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
@@ -126,47 +166,76 @@ NODE
 }
 
 @test "a revise verdict becomes task-scoped editorial feedback and returns to the existing impact workflow" {
-  node "$REPO/scripts/workflow-state-machine.js" create --workflow-type short_write --project-root "$BOOK" --user-goal test --no-private-registry --json > "$BATS_TEST_TMPDIR/create.json"
-  WORKFLOW_ID="$(node -e "console.log(require(process.argv[1]).task.workflow_id)" "$BATS_TEST_TMPDIR/create.json")"
-  node - "$BOOK" "$BATS_TEST_TMPDIR/create.json" <<'NODE'
-const fs=require('fs'),path=require('path');const root=process.argv[2],created=require(process.argv[3]);const file=path.join(root,created.task.task_dir,'task.json');const task=JSON.parse(fs.readFileSync(file));
-task.current_stage='full_story_review';task.current_step='full_story_review';task.result_contract_version=1;
-task.machine={...(task.machine||{}),current_stage:'full_story_review',current_step:'full_story_review',completed_stages:['full_story_assembly'],remaining_stages:['full_story_review','deslop','final_check']};
-task.stage_execution={status:'running',stage_id:'full_story_review',step_id:'full_story_review',owner_module:'story-review',expected_result_packet:`${task.task_dir}/result-packets/full_story_review.result.json`};
-fs.writeFileSync(file,JSON.stringify(task,null,2));
+  node - "$REPO" "$BOOK" "$BATS_TEST_TMPDIR/create.json" <<'NODE'
+const fs=require('fs'),path=require('path');const [repo,root,out]=process.argv.slice(2);
+const store=require(path.join(repo,'scripts/lib/workflow-v3/task-store.js'));
+const task=store.createTaskRecord(root,{workflow_id:'wf-v3-editorial-revise',workflow_type:'short_write',current_stage:'editorial_review',user_goal:'验证审阅回炉'});
+fs.writeFileSync(out,JSON.stringify({task},null,2));
 NODE
-  node "$REPO/scripts/short-story-review-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json > "$BATS_TEST_TMPDIR/required.json"
+  WORKFLOW_ID="$(node -e "console.log(require(process.argv[1]).task.workflow_id)" "$BATS_TEST_TMPDIR/create.json")"
+  node - "$REPO" "$BOOK" "$WORKFLOW_ID" "$BATS_TEST_TMPDIR/required.json" <<'NODE'
+const fs=require('fs'),path=require('path');const [repo,root,id,out]=process.argv.slice(2);
+const engine=require(path.join(repo,'scripts/lib/workflow-v3/engine.js'));
+const closure=require(path.join(repo,'scripts/lib/short-production/closure.js'));
+fs.writeFileSync(out,JSON.stringify(closure.finalizeEditorialReview({projectRoot:root,task:engine.readTask(root,id)}),null,2));
+NODE
   node - "$BOOK" "$BATS_TEST_TMPDIR/required.json" <<'NODE'
 const fs=require('fs'),path=require('path');const root=process.argv[2],required=require(process.argv[3]);const pack=JSON.parse(fs.readFileSync(path.join(root,required.evidence_pack)));const quote=i=>pack.section_metrics[i].opening_excerpt.slice(0,18);
 const reader={reader_profile:{target_platform:'番茄短篇',platform_mode:'free_feed_mobile',genre_lens:['现实世情'],style_lens:['restrained_realism','suspense_gap'],reading_scene:'mobile_continuous',profile_basis:'设定.md'},section_reader_response:pack.section_metrics.map((row,i)=>({section_index:row.section_index,engagement:i>2?'wavering':'engaged',felt_emotion:'担心真相代价',reader_question:'下一步会发生什么',evidence_quote:quote(i)})),drop_off_points:[],character_impressions:[{character:'阿岚',first_impression:'被保护',later_impression:'开始行动',trust_change:'up',evidence_quotes:['阿岚拿到档案单。']}],identity_continuity:[{identity_or_trait:'复核员',visibility:'fading',reader_effect:'身份后续参与不足',evidence_quotes:['阿岚在复核里看见编号空缺。','主管叫停复核。']}],supporting_character_reality:[{character:'主管',felt_status:'thin',apparent_want:'保住部门',decisive_choice:'叫停复核',relationship_effect:'失去下属信任',evidence_quotes:['主管叫停复核。']}],reveal_aftershock:[{reveal_section_index:4,revelation:'原始凭证出现',immediate_reader_shift:'期待公开对抗',consequence_seen:'partial',later_evidence_quotes:['审计员把原始凭证交给阿岚。','凭证重新归档。']}],promise_response:{title_expectation:'档案空缺真相',payoff_status:'partial',evidence_quotes:['凭证重新归档。'],reader_aftertaste:'后果太快'},final_reader_state:{would_continue_or_recommend:'maybe',strongest_pull:'真相',biggest_resistance:'结尾压缩'}};
 const card={schemaVersion:'1.0.0',workflow_id:pack.workflow_id,story_sha256:pack.story_sha256,decision:'revise',summary:'后段人物与高潮需要回炉。',reader_response:reader,opening_assessment:{verdict:'concern',evidence_quote:'阿岚在复核里看见编号空缺。',reason:'背景比例偏高。'},section_function_matrix:pack.section_metrics.map((row,i)=>({section_index:row.section_index,structural_role:`第${row.section_index}节职责`,function_verdict:i>2?'concern':'pass',evidence_quote:quote(i),note:'逐节验收'})),character_arc_matrix:[{character:'阿岚',desire:'承担责任',independent_stake:'获得独立判断权',active_action:'公开证据',cost:'上下级冲突',relationship_effect:'保护关系破裂',change:'开始独立决策',verdict:'pass',evidence_quotes:['阿岚拿到档案单。']},{character:'主管',desire:'保住部门',independent_stake:'保住经营控制权',active_action:'叫停复核',cost:'失去信任',relationship_effect:'上下级转为对抗',change:'责任暴露',verdict:'concern',evidence_quotes:['主管叫停复核。']}],identity_payoff_matrix:[{identity_or_trait:'复核员',identity_type:'职业与技能',setup_quote:'阿岚在复核里看见编号空缺。',payoff_quote:'主管叫停复核。',ongoing_participation:'后续参与不足',verdict:'concern'}],reveal_aftershock_matrix:[{reveal_section_index:4,revelation:'审计员交出原始凭证',immediate_consequence:'获得公开证据',downstream_change:'后果收束偏短',verdict:'concern',evidence_quotes:['审计员把原始凭证交给阿岚。','凭证重新归档。']}],climax_ending_assessment:{verdict:'fail',climax_quote:'审计员把原始凭证交给阿岚。',ending_quote:'凭证重新归档。',reason:'高潮和后果被压缩。'},findings:[{code:'TailCollapse',severity:'S2',scope:'第4-5节及小节大纲',evidence_quote:'凭证重新归档。',repair_direction:'先补高潮行动链和结尾责任后果，再重建受影响 Brief。'}]};
+fs.writeFileSync(path.join(root,required.reader_response_card),JSON.stringify(reader,null,2));
 fs.writeFileSync(path.join(root,required.review_card),JSON.stringify(card,null,2));
 NODE
-  run node "$REPO/scripts/short-story-review-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
+  run node - "$REPO" "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const path=require('path');const [repo,root,id]=process.argv.slice(2);
+const engine=require(path.join(repo,'scripts/lib/workflow-v3/engine.js'));
+const closure=require(path.join(repo,'scripts/lib/short-production/closure.js'));
+const task=engine.readTask(root,id);const result=closure.finalizeEditorialReview({projectRoot:root,task});
+if(result.kind!=='completed') throw new Error(JSON.stringify(result));
+const outcome=engine.applyStageResult(root,id,task.state_version,result);
+console.log(JSON.stringify(outcome));
+NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
 const task=require(`${process.argv[2]}/追踪/workflow/tasks/${process.argv[3]}/task.json`);
-if(task.current_stage!=='feedback_impact_sync') throw new Error(JSON.stringify(task.current_stage));
-const item=((task.pending_feedback||{}).items||[])[0];
-if(!item||item.source_kind!=='editorial_review'||!item.text.includes('TailCollapse')) throw new Error(JSON.stringify(task.pending_feedback));
+if(task.current_stage!=='editorial_review') throw new Error(JSON.stringify(task.current_stage));
+const item=(((task.pending_feedback||{}).proposed_plan||{}).review_findings||[])[0];
+if(!item||item.code!=='TailCollapse'||!item.visible_title) throw new Error(JSON.stringify(task.pending_feedback));
+if((task.pending_action||{}).feedback_id!==(task.pending_feedback||{}).id) throw new Error(JSON.stringify(task.pending_action));
 if((task.short_full_story_review||{}).decision!=='revise') throw new Error(JSON.stringify(task.short_full_story_review));
 NODE
 }
 
 @test "a pass verdict advances to expression cleanup without writing story facts" {
-  node "$REPO/scripts/workflow-state-machine.js" create --workflow-type short_write --project-root "$BOOK" --user-goal test --no-private-registry --json > "$BATS_TEST_TMPDIR/pass-create.json"
-  WORKFLOW_ID="$(node -e "console.log(require(process.argv[1]).task.workflow_id)" "$BATS_TEST_TMPDIR/pass-create.json")"
-  node - "$BOOK" "$BATS_TEST_TMPDIR/pass-create.json" <<'NODE'
-const fs=require('fs'),path=require('path');const root=process.argv[2],created=require(process.argv[3]);const file=path.join(root,created.task.task_dir,'task.json');const task=JSON.parse(fs.readFileSync(file));
-task.current_stage='full_story_review';task.current_step='full_story_review';task.result_contract_version=1;task.machine={...(task.machine||{}),current_stage:'full_story_review',current_step:'full_story_review',completed_stages:['full_story_assembly'],remaining_stages:['full_story_review','deslop','final_check']};task.stage_execution={status:'running',stage_id:'full_story_review',step_id:'full_story_review',owner_module:'story-review',expected_result_packet:`${task.task_dir}/result-packets/full_story_review.result.json`};fs.writeFileSync(file,JSON.stringify(task,null,2));
+  node - "$REPO" "$BOOK" "$BATS_TEST_TMPDIR/pass-create.json" <<'NODE'
+const fs=require('fs'),path=require('path');const [repo,root,out]=process.argv.slice(2);
+const store=require(path.join(repo,'scripts/lib/workflow-v3/task-store.js'));
+const task=store.createTaskRecord(root,{workflow_id:'wf-v3-editorial-pass',workflow_type:'short_write',current_stage:'editorial_review',user_goal:'验证审阅通过'});
+fs.writeFileSync(out,JSON.stringify({task},null,2));
 NODE
-  node "$REPO/scripts/short-story-review-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json > "$BATS_TEST_TMPDIR/pass-required.json"
+  WORKFLOW_ID="$(node -e "console.log(require(process.argv[1]).task.workflow_id)" "$BATS_TEST_TMPDIR/pass-create.json")"
+  node - "$REPO" "$BOOK" "$WORKFLOW_ID" "$BATS_TEST_TMPDIR/pass-required.json" <<'NODE'
+const fs=require('fs'),path=require('path');const [repo,root,id,out]=process.argv.slice(2);
+const engine=require(path.join(repo,'scripts/lib/workflow-v3/engine.js'));
+const closure=require(path.join(repo,'scripts/lib/short-production/closure.js'));
+fs.writeFileSync(out,JSON.stringify(closure.finalizeEditorialReview({projectRoot:root,task:engine.readTask(root,id)}),null,2));
+NODE
   node - "$BOOK" "$BATS_TEST_TMPDIR/pass-required.json" <<'NODE'
 const fs=require('fs'),path=require('path');const root=process.argv[2],required=require(process.argv[3]);const pack=JSON.parse(fs.readFileSync(path.join(root,required.evidence_pack)));const quote=i=>pack.section_metrics[i].opening_excerpt.slice(0,18);
 const reader={reader_profile:{target_platform:'番茄短篇',platform_mode:'free_feed_mobile',genre_lens:['现实世情'],style_lens:['restrained_realism','suspense_gap'],reading_scene:'mobile_continuous',profile_basis:'设定.md'},section_reader_response:pack.section_metrics.map((row,i)=>({section_index:row.section_index,engagement:'engaged',felt_emotion:'持续关注真相',reader_question:'后果如何落地',evidence_quote:quote(i)})),drop_off_points:[],character_impressions:[{character:'阿岚',first_impression:'被保护',later_impression:'主动承担',trust_change:'up',evidence_quotes:['阿岚拿到档案单。']}],identity_continuity:[{identity_or_trait:'复核员',visibility:'present',reader_effect:'复核经验参与公开行动',evidence_quotes:['阿岚在复核里看见编号空缺。','主管叫停复核。']}],supporting_character_reality:[{character:'主管',felt_status:'alive',apparent_want:'保住部门',decisive_choice:'叫停复核',relationship_effect:'承担失去下属信任的后果',evidence_quotes:['主管叫停复核。']}],reveal_aftershock:[{reveal_section_index:4,revelation:'原始凭证出现',immediate_reader_shift:'确认真相可被证明',consequence_seen:'yes',later_evidence_quotes:['审计员把原始凭证交给阿岚。','凭证重新归档。']}],promise_response:{title_expectation:'档案空缺真相',payoff_status:'fulfilled',evidence_quotes:['凭证重新归档。'],reader_aftertaste:'真实归档回归'},final_reader_state:{would_continue_or_recommend:'yes',strongest_pull:'人物选择',biggest_resistance:'无明显阻力'}};
-const card={schemaVersion:'1.0.0',workflow_id:pack.workflow_id,story_sha256:pack.story_sha256,decision:'pass',summary:'全篇可进入表达清理。',reader_response:reader,opening_assessment:{verdict:'pass',evidence_quote:'阿岚在复核里看见编号空缺。',reason:'开篇直接进入核心冲突。'},section_function_matrix:pack.section_metrics.map((row,i)=>({section_index:row.section_index,structural_role:`第${row.section_index}节职责`,function_verdict:'pass',evidence_quote:quote(i),note:'功能完成'})),character_arc_matrix:[{character:'阿岚',desire:'承担责任',independent_stake:'获得独立判断权',active_action:'公开证据',cost:'上下级冲突',relationship_effect:'重写上下级边界',change:'开始独立决策',verdict:'pass',evidence_quotes:['阿岚拿到档案单。']},{character:'主管',desire:'保住部门',independent_stake:'保住经营控制权',active_action:'叫停复核',cost:'失去信任',relationship_effect:'上下级关系改变',change:'承担后果',verdict:'pass',evidence_quotes:['主管叫停复核。']}],identity_payoff_matrix:[{identity_or_trait:'复核员',identity_type:'职业与技能',setup_quote:'阿岚在复核里看见编号空缺。',payoff_quote:'主管叫停复核。',ongoing_participation:'复核经验持续参与行动',verdict:'pass'}],reveal_aftershock_matrix:[{reveal_section_index:4,revelation:'审计员交出原始凭证',immediate_consequence:'真相获得公开证据',downstream_change:'推动责任结算和真实归档恢复',verdict:'pass',evidence_quotes:['审计员把原始凭证交给阿岚。','凭证重新归档。']}],climax_ending_assessment:{verdict:'pass',climax_quote:'审计员把原始凭证交给阿岚。',ending_quote:'凭证重新归档。',reason:'高潮证据推动终局兑现。'},findings:[]};fs.writeFileSync(path.join(root,required.review_card),JSON.stringify(card,null,2));
+const card={schemaVersion:'1.0.0',workflow_id:pack.workflow_id,story_sha256:pack.story_sha256,decision:'pass',summary:'全篇可进入表达清理。',reader_response:reader,opening_assessment:{verdict:'pass',evidence_quote:'阿岚在复核里看见编号空缺。',reason:'开篇直接进入核心冲突。'},section_function_matrix:pack.section_metrics.map((row,i)=>({section_index:row.section_index,structural_role:`第${row.section_index}节职责`,function_verdict:'pass',evidence_quote:quote(i),note:'功能完成'})),character_arc_matrix:[{character:'阿岚',desire:'承担责任',independent_stake:'获得独立判断权',active_action:'公开证据',cost:'上下级冲突',relationship_effect:'重写上下级边界',change:'开始独立决策',verdict:'pass',evidence_quotes:['阿岚拿到档案单。']},{character:'主管',desire:'保住部门',independent_stake:'保住经营控制权',active_action:'叫停复核',cost:'失去信任',relationship_effect:'上下级关系改变',change:'承担后果',verdict:'pass',evidence_quotes:['主管叫停复核。']}],identity_payoff_matrix:[{identity_or_trait:'复核员',identity_type:'职业与技能',setup_quote:'阿岚在复核里看见编号空缺。',payoff_quote:'主管叫停复核。',ongoing_participation:'复核经验持续参与行动',verdict:'pass'}],reveal_aftershock_matrix:[{reveal_section_index:4,revelation:'审计员交出原始凭证',immediate_consequence:'真相获得公开证据',downstream_change:'推动责任结算和真实归档恢复',verdict:'pass',evidence_quotes:['审计员把原始凭证交给阿岚。','凭证重新归档。']}],climax_ending_assessment:{verdict:'pass',climax_quote:'审计员把原始凭证交给阿岚。',ending_quote:'凭证重新归档。',reason:'高潮证据推动终局兑现。'},findings:[]};
+fs.writeFileSync(path.join(root,required.reader_response_card),JSON.stringify(reader,null,2));
+fs.writeFileSync(path.join(root,required.review_card),JSON.stringify(card,null,2));
 NODE
-  run node "$REPO/scripts/short-story-review-finalize.js" --project-root "$BOOK" --workflow-id "$WORKFLOW_ID" --apply --json
+  run node - "$REPO" "$BOOK" "$WORKFLOW_ID" <<'NODE'
+const path=require('path');const [repo,root,id]=process.argv.slice(2);
+const engine=require(path.join(repo,'scripts/lib/workflow-v3/engine.js'));
+const closure=require(path.join(repo,'scripts/lib/short-production/closure.js'));
+const task=engine.readTask(root,id);const result=closure.finalizeEditorialReview({projectRoot:root,task});
+if(result.kind!=='completed') throw new Error(JSON.stringify(result));
+const outcome=engine.applyStageResult(root,id,task.state_version,result);
+console.log(JSON.stringify(outcome));
+NODE
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   node - "$BOOK" "$WORKFLOW_ID" <<'NODE'
 const task=require(`${process.argv[2]}/追踪/workflow/tasks/${process.argv[3]}/task.json`);

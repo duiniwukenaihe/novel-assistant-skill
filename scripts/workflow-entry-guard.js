@@ -17,7 +17,12 @@ const { resolveAuthoritativeStatus } = require('./workflow-state-validate');
 const { buildInbox, writeInbox } = require('./workflow-task-inbox');
 const { resolveSessionId: resolveSessionIdFromModule } = require('./workflow-session-id');
 const { previewMigration } = require('./task-family-migrate');
-const { normalizeLegacyTaskAuthority } = require('./legacy-task-authority-recover');
+const {
+  extractResumeScope,
+  normalizeLegacyTaskAuthority,
+  SCOPE_UNSPECIFIED,
+} = require('./legacy-task-authority-recover');
+const { classifyLegacyWorkflow } = require('./lib/legacy-workflow-type');
 const workflowV3Compatibility = require('./lib/workflow-v3/compatibility-gateway');
 
 const SCHEMA_VERSION = '1.0.0';
@@ -785,6 +790,15 @@ function isExplicitBusinessIntent(text) {
   return explicitPatterns.some((pattern) => pattern.test(withoutCommand));
 }
 
+function isExplicitLegacyRecoveryIntent(text, workflowType = '') {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!value || isShortReply(value)) return false;
+  const explicit = isExplicitBusinessIntent(value)
+    || /(?:继续|恢复).{0,12}第\s*\d+\s*(?:章|节|小节)/.test(value);
+  if (!explicit) return false;
+  return workflowType !== 'review_repair' || extractResumeScope(value) !== SCOPE_UNSPECIFIED;
+}
+
 function shellQuote(value) {
   return `'${String(value || '').replace(/'/g, `'"'"'`)}'`;
 }
@@ -1139,11 +1153,20 @@ function classifyCurrentTaskPointer(projectRoot) {
   if (!normalized.ok) {
     return { kind: 'malformed_unrecognized', focus_path: focusPath, reason: normalized.reason };
   }
+  const classification = classifyLegacyWorkflow(normalized.task);
+  if (classification.status !== 'supported') {
+    return {
+      kind: 'malformed_unrecognized',
+      focus_path: focusPath,
+      reason: `旧任务类型无法安全确认：${classification.reason}`,
+    };
+  }
   return {
     kind: 'recognized_legacy',
     focus_path: focusPath,
     task_id: normalized.task_id,
     task_type: normalized.task_type,
+    workflow_type: classification.workflow_type,
   };
 }
 
@@ -1187,14 +1210,9 @@ function numberedOption(number, label, action, description = '', recommended = f
   };
 }
 
-function normalizeFourMenu(options, recommendedNumber = 1) {
+function normalizeVisibleMenu(options, recommendedNumber = 1) {
   const list = (Array.isArray(options) ? options : []).slice(0, 4);
-  const actions = new Set(list.map((item) => String(item.action || '')));
-  if (list.length < 4 && !actions.has('show_task_inbox')) list.push(numberedOption(0, '查看当前任务', 'show_task_inbox'));
-  if (list.length < 4 && !actions.has('pause')) list.push(numberedOption(0, '暂停并保存断点', 'pause'));
-  if (list.length < 4 && !actions.has('free_text')) list.push(numberedOption(0, '输入其他要求', 'free_text'));
-  while (list.length < 4) list.push(numberedOption(0, '返回任务列表', 'show_task_inbox'));
-  return list.slice(0, 4).map((item, index) => ({
+  return list.map((item, index) => ({
     ...item,
     ...numberedOption(
       index + 1,
@@ -1294,19 +1312,26 @@ function buildLegacyTaskAuthorityRecoveryVisibleResponse(legacyNote, intent, pro
       text: `${intro}\n\n${options.map((option) => option.display).join('\n')}\n\n回复数字选择或直接说明你的要求。`,
     };
   }
-  const previewCommand = `node scripts/legacy-task-authority-recover.js preview --project-root . --resume-intent ${shellQuote(resumeIntent)} --json`;
+  const recoveryIntentProvided = isExplicitLegacyRecoveryIntent(resumeIntent, legacyNote.workflow_type);
   const recoverOption = numberedOption(
     1,
-    '恢复旧任务权威',
-    'recover_legacy_task_authority',
-    resumeIntent
+    recoveryIntentProvided ? '恢复旧任务权威' : '说明本轮恢复目标',
+    recoveryIntentProvided ? 'recover_legacy_task_authority' : 'provide_recovery_intent',
+    recoveryIntentProvided
       ? `使用原意图 ${resumeIntent} 预览旧任务权威恢复，确认后由状态机接管。`
-      : '预览旧任务权威恢复，确认后由状态机接管。',
+      : legacyNote.workflow_type === 'review_repair'
+        ? '请直接说明审阅章节范围，例如“审阅第 1 至 3 章”；明确后才生成恢复预览。'
+        : '请直接说明本轮要继续、修订或审阅的具体目标；明确后才生成恢复预览。',
     true,
   );
-  recoverOption.interaction_mode = 'execute_command';
-  recoverOption.execution_workdir = '.';
-  recoverOption.execution_command = previewCommand;
+  if (recoveryIntentProvided) {
+    recoverOption.interaction_mode = 'execute_command';
+    recoverOption.execution_workdir = '.';
+    recoverOption.execution_command = `node scripts/legacy-task-authority-recover.js preview --project-root . --resume-intent ${shellQuote(resumeIntent)} --json`;
+  } else {
+    recoverOption.interaction_mode = 'semantic_only';
+    recoverOption.execution_command = '';
+  }
   const inboxOption = numberedOption(
     2,
     '查看当前任务收件箱',
@@ -1319,12 +1344,17 @@ function buildLegacyTaskAuthorityRecoveryVisibleResponse(legacyNote, intent, pro
   const pauseOption = numberedOption(3, '暂停并保存断点', 'pause', '保留旧任务记录与当前目录，稍后再处理任务权威恢复。');
   const freeTextOption = numberedOption(4, '输入其他要求', 'free_text', '调整原任务的目的、范围或目标，重新生成恢复预览。');
   const options = [recoverOption, inboxOption, pauseOption, freeTextOption];
-  const intro = `检测到旧任务权威（task_id=${legacyNote.task_id}）。下一步先完成预览/确认/应用，再继续原任务。`;
+  const intro = recoveryIntentProvided
+    ? `检测到旧任务权威（task_id=${legacyNote.task_id}）。下一步先完成预览/确认/应用，再继续原任务。`
+    : legacyNote.workflow_type === 'review_repair'
+      ? `检测到旧审阅任务（task_id=${legacyNote.task_id}），但尚未提供不可变章节范围。请直接说明例如“审阅第 1 至 3 章”；未明确前不会生成执行命令。`
+      : `检测到旧任务权威（task_id=${legacyNote.task_id}），但尚未提供本轮恢复意图。请直接说明要继续、修订或审阅的具体目标；未明确前不会生成执行命令。`;
   return {
     render_mode: 'text_numbers',
     status: 'blocked_task_authority_missing',
-    selection_contract: 'execute_command_or_route_intent',
+    selection_contract: recoveryIntentProvided ? 'execute_command_or_route_intent' : 'route_intent_or_free_text',
     free_text_enabled: true,
+    recovery_intent_required: !recoveryIntentProvided,
     intro,
     options,
     text: `${intro}\n\n${options.map((option) => option.display).join('\n')}\n\n回复数字选择。`,
@@ -1365,7 +1395,10 @@ function buildWritePolicyMigrationReport(projectRoot, intent, session) {
 function buildLegacyTaskAuthorityReport(projectRoot, legacyNote, intent, session) {
   const visible = buildLegacyTaskAuthorityRecoveryVisibleResponse(legacyNote, intent, projectRoot);
   const isMalformed = !legacyNote || legacyNote.kind === 'malformed_unrecognized';
-  const recommendedAction = isMalformed ? 'inspect_unrecognized_task_pointer' : 'recover_legacy_task_authority';
+  const recoveryIntentRequired = !isMalformed && visible.recovery_intent_required === true;
+  const recommendedAction = isMalformed
+    ? 'inspect_unrecognized_task_pointer'
+    : (recoveryIntentRequired ? 'provide_recovery_intent' : 'recover_legacy_task_authority');
   const report = {
     schemaVersion: SCHEMA_VERSION,
     status: 'blocked_task_authority_missing',
@@ -1384,7 +1417,7 @@ function buildLegacyTaskAuthorityReport(projectRoot, legacyNote, intent, session
     auto_repair: { repaired: false },
     runtime_reconciliation: { status: 'skipped_pre_authority_recovery' },
     runner_contract: {
-      order: ['legacy-task-authority-recover'],
+      order: recoveryIntentRequired ? ['provide_recovery_intent'] : ['legacy-task-authority-recover'],
       business_routing_allowed: false,
       show_task_inbox_only: false,
       metadata_only: true,
@@ -1397,10 +1430,10 @@ function buildLegacyTaskAuthorityReport(projectRoot, legacyNote, intent, session
   return { exitCode: 0, report };
 }
 
-function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') {
+function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '', recoveryAction = null) {
   const options = [];
   if (status === 'blocked_workflow_session_lease') {
-    const leaseOptions = normalizeFourMenu([
+    const leaseOptions = normalizeVisibleMenu([
       numberedOption(1, '接管当前任务', 'takeover_workflow_session', '确认后由本会话继续；原会话转为只读，不会被终止。'),
       numberedOption(2, '只读查看当前任务', 'show_task_inbox_read_only', '查看任务与可信断点，不推进、不写入。'),
       numberedOption(3, '暂不接管', 'pause', '保留原写会话和当前断点。'),
@@ -1422,7 +1455,7 @@ function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') 
     };
   }
   if (status === 'new_project_ready') {
-    const options = normalizeFourMenu([
+    const options = normalizeVisibleMenu([
       numberedOption(1, '新开长篇', 'create_workflow:long_startup', '先做题材定位、核心承诺、人物、剧情引擎、总纲、卷纲和前置细纲；不直接写正文。'),
       numberedOption(2, '新开短篇', 'create_workflow:short_write', '进入完整短篇生命周期；本地私有版自动加载资讯学习、素材池和卡片组合增强。'),
       numberedOption(3, '导入或拆文', 'create_workflow:import_or_deconstruction', '导入已有小说，或拆解对标文本形成可吸收技巧卡。'),
@@ -1447,7 +1480,46 @@ function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') 
   if (status === 'short_workflow_migration_pending') {
     const migration = taskInbox.short_workflow_migration || {};
     const workflowId = String(migration.workflow_id || '');
-    const migrationOptions = normalizeFourMenu([
+    const previewOnly = migration.compatibility_status === 'preview_required'
+      || migration.safe_auto_migrate !== true;
+    if (previewOnly) {
+      const previewOption = numberedOption(
+        1,
+        '查看升级预览',
+        'inspect_short_workflow_migration',
+        '当前旧阶段无法安全自动续写。先只读查看可用证据、缺失信息和需要作者决定的恢复方向。',
+        true,
+      );
+      previewOption.execution_command = `node scripts/workflow-state-machine.js migrate-short-lean-workflow --project-root . --workflow-id ${JSON.stringify(workflowId)} --json`;
+      previewOption.execution_workdir = '.';
+      previewOption.interaction_mode = 'execute_command';
+      const inboxOption = numberedOption(
+        2,
+        '暂不升级，只读查看当前任务',
+        'show_task_inbox_read_only',
+        '保留旧任务与创作资产，不继续执行旧阶段。',
+      );
+      inboxOption.execution_command = 'node scripts/workflow-task-inbox.js --project-root . --action show_unfinished_tasks --json';
+      inboxOption.execution_workdir = '.';
+      inboxOption.interaction_mode = 'execute_command';
+      const freeTextOption = numberedOption(
+        3,
+        '输入其他要求',
+        'free_text',
+        '说明希望保留的阶段事实或本轮要恢复的具体目标。',
+      );
+      const migrationOptions = [previewOption, inboxOption, freeTextOption];
+      const intro = '检测到旧版短篇任务，但其当前阶段无法安全映射到 V3。请先查看升级预览并由作者确认恢复方向；在确认前不会执行升级或改写创作资产。';
+      return {
+        render_mode: 'text_numbers',
+        status,
+        intro,
+        options: migrationOptions,
+        selection_contract: 'execute_command_or_route_intent',
+        text: `${intro}\n\n${migrationOptions.map((option) => option.display).join('\n')}\n\n回复数字选择或直接说明你的要求。`,
+      };
+    }
+    const migrationOptions = normalizeVisibleMenu([
       numberedOption(1, '升级并恢复当前短篇任务', 'migrate_short_workflow', '保留旧任务、暂存稿和历史回执；重建 workflow、memory 与阶段执行边界，不修改正文、设定或大纲。'),
       numberedOption(2, '查看升级预览', 'inspect_short_workflow_migration', '只查看将恢复的阶段、旧暂存稿和记忆处理方式，不写入。'),
       numberedOption(3, '暂不升级，只读查看当前任务', 'show_task_inbox_read_only', '不继续执行旧阶段，避免旧协议继续改写。'),
@@ -1498,7 +1570,7 @@ function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') 
   }
 
   if (status === 'task_family_migration_pending') {
-    const migrationOptions = normalizeFourMenu([
+    const migrationOptions = normalizeVisibleMenu([
       numberedOption(1, '同步旧项目任务账本', 'migrate_task_families', '仅补 workflow/任务族元数据，不修改正文、大纲、细纲或设定。'),
       numberedOption(2, '查看迁移预览', 'show_task_family_migration_preview', '先查看将合并为同一任务的会话分支和潜在重叠。'),
       numberedOption(3, '暂不迁移，按旧兼容模式查看', 'show_task_inbox_legacy_compatible', '本次不写入迁移账本；后续仍会再次提醒。'),
@@ -1531,7 +1603,7 @@ function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') 
           return option;
         })
         : [];
-      const options = normalizeFourMenu(rawOptions, 1);
+      const options = normalizeVisibleMenu(rawOptions, 1);
       const intro = inboxCard.stop_reason || inboxCard.title || '当前 workflow 被运行守卫暂停，需要先处理阻塞再继续。';
       const detailLines = [
         inboxCard.working_title ? `当前作品：${inboxCard.working_title}` : '',
@@ -1549,7 +1621,8 @@ function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') 
     const isMissingArtifact = reasonCode === 'trusted_artifact_missing' || status === 'blocked_trusted_artifact_missing';
     const isStateInvariant = reasonCode === 'state_invariant' || status === 'blocked_state_invariant';
     const isIncompleteCompleted = status === 'blocked_completed_workflow_incomplete';
-    const reason = isMissingArtifact
+    const recovery = recoveryAction && typeof recoveryAction === 'object' ? recoveryAction : null;
+    const reason = String((recovery || {}).visible_reason || '') || (isMissingArtifact
       ? '当前任务断点不完整：上次阶段结果文件缺失。请先恢复断点，再继续当前任务。'
       : isStateInvariant
       ? '当前任务的活动状态与持久副本不一致，已停止自动修复，避免覆盖任一断点。请先归档旧断点并重建任务。'
@@ -1557,13 +1630,24 @@ function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') 
       ? '当前任务虽然被标记为已完成，但仍缺少必经阶段的可信回执。请先恢复缺失阶段，再继续收束。'
       : status === 'blocked_runtime_guard_missing'
       ? '当前 workflow 缺少运行边界，需要先修复断点账本。'
-      : '当前 workflow 被运行守卫暂停，需要先处理阻塞再继续。';
-    const options = normalizeFourMenu([
+      : '当前 workflow 被运行守卫暂停，需要先处理阻塞再继续。');
+    const recoveryActionId = String((recovery || {}).action_id || '');
+    const recoveryLabel = recoveryActionId === 'resume_section_repair'
+      ? '按质量反馈修订当前小节'
+      : recoveryActionId === 'recover_task_authority'
+        ? '说明要恢复的任务和范围'
+        : recoveryActionId === 'inspect_blocker_details'
+          ? '只读查看阻断依据'
+          : isMissingArtifact ? '恢复任务断点' : isStateInvariant ? '查看任务状态修复方案' : isIncompleteCompleted ? '恢复未完整收束的任务' : '查看运行边界修复方案';
+    const recoveryDescription = String((recovery || {}).visible_reason || '') || (
+      isMissingArtifact ? '根据任务账本恢复上次阶段结果文件，然后回到可继续菜单。' : isStateInvariant ? '保留旧任务证据，归档后重建干净任务；不覆盖正文、大纲或报告。' : isIncompleteCompleted ? '只恢复缺失的 workflow 阶段与断点，不修改正文、大纲或审阅报告。' : '补齐 runtime_guard / heartbeat / checkpoint 后再继续。'
+    );
+    const options = normalizeVisibleMenu([
       numberedOption(
         1,
-        isMissingArtifact ? '恢复任务断点' : isStateInvariant ? '查看任务状态修复方案' : isIncompleteCompleted ? '恢复未完整收束的任务' : '修复当前 workflow 运行边界',
-        isMissingArtifact ? 'recover_missing_result_packet' : isStateInvariant ? 'repair_task_state' : isIncompleteCompleted ? 'restore_incomplete_workflow' : 'repair_runtime_guard',
-        isMissingArtifact ? '根据任务账本恢复上次阶段结果文件，然后回到可继续菜单。' : isStateInvariant ? '保留旧任务证据，归档后重建干净任务；不覆盖正文、大纲或报告。' : isIncompleteCompleted ? '只恢复缺失的 workflow 阶段与断点，不修改正文、大纲或审阅报告。' : '补齐 runtime_guard / heartbeat / checkpoint 后再继续。'
+        recoveryLabel,
+        recoveryActionId || (isMissingArtifact ? 'recover_missing_result_packet' : isStateInvariant ? 'repair_task_state' : isIncompleteCompleted ? 'restore_incomplete_workflow' : 'repair_runtime_guard'),
+        recoveryDescription
       ),
       numberedOption(2, '查看可恢复任务入口', 'show_task_inbox', '只展示任务收件箱，不继续写正文或审阅。'),
       numberedOption(3, '停止并保存断点', 'pause', '保持当前文件状态，稍后再处理。'),
@@ -1574,6 +1658,12 @@ function buildVisibleMenu(status, taskInbox, reasonCode = '', projectRoot = '') 
       options[0].execution_command = `node scripts/workflow-state-machine.js restore-incomplete-workflow --project-root . --workflow-id ${JSON.stringify(workflowId)} --confirm --json`;
       options[0].execution_workdir = '.';
       options[0].interaction_mode = 'execute_command';
+    } else if (recovery) {
+      options[0].interaction_mode = String(recovery.interaction_mode || 'route_intent');
+      if (String(recovery.execution_command || '')) {
+        options[0].execution_command = String(recovery.execution_command);
+        options[0].execution_workdir = '.';
+      }
     }
     return {
       render_mode: 'text_numbers',
@@ -1636,12 +1726,11 @@ function buildReport(args) {
     return policyReport;
   }
   // Task 3 / Gate 2: after strict policy is current, classify the current-task
-  // pointer. recognized_legacy means we MUST offer the recovery adapter
-  // command — it is the only deterministic next step, and downgrading to
-  // repair_runtime_guard would silently drop the legacy note. malformed /
-  // unrecognized pointers carry no recoverable shape, so we surface a
-  // read-only diagnostic with only semantic and read commands; no mutation
-  // command is exposed until a human inspects the file.
+  // pointer. A recognized legacy pointer gets the recovery adapter only when
+  // the user supplied an executable, type-valid recovery intent. Otherwise
+  // it stays semantic/read-only; inventing an empty intent would silently
+  // turn a prompt into a mutation. Malformed or unrecognized pointers carry
+  // no recoverable shape, so they likewise surface only diagnostic actions.
   if (isStrictWritePolicyCurrent(projectRoot)) {
     const pointerShape = classifyCurrentTaskPointer(projectRoot);
     if (pointerShape.kind === 'recognized_legacy' || pointerShape.kind === 'malformed_unrecognized') {
@@ -1847,7 +1936,13 @@ function buildReport(args) {
       ? runningStageControls
       : showPendingShortStartupControls
         ? pendingShortStartupControls
-      : buildVisibleMenu(status, report.task_inbox, stateValidation.result.reason_code || '', projectRoot);
+      : buildVisibleMenu(
+        status,
+        report.task_inbox,
+        stateValidation.result.reason_code || '',
+        projectRoot,
+        stateValidation.result.recovery_action || null,
+      );
   if (status === 'migration_pending') {
     report.task_inbox_presentation = {
       status: 'task_inbox_ready',

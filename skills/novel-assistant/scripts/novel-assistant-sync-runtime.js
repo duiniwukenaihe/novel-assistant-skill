@@ -498,13 +498,11 @@ function assertDirectory(dir, label) {
 
 function resolveSkillDirectory(explicit) {
   if (explicit) return path.resolve(explicit);
-  const home = process.env.HOME || '';
+  const { resolveInstallTargets } = require('./lib/install-target-resolver');
   const candidates = [
     process.env.NOVEL_ASSISTANT_SKILL_DIR || '',
     path.join(__dirname, '..'),
-    home ? path.join(home, '.claude', 'skills', 'novel-assistant') : '',
-    home ? path.join(home, '.codex', 'skills', 'novel-assistant') : '',
-    home ? path.join(home, '.zcode', 'skills', 'novel-assistant') : '',
+    ...resolveInstallTargets({}),
   ].filter(Boolean).map(item => path.resolve(item));
   const valid = [...new Set(candidates)].filter(item => {
     try {
@@ -515,11 +513,6 @@ function resolveSkillDirectory(explicit) {
     }
   });
   if (!valid.length) die('cannot locate an installed novel-assistant skill; set NOVEL_ASSISTANT_SKILL_DIR once and retry');
-  valid.sort((left, right) => {
-    const leftTime = fs.statSync(path.join(left, 'novel-assistant-manifest.json')).mtimeMs;
-    const rightTime = fs.statSync(path.join(right, 'novel-assistant-manifest.json')).mtimeMs;
-    return rightTime - leftTime || left.localeCompare(right);
-  });
   return valid[0];
 }
 

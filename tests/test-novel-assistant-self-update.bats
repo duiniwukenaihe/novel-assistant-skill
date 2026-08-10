@@ -118,6 +118,10 @@ cat > skills/novel-assistant/novel-assistant-manifest.json <<'JSON'
   "setupSkillVersion": "0.1.0"
 }
 JSON
+mkdir -p skills/novel-assistant/scripts
+cat > skills/novel-assistant/scripts/workflow-state-machine.js <<'NODE'
+process.stdout.write(JSON.stringify({ privateRegistryCount: 0, templates: [{ workflow_type: 'short_write' }] }));
+NODE
 EOF
     chmod +x scripts/build-oh-story-bundle.sh
     cat > scripts/production-smoke-matrix.js <<'EOF'
@@ -184,8 +188,9 @@ EOF
     git tag v1.1.0
 
     installed="$TMP_DIR/installed-skill"
-    mkdir -p "$installed/scripts"
+    mkdir -p "$installed/scripts/lib"
     cp "$SCRIPT" "$installed/scripts/novel-assistant-self-update.js"
+    cp "$REPO/scripts/lib/install-target-resolver.js" "$installed/scripts/lib/install-target-resolver.js"
     cat > "$installed/novel-assistant-manifest.json" <<EOF
 {
   "bundleName": "novel-assistant",
@@ -226,8 +231,9 @@ EOF
     git commit -q -m "manifest only refresh"
 
     installed="$TMP_DIR/installed-skill"
-    mkdir -p "$installed/scripts"
+    mkdir -p "$installed/scripts/lib"
     cp "$SCRIPT" "$installed/scripts/novel-assistant-self-update.js"
+    cp "$REPO/scripts/lib/install-target-resolver.js" "$installed/scripts/lib/install-target-resolver.js"
     cat > "$installed/novel-assistant-manifest.json" <<EOF
 {
   "bundleName": "novel-assistant",

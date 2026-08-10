@@ -3,6 +3,7 @@
 setup() {
     REPO="$BATS_TEST_DIRNAME/.."
     STATE="$REPO/scripts/workflow-state-machine.js"
+    V3="$REPO/scripts/workflow-v3.js"
     INBOX="$REPO/scripts/workflow-task-inbox.js"
     BUNDLE="$REPO/skills/novel-assistant"
     TMP_DIR="$(mktemp -d)"
@@ -41,7 +42,7 @@ NODE
 }
 
 @test "public short task keeps workflow authority and portable project identity" {
-    node "$STATE" create --workflow-type short_write --project-root "$BOOK" --user-goal "新开公开短篇" --no-private-registry --json > "$TMP_DIR/create.json"
+    node "$V3" create-short --project-root "$BOOK" --profile public --user-goal "新开公开短篇" --json > "$TMP_DIR/create.json"
 
     node - "$TMP_DIR/create.json" "$BOOK" <<'NODE'
 const fs = require('fs');
@@ -50,17 +51,16 @@ const data = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const root = process.argv[3];
 const task = data.task;
 if (task.workflow_profile !== 'public') throw new Error(JSON.stringify(task.workflow_profile));
-if (task.workflow_owner !== 'story-short-write') throw new Error(JSON.stringify(task.workflow_owner));
-if (task.production_kernel !== 'short-section-production-v2') throw new Error(JSON.stringify(task.production_kernel));
+if (task.production_kernel !== 'short-v3') throw new Error(JSON.stringify(task.production_kernel));
 if (task.book_root !== '.') throw new Error(`book root must stay portable: ${task.book_root}`);
-if (!task.workflow_id || !task.runtime_guard || !task.pending_action) throw new Error('missing durable workflow authority');
+if (!task.workflow_id || !task.task_family_id || !task.stage_execution) throw new Error('missing durable workflow authority');
 const durable = path.join(root, task.task_dir, 'task.json');
 if (!fs.existsSync(durable)) throw new Error(`missing durable task: ${durable}`);
 NODE
 }
 
 @test "public short startup resumes through the task inbox instead of private cards" {
-    node "$STATE" create --workflow-type short_write --project-root "$BOOK" --user-goal "继续公开短篇" --no-private-registry --json >/dev/null
+    node "$V3" create-short --project-root "$BOOK" --profile public --user-goal "继续公开短篇" --json >/dev/null
     node "$INBOX" --project-root "$BOOK" --json > "$TMP_DIR/inbox.json"
 
     node - "$TMP_DIR/inbox.json" <<'NODE'

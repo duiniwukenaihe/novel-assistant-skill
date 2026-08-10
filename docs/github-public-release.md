@@ -23,7 +23,9 @@ novel-assistant
 Recommended: from `main`, let the release script create an isolated sanitized branch:
 
 ```bash
-node scripts/na-dev.js publish-public --source-ref main --commit --push
+node scripts/na-dev.js publish-public --source-ref main \
+  --run-public-behavior-eval --max-behavior-budget-usd 10 \
+  --commit --push
 ```
 
 The script uses two isolated git worktrees, so `main` keeps the internal development tree and the public branch keeps its own clean ancestry. It will:
@@ -35,6 +37,8 @@ The script uses two isolated git worktrees, so `main` keeps the internal develop
 5. run `public-release-audit.js` and public runtime verification again on the target,
 6. run `git diff --check`,
 7. optionally commit and push when `--commit --push` are passed.
+
+The paid behavior collection flag is explicit by design. It runs all six public release scenarios against Claude, Codex, and ZCode with the declared per-scenario budget ceiling. Without either that flag or already-valid external evidence, the production gate blocks commit/push; it never treats an empty report directory as a pass.
 
 The publisher must never create the public branch with `switch -C` from `main`: deleting private files from the final tree does not remove them from inherited Git history. An existing clean public-history baseline is therefore required.
 
@@ -97,6 +101,9 @@ After sanitization, public workflow behavior must be:
 - `skills/novel-assistant/novel-assistant-manifest.json` must use the GitHub update source.
 - `privateInternalSkillCount` must be `0`.
 - public entry/router/workflow/short-write bundle files must exist.
+- the exact sanitized bundle must have six paid, hash-bound public behavior reports with passing Claude and ZCode host results; the separate install gate still verifies Claude/Codex/ZCode mirrors.
+- paid evaluation copies that exact candidate into the disposable project-local host skill roots, so it cannot silently evaluate a user's global private installation.
+- the three installed mirrors must load the expected public runtime registry; matching files alone is insufficient.
 - `git diff --check` must pass.
 
 `--skip-runtime-verify` is available only for an uncommitted diagnostic preview. The publisher rejects it together with `--commit` or `--push`, so production artifacts cannot bypass smoke, E2E, registry, or owner gates.
@@ -171,11 +178,13 @@ git -C .worktrees/github-public-release tag -a vX.Y.Z -m "发布 novel-assistant
 git -C .worktrees/github-public-release push github vX.Y.Z
 ```
 
-The tag triggers `.github/workflows/github-release.yml`. The workflow reruns the public audit, focused production smoke, and public Workflow ownership check before it creates:
+The tag is an immutable public candidate, not an automatic packaging trigger. First dispatch **Collect public behavior evidence** (`.github/workflows/github-behavior-evidence.yml`) on the exact tag commit from the protected `novel-assistant-eval` self-hosted runner. It performs the explicit paid six-scenario/three-host matrix and uploads a hash-bound artifact named for that exact commit.
+
+Then dispatch **Publish GitHub release artifact** with the tag and the successful evidence workflow run ID. The release workflow downloads only that artifact, rechecks its bundle ID, paid status, host usage, assertion-evidence hashes, public audit, smoke matrix, runtime registry, and three isolated install mirrors before it creates:
 
 ```text
 novel-assistant-vX.Y.Z.tar.gz
 novel-assistant-vX.Y.Z.tar.gz.sha256
 ```
 
-The archive is built reproducibly from the tag's `skills/novel-assistant` subtree. It contains the installable single-directory public runtime, not the repository source tree. A failed audit, smoke case, ownership check, tag/changelog mismatch, or artifact build stops the release.
+The archive is built reproducibly from the tag's `skills/novel-assistant` subtree. It contains the installable single-directory public runtime, not the repository source tree. A missing or mismatched evidence artifact, failed audit, smoke case, ownership check, tag/changelog mismatch, or artifact build stops the release.

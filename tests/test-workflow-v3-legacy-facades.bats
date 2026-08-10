@@ -85,6 +85,32 @@ if (task.engine_version !== 3 || task.current_stage !== 'section_brief') throw n
 NODE
 }
 
+@test "an ambiguous V2 checkpoint rejects preview and apply without changing the task" {
+  materialize_v2_task wf-ambiguous
+  node - "$(task_file wf-ambiguous)" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+const task = JSON.parse(fs.readFileSync(file, 'utf8'));
+task.current_stage = 'section_machine_gate';
+task.current_step = 'section_machine_gate';
+task.stage_execution.stage_id = 'section_machine_gate';
+fs.writeFileSync(file, `${JSON.stringify(task, null, 2)}\n`);
+NODE
+  cp "$(task_file wf-ambiguous)" "$TMP_DIR/ambiguous-before.json"
+
+  run node "$STATE_MACHINE" migrate-short-lean-workflow \
+    --project-root "$PROJECT" --workflow-id wf-ambiguous --json
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'blocked_v3_migration_unavailable'* ]]
+  cmp -s "$(task_file wf-ambiguous)" "$TMP_DIR/ambiguous-before.json"
+
+  run node "$STATE_MACHINE" migrate-short-lean-workflow \
+    --project-root "$PROJECT" --workflow-id wf-ambiguous --confirm --json
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'blocked_v3_migration_unavailable'* ]]
+  cmp -s "$(task_file wf-ambiguous)" "$TMP_DIR/ambiguous-before.json"
+}
+
 @test "the legacy migration command is idempotently current after V3 migration" {
   materialize_v2_task wf-current
   node "$STATE_MACHINE" migrate-short-lean-workflow \

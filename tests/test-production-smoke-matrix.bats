@@ -14,7 +14,8 @@ teardown() {
 }
 
 @test "production smoke matrix passes all core router workflow cases" {
-    node "$SCRIPT" --repo-root "$REPO" --json > "$TMP_DIR/matrix.json"
+    RECEIPT="$TMP_DIR/deterministic/summary.json"
+    node "$SCRIPT" --repo-root "$REPO" --receipt-out "$RECEIPT" --json > "$TMP_DIR/matrix.json"
 
     grep -q '"status": "pass"' "$TMP_DIR/matrix.json"
     grep -q '"caseCount": 22' "$TMP_DIR/matrix.json"
@@ -41,6 +42,13 @@ teardown() {
     grep -q '"id": "update_gate_ux"' "$TMP_DIR/matrix.json"
     grep -q '"id": "token_cost_governance"' "$TMP_DIR/matrix.json"
     grep -q '"id": "AI_native_absorption"' "$TMP_DIR/matrix.json"
+    node - "$RECEIPT" <<'NODE'
+const receipt = require(process.argv[2]);
+if (receipt.status !== 'pass' || receipt.exitCode !== 0) throw new Error(JSON.stringify(receipt));
+if (!receipt.bundleId || !receipt.sourceCommit || !Array.isArray(receipt.testGroups) || receipt.testGroups.length === 0) {
+  throw new Error(JSON.stringify(receipt));
+}
+NODE
 }
 
 @test "production smoke matrix executes adaptive detail outline quality gate" {

@@ -81,6 +81,12 @@ node <当前 skill 包>/scripts/workflow-entry-guard.js --project-root <book-roo
 
 当 `visible_response.selection_contract=execute_command_or_route_intent` 时，菜单已经是当前唯一交互状态。必须逐字显示 `visible_response.text`，不得再给任务卡或选项二次编号。用户回复数字后：`interaction_mode=execute_command` 只能逐字执行对应 `execution_command`；`route_intent` 只把 `action` 交给内部 router；`semantic_only` 只执行暂停或承接自由输入语义。三种模式都不得再次调用 entry guard、把 `action` 猜成命令行参数、搜索脚本用法或自造恢复参数。
 
+### V3 短篇任务动作合同
+
+当焦点任务同时满足 `workflow_type=short_write`、`engine_version=3`、`task_schema_version=3` 与 `workflow_contract_version=3` 时，进入任务后的动作只使用 V3 的落盘任务。没有 `pending_action` 时，收件箱返回 `selection_contract=v3_task_action_projection` 和 `status=current_v3_task_actions`：第 1 项逐字执行 `node scripts/workflow-v3.js describe-stage --project-root . --workflow-id <id> --json`，第 2 项逐字执行 `node scripts/workflow-v3.js show --project-root . --workflow-id <id> --json`，其余项只承接暂停或自由输入。不得将 V3 当前任务动作回退到 workflow-state-machine.js。
+
+有已提交选择时，收件箱返回 `selection_contract=v3_committed_binding`，必须逐字转发 `workflow-v3.js show` 给出的文本和四字段绑定；数字只消费该绑定，不能重新编号或解释为上一级菜单。作者的自然语言意见始终经 `workflow-entry-guard.js --user-intent <用户原文> --write` 进入 `workflow-v3.js submit-feedback`；即使当前没有候选菜单，也不得把意见送给 V2 `resolve-action`。
+
 Codex Desktop 没有稳定的 Claude `AskUserQuestion` 方向键控件时，必须降级为同一份 `text_numbers` 菜单：逐字展示 `visible_response.text`，保留最近一次 `options[number]` 绑定，用户输入数字后直接消费对应 `interaction_mode`。降级只影响渲染方式，不能丢弃 `execution_command`、退回任务摘要、要求用户复述意图，或把同一个数字重新解释为上一级菜单。
 
 上述交互合同是全局合同，适用于长篇、短篇、审阅、修复、拆文、扫榜、导入、去 AI 味和封面等全部内部模块。专业模块只负责当前阶段的业务产物与回执，不得自行省略、改写或重新编号状态机返回的 `visible_response`；安全内部阶段由状态机自动续跑，作者决策点统一显示最多四项的数字菜单。

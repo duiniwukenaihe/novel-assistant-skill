@@ -4,6 +4,30 @@ setup() {
     REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 }
 
+@test "visible menus number only genuine actions and state the real reply range" {
+  run node - "$REPO/scripts/lib/workflow-action-renderer.js" <<'NODE'
+const assert = require('assert');
+const renderer = require(process.argv[2]);
+const options = renderer.normalizeVisibleOptions([
+  { action_id: 'continue_current_stage', label: '继续当前任务', recommended: true },
+], true);
+assert.deepEqual(options.map(item => item.action_id), [
+  'continue_current_stage', 'inspect_current_state', 'free_text',
+]);
+assert.equal(options.length, 3);
+const text = renderer.renderPendingActionText({
+  question: '请选择下一步',
+  options: [
+    { label: '继续当前任务' },
+    { label: '查看依据' },
+  ],
+});
+assert.match(text, /回复 1\/2。/u);
+assert.doesNotMatch(text, /回复 1\/2\/3\/4。/u);
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 @test "V3 author choice cannot render before committed pending action" {
   run node - "$REPO/scripts/lib/workflow-v3/interaction-arbiter.js" <<'NODE'
 const api=require(process.argv[2]);

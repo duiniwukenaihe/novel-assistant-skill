@@ -265,17 +265,14 @@ NEUTRAL_DRAFT_2='# 第2节
 '
 
 # Run the planning phase (real planning service) so the section loop begins at
-# section_brief with a durable V3 task, then write a NEUTRAL confirmed
-# section-title-lock.json bound to the just-projected project state. Returns the
-# workflow_id. Reused by every section-loop test.
+# section_brief with a durable V3 task and the title lock bound by the real
+# planning-confirmation transition. Returns the workflow_id. Reused by every
+# section-loop test.
 plan_to_section_brief() {
     node - "$REPO" "$PROJECT" "$NEUTRAL_MATERIAL" "$NEUTRAL_SETTING" "$NEUTRAL_OUTLINE" <<'NODE'
 const assert = require('assert');
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { atomicWriteJson } = require(path.join(process.argv[2], 'scripts/lib/workflow-state-store'));
-const { resolveShortStateRelative } = require(path.join(process.argv[2], 'scripts/lib/short-project-state'));
 const engine = require(path.join(process.argv[2], 'scripts/lib/workflow-v3/engine.js'));
 const planning = require(path.join(process.argv[2], 'scripts/lib/short-production/planning.js'));
 const [repo, root, materialText, settingText, outlineText] = process.argv.slice(2);
@@ -318,30 +315,11 @@ task = engine.applyStageResult(root, task.workflow_id, task.state_version, {
 }).task;
 assert.equal(task.current_stage, 'section_brief');
 
-// The REAL brief finalize requires a confirmed section-title-lock bound to the
-// CURRENT project-state workflow_id/project_id/plan_revision and the two
-// outline titles. Project-state was just projected by the real planning commit,
-// so bind the neutral lock to those freshly written values — do not invent new
-// ids. source_digest is the real sha256 over the canonical outline file.
-const projectState = JSON.parse(fs.readFileSync(path.join(root, resolveShortStateRelative(root, 'project-state.json')), 'utf8'));
-const outlineFile = path.join(root, '小节大纲.md');
-const digest = crypto.createHash('sha256').update(fs.readFileSync(outlineFile)).digest('hex');
-const lockRel = resolveShortStateRelative(root, 'section-title-lock.json', { forWrite: true });
-atomicWriteJson(path.join(root, lockRel), {
-  schema_version: '1.0.0',
-  status: 'confirmed',
-  workflow_id: String(projectState.active_write_workflow_id || task.workflow_id),
-  project_id: String(projectState.project_id || ''),
-  plan_revision: Number(projectState.plan_revision || 0),
-  planned_sections: Number(projectState.planned_sections || 2),
-  source_outline: '小节大纲.md',
-  source_digest: digest,
-  confirmed_at: new Date().toISOString(),
-  sections: [
-    { section_index: 1, title: '发现重复编号', confirmed: true, title_source: 'user_confirmed_outline' },
-    { section_index: 2, title: '恢复正确编号', confirmed: true, title_source: 'user_confirmed_outline' },
-  ],
-});
+// planning_confirmation itself must write the lock. No test fixture may fake
+// a post-confirmation artifact just to let the Brief service continue.
+const lock = JSON.parse(fs.readFileSync(path.join(root, '追踪/story-system/short/section-title-lock.json'), 'utf8'));
+assert.equal(lock.confirmation_basis, 'planning_confirmation');
+assert.deepEqual(lock.sections.map(item => item.title), ['发现重复编号', '恢复正确编号']);
 NODE
 }
 
@@ -397,6 +375,74 @@ NODE
     [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
+@test "V3 section repair keeps unchanged or empty prose at the repair stage and records the input digest" {
+    plan_to_section_brief
+    run node - "$REPO" "$PROJECT" "$NEUTRAL_BRIEF_1" "$NEUTRAL_DRAFT_1" <<'NODE'
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const [repo, root, brief, neutralDraft] = process.argv.slice(2);
+const engine = require(path.join(repo, 'scripts/lib/workflow-v3/engine.js'));
+const runner = require(path.join(repo, 'scripts/lib/workflow-v3/stage-runner.js'));
+const loop = require(path.join(repo, 'scripts/lib/short-production/section-loop.js'));
+
+const workflowId = 'wf-section-loop';
+const draftRel = '草稿_第001节_候选.md';
+const draftFile = path.join(root, draftRel);
+fs.writeFileSync(path.join(root, '写作Brief_第001节.md'), brief);
+let task = engine.readTask(root, workflowId);
+task = engine.applyStageResult(root, workflowId, task.state_version,
+  loop.finalizeBrief({ projectRoot: root, task })).task;
+
+// Use a real machine-gate finding so the Engine, rather than the test, routes
+// the task into section_repair. The ASCII quotes are a known blocking prose
+// finding; the rest stays the same neutral fixture.
+const failingDraft = neutralDraft.replace(
+  '主管推门进来，让我立刻撤回这次扫描，理由是季度交付吃紧。',
+  '主管推门进来——他说："立刻撤回这次扫描。"理由是季度交付吃紧。',
+);
+fs.writeFileSync(draftFile, failingDraft);
+let contract = runner.describeCurrentStage({ projectRoot: root, workflowId });
+task = runner.runCurrentStage({ projectRoot: root, workflowId, expectedVersion: contract.state_version }).task;
+assert.equal(task.current_stage, 'machine_gate', JSON.stringify(task));
+const machine = loop.runMachineGate({ projectRoot: root, task, draft: draftRel });
+assert.equal(machine.next_stage, 'section_repair', JSON.stringify(machine));
+task = engine.applyStageResult(root, workflowId, task.state_version, machine).task;
+assert.equal(task.current_stage, 'section_repair', JSON.stringify(task));
+assert.equal(task.stage_execution.draft_input_digest, machine.draft_digest,
+  'the repair stage must retain the exact candidate digest it is required to change');
+
+// The service itself fails closed for a missing or empty repair candidate.
+assert.equal(loop.finalizeRepair({ projectRoot: root, task, draft: 'missing.md' }).code, 'awaiting_short_draft');
+fs.writeFileSync(draftFile, '');
+assert.equal(loop.finalizeRepair({ projectRoot: root, task, draft: draftRel }).code, 'awaiting_short_draft');
+fs.writeFileSync(draftFile, failingDraft);
+
+// The production run-current-stage path must leave an unchanged candidate at
+// section_repair rather than auto-advancing to machine_gate.
+const unchanged = runner.runCurrentStage({ projectRoot: root, workflowId, expectedVersion: task.state_version });
+assert.equal(unchanged.stage_result.kind, 'blocked', JSON.stringify(unchanged));
+assert.equal(unchanged.stage_result.code, 'awaiting_short_draft_change', JSON.stringify(unchanged));
+assert.equal(unchanged.task.current_stage, 'section_repair', JSON.stringify(unchanged.task));
+
+// A real byte change is the only completion path. Replaying the stale version
+// afterward must conflict rather than advancing a second time.
+const staleVersion = unchanged.task.state_version;
+fs.appendFileSync(draftFile, '\n我把原始编号的影印件压在撤回单旁边，要求当场登记。\n');
+const changed = runner.runCurrentStage({ projectRoot: root, workflowId, expectedVersion: staleVersion });
+assert.equal(changed.stage_result.code, 'short_section_repair_ready', JSON.stringify(changed));
+assert.equal(changed.task.current_stage, 'machine_gate', JSON.stringify(changed.task));
+let stale;
+try {
+  runner.runCurrentStage({ projectRoot: root, workflowId, expectedVersion: staleVersion });
+} catch (error) {
+  stale = error;
+}
+assert.equal(stale && stale.code, 'WORKFLOW_TASK_CONFLICT');
+NODE
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 @test "V3 accepted planning feedback is durably projected before the revised draft stage" {
     plan_to_section_brief
     run node - "$REPO" "$PROJECT" "$NEUTRAL_BRIEF_1" <<'NODE'
@@ -428,19 +474,32 @@ engine.resolveAuthorInput(root, workflowId, task.state_version, {
 });
 task = engine.readTask(root, workflowId);
 assert.equal(task.pending_feedback.status, 'accepted');
+assert.equal(task.current_stage, 'feedback_apply_patch');
 
-fs.writeFileSync(path.join(root, '写作Brief_第001节.md'), brief);
 let resumed = runner.describeCurrentStage({ projectRoot: root, workflowId });
-assert.throws(() => runner.runCurrentStage({
+assert.equal(resumed.stage_id, 'feedback_apply_patch');
+assert.equal(resumed.write_set.includes('写作Brief_第001节.md'), false);
+assert.equal(resumed.write_set.length, 1);
+const stagedOutline = path.join(root, resumed.write_set[0]);
+fs.mkdirSync(path.dirname(stagedOutline), { recursive: true });
+fs.writeFileSync(stagedOutline,
+  `${fs.readFileSync(path.join(root, '小节大纲.md'), 'utf8').trim()}\n- 跨节约束：公开复核必须持续到第2节兑现。\n`);
+const patched = runner.runCurrentStage({
   projectRoot: root,
   workflowId,
   expectedVersion: resumed.state_version,
-}), /blocked_planning_memory_evidence_missing/u,
-'accepting a plan must not project chat text as canon before a planning asset actually changes');
-assert.equal(engine.readTask(root, workflowId).current_stage, 'section_brief');
-assert.ok(!fs.existsSync(path.join(root, '追踪', 'memory', 'planning-constraints.jsonl')));
+});
+assert.equal(patched.stage_result.code, 'short_feedback_planning_patch_accepted', JSON.stringify(patched));
+assert.equal(patched.task.current_stage, 'section_brief');
+assert.ok(fs.existsSync(path.join(root, '追踪', 'memory', 'planning-constraints.jsonl')));
+const refreshedState = JSON.parse(fs.readFileSync(path.join(root, '追踪/story-system/short/project-state.json'), 'utf8'));
+const refreshedLock = JSON.parse(fs.readFileSync(path.join(root, '追踪/story-system/short/section-title-lock.json'), 'utf8'));
+assert.equal(refreshedLock.plan_revision, refreshedState.plan_revision,
+  'unchanged author-confirmed titles must be rebound to the new outline revision');
+assert.equal(refreshedLock.source_digest,
+  require('crypto').createHash('sha256').update(fs.readFileSync(path.join(root, '小节大纲.md'))).digest('hex'));
 
-fs.appendFileSync(path.join(root, '小节大纲.md'), '\n- 跨节约束：公开复核必须持续到第2节兑现。\n');
+fs.writeFileSync(path.join(root, '写作Brief_第001节.md'), brief);
 resumed = runner.describeCurrentStage({ projectRoot: root, workflowId });
 const completed = runner.runCurrentStage({
   projectRoot: root,
@@ -472,7 +531,7 @@ NODE
     [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
-@test "V3 two-section production loop accepts two real sections and reaches assembly" {
+@test "V3 two-section production loop accepts real prose and closes an editorial repair cycle" {
     plan_to_section_brief
     node - "$REPO" "$PROJECT" "$NEUTRAL_BRIEF_1" "$NEUTRAL_DRAFT_1" "$NEUTRAL_BRIEF_2" "$NEUTRAL_DRAFT_2" <<'NODE'
 const assert = require('assert');
@@ -635,6 +694,103 @@ assert.equal(task.current_stage, 'assembly');
 assert.ok(!fs.existsSync(path.join(root, '写作Brief_第003节.md')), 'no section 3 Brief');
 assert.ok(!fs.existsSync(path.join(root, '正文', '第003节.md')), 'no section 3 canonical');
 assert.ok(!fs.existsSync(path.join(stateDir, 'section-003-anchor.json')), 'no section 3 anchor');
+
+// --- Whole-story editorial repair --------------------------------------
+// Assemble the accepted canonical sections, then let an editorial revise
+// result enter the same author-confirmed feedback path used in production.
+const storyFile = path.join(root, '正文.md');
+fs.writeFileSync(storyFile, `${fs.readFileSync(canonical1, 'utf8').trim()}\n\n${fs.readFileSync(path.join(root, '正文', '第002节.md'), 'utf8').trim()}\n`);
+const storyBeforeRepair = hashFile(storyFile);
+task = engine.applyStageResult(root, workflowId, task.state_version, {
+  kind: 'completed', code: 'short_story_assembled', stage_id: 'assembly', next_stage: 'editorial_review',
+}).task;
+const firstReview = engine.applyStageResult(root, workflowId, task.state_version, {
+  kind: 'completed', code: 'short_story_editorial_revision_required', stage_id: 'editorial_review',
+  decision: 'revise', next_stage: 'planning_confirmation', story_sha256: storyBeforeRepair,
+  review_card_sha256: 'sha256:editorial-cycle-one', section_indices: [1, 2],
+  findings: [{
+    code: 'EndingCost', severity: 'S2', scope: '第2节',
+    evidence_quote: '我没有再用情面替责任结账，主管也保持沉默地接受了这个结果。',
+    repair_direction: '补足主管接受结果后对公开复核的实际约束。',
+  }],
+});
+task = firstReview.task;
+assert.equal(task.current_stage, 'editorial_review');
+assert.equal(task.pending_feedback.status, 'awaiting_confirmation');
+const firstFeedbackId = task.pending_feedback.id;
+engine.resolveAuthorInput(root, workflowId, task.state_version, {
+  ...firstReview.visible_response.binding,
+  choice: '1',
+});
+task = engine.readTask(root, workflowId);
+assert.equal(task.current_stage, 'feedback_apply_patch');
+assert.equal(task.current_section_index, 2);
+
+// The accepted planning-and-prose plan has a dedicated staged transaction.
+// The canonical outline stays untouched until this transaction accepts it.
+const planningPatch = runner.describeCurrentStage({ projectRoot: root, workflowId });
+assert.equal(planningPatch.stage_id, 'feedback_apply_patch');
+assert.equal(planningPatch.write_set.includes('写作Brief_第002节.md'), false);
+const stagedRepairOutline = path.join(root, planningPatch.write_set[0]);
+fs.mkdirSync(path.dirname(stagedRepairOutline), { recursive: true });
+fs.writeFileSync(stagedRepairOutline,
+  `${fs.readFileSync(path.join(root, '小节大纲.md'), 'utf8').trim()}\n- 回炉约束：主管接受停权后，公开复核必须形成可执行的长期约束。\n`);
+task = runner.runCurrentStage({
+  projectRoot: root,
+  workflowId,
+  expectedVersion: planningPatch.state_version,
+}).task;
+assert.equal(task.current_stage, 'section_brief');
+fs.writeFileSync(path.join(root, '写作Brief_第002节.md'), `${brief2.trim()}\n\n## 回炉约束\n- 主管接受结果后，公开复核形成长期约束。\n`);
+task = engine.applyStageResult(root, workflowId, task.state_version,
+  loop.finalizeBrief({ projectRoot: root, task })).task;
+assert.equal(task.current_stage, 'section_draft');
+assert.equal(task.feedback_revision_queue.status, 'running');
+assert.deepEqual(task.feedback_revision_queue.affected_sections, [2]);
+
+const revisedDraft2 = `${draft2.trim()}\n主管随后交出审批权限，公开复核被写进每次归档都必须执行的流程。\n`;
+fs.writeFileSync(path.join(root, '草稿_第002节_候选.md'), revisedDraft2);
+task = engine.applyStageResult(root, workflowId, task.state_version,
+  loop.finalizeDraft({ projectRoot: root, task, draft: '草稿_第002节_候选.md' })).task;
+task = engine.applyStageResult(root, workflowId, task.state_version,
+  loop.runMachineGate({ projectRoot: root, task, draft: '草稿_第002节_候选.md' })).task;
+const repairEvidenceRel = writeEvidenceCard({
+  repo, root, task, draftRel: '草稿_第002节_候选.md',
+});
+task = engine.applyStageResult(root, workflowId, task.state_version,
+  loop.runStoryGate({
+    projectRoot: root, task, draft: '草稿_第002节_候选.md', evidenceFile: repairEvidenceRel,
+  })).task;
+task = engine.applyStageResult(root, workflowId, task.state_version,
+  loop.acceptSection({ projectRoot: root, task })).task;
+assert.equal(task.current_stage, 'assembly');
+assert.equal(task.feedback_revision_queue.status, 'completed');
+assert.equal(task.pending_feedback.status, 'applied');
+assert.equal(task.pending_feedback.id, firstFeedbackId);
+
+fs.writeFileSync(storyFile, `${fs.readFileSync(canonical1, 'utf8').trim()}\n\n${fs.readFileSync(path.join(root, '正文', '第002节.md'), 'utf8').trim()}\n`);
+const storyAfterRepair = hashFile(storyFile);
+assert.notEqual(storyAfterRepair, storyBeforeRepair, 'accepted editorial repair must change canonical prose');
+task = engine.applyStageResult(root, workflowId, task.state_version, {
+  kind: 'completed', code: 'short_story_reassembled', stage_id: 'assembly', next_stage: 'editorial_review',
+}).task;
+assert.equal(task.current_stage, 'editorial_review');
+
+// A still-unresolved second review creates a new proposal without erasing the
+// applied first review or its evidence.
+const secondReview = engine.applyStageResult(root, workflowId, task.state_version, {
+  kind: 'completed', code: 'short_story_editorial_revision_required', stage_id: 'editorial_review',
+  decision: 'revise', next_stage: 'planning_confirmation', story_sha256: storyAfterRepair,
+  review_card_sha256: 'sha256:editorial-cycle-two', section_indices: [1, 2],
+  findings: [{
+    code: 'reader_pull', severity: 'S3', scope: '第1节',
+    evidence_quote: '主管推门进来，让我立刻撤回这次扫描，理由是季度交付吃紧。',
+    repair_direction: '加强第一节末尾对下一步公开复核的牵引。',
+  }],
+});
+assert.equal(secondReview.task.current_stage, 'editorial_review');
+assert.notEqual(secondReview.task.pending_feedback.id, firstFeedbackId);
+assert.ok((secondReview.task.feedback_history || []).some(item => item.id === firstFeedbackId));
 NODE
 }
 
@@ -717,6 +873,27 @@ task.stage_execution.stage_context_packet = {
 const result = loop.finalizeDraft({
   projectRoot: root, task, draft: '草稿_第001节_候选.md',
 });
+assert.equal(result.kind, 'blocked', JSON.stringify(result));
+assert.equal(result.code, 'short_memory_context_refresh_required');
+assert.equal(result.memory_status, 'missing');
+NODE
+}
+
+@test "V3 Brief blocks when its recorded stage memory packet is missing" {
+    plan_to_section_brief
+    node - "$REPO" "$PROJECT" "$NEUTRAL_BRIEF_1" <<'NODE'
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const [repo, root, brief1] = process.argv.slice(2);
+const engine = require(path.join(repo, 'scripts/lib/workflow-v3/engine.js'));
+const loop = require(path.join(repo, 'scripts/lib/short-production/section-loop.js'));
+const task = engine.readTask(root, 'wf-section-loop');
+fs.writeFileSync(path.join(root, '写作Brief_第001节.md'), brief1);
+task.stage_execution.stage_context_packet = {
+  packet_json: '追踪/workflow/tasks/wf-section-loop/artifacts/missing-brief-memory-context.json',
+};
+const result = loop.finalizeBrief({ projectRoot: root, task });
 assert.equal(result.kind, 'blocked', JSON.stringify(result));
 assert.equal(result.code, 'short_memory_context_refresh_required');
 assert.equal(result.memory_status, 'missing');

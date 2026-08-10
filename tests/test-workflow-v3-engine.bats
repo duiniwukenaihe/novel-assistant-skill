@@ -641,12 +641,14 @@ assert.ok(Object.isFrozen(SHORT_GRAPH), 'SHORT_GRAPH must be frozen at top level
 // Exact node set, author_phase labels, and next lists from the brief.
 assert.deepEqual(Object.keys(SHORT_GRAPH), [
   'creative_entry', 'material_positioning', 'setting', 'section_outline',
-  'planning_confirmation', 'section_brief', 'section_draft', 'machine_gate',
+  'planning_confirmation', 'feedback_apply_patch', 'section_brief', 'section_draft', 'machine_gate',
   'section_repair', 'story_gate', 'section_accept', 'assembly',
   'editorial_review', 'deslop', 'final_check',
 ]);
 assert.equal(SHORT_GRAPH.creative_entry.author_phase, '创作入口');
 assert.deepEqual(SHORT_GRAPH.creative_entry.next, ['material_positioning']);
+assert.equal(SHORT_GRAPH.feedback_apply_patch.author_phase, '回写已确认方案');
+assert.deepEqual(SHORT_GRAPH.feedback_apply_patch.next, ['section_brief']);
 assert.equal(SHORT_GRAPH.machine_gate.author_phase, '写当前小节');
 assert.deepEqual(SHORT_GRAPH.machine_gate.next, ['story_gate', 'section_repair']);
 assert.deepEqual(SHORT_GRAPH.story_gate.next, ['section_accept', 'section_repair']);
@@ -785,6 +787,36 @@ const persisted = JSON.parse(fs.readFileSync(file, 'utf8'));
 assert.equal(persisted.current_stage, 'material_positioning');
 assert.equal(Number(persisted.state_version), startVersion + 1);
 NODE
+}
+
+@test "V3 planning confirmation refuses to advance without a canonical outline and leaves no title lock" {
+  run node - "$REPO" "$TMP_DIR" <<'NODE'
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const [repo, root] = process.argv.slice(2);
+const engine = require(path.join(repo, 'scripts/lib/workflow-v3/engine.js'));
+const store = require(path.join(repo, 'scripts/lib/workflow-v3/task-store.js'));
+const task = store.createTaskRecord(root, {
+  workflow_id: 'wf-v3-plan-title-guard', workflow_type: 'short_write',
+  current_stage: 'planning_confirmation', user_goal: '写短篇',
+});
+const taskFile = path.join(root, '追踪/workflow/tasks/wf-v3-plan-title-guard/task.json');
+const before = fs.readFileSync(taskFile);
+let threw = false;
+try {
+  engine.applyStageResult(root, task.workflow_id, task.state_version, {
+    kind: 'completed', code: 'planning_confirmed', stage_id: 'planning_confirmation',
+  });
+} catch (error) {
+  threw = true;
+  assert.match(String(error.message || error), /planning_confirmation_outline_missing/u);
+}
+assert.equal(threw, true);
+assert.deepEqual(fs.readFileSync(taskFile), before);
+assert.equal(fs.existsSync(path.join(root, '追踪/story-system/short/section-title-lock.json')), false);
+NODE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
 
 @test "V3 applyStageResult rejects a multi-next completed result without next_stage without writing" {

@@ -13,6 +13,12 @@ COMMIT_CHANGES=0
 PUSH_BRANCH=0
 ALLOW_DIRTY_SOURCE=0
 SKIP_RUNTIME_VERIFY=0
+EVIDENCE_ROOT="${NOVEL_ASSISTANT_EVIDENCE_ROOT:-$REPO_ROOT/reports}"
+PUBLIC_EVIDENCE_ROOT="${NOVEL_ASSISTANT_PUBLIC_EVIDENCE_ROOT:-}"
+PUBLIC_INSTALL_HOME=""
+RUN_PUBLIC_BEHAVIOR_EVAL=0
+BEHAVIOR_MAX_BUDGET_USD=""
+BEHAVIOR_HOSTS="claude,zcode"
 
 usage() {
   cat <<'USAGE'
@@ -32,6 +38,14 @@ Options:
   --commit                 Commit sanitized changes on the public branch
   --push                   Push HEAD to <remote>/<branch> (requires --commit)
   --allow-dirty-source     Allow dirty source checkout; only committed ref is used
+  --evidence-root <dir>    External hash-bound release evidence root (default: <repo>/reports)
+  --public-evidence-root <dir>
+                           External evidence root for the sanitized public candidate (default: --evidence-root)
+  --run-public-behavior-eval
+                           Explicitly run paid behavior evidence for all release scenarios before the gate
+  --max-behavior-budget-usd <n>
+                           Required with --run-public-behavior-eval; maximum USD for each scenario run
+  --behavior-hosts <hosts> Comma-separated paid hosts (default: claude,zcode)
   --skip-runtime-verify    Skip runtime checks for an uncommitted diagnostic preview only
   -h, --help               Show this help
 
@@ -74,6 +88,26 @@ while [ "$#" -gt 0 ]; do
       ALLOW_DIRTY_SOURCE=1
       shift
       ;;
+    --evidence-root)
+      EVIDENCE_ROOT="${2:?missing --evidence-root value}"
+      shift 2
+      ;;
+    --public-evidence-root)
+      PUBLIC_EVIDENCE_ROOT="${2:?missing --public-evidence-root value}"
+      shift 2
+      ;;
+    --run-public-behavior-eval)
+      RUN_PUBLIC_BEHAVIOR_EVAL=1
+      shift
+      ;;
+    --max-behavior-budget-usd)
+      BEHAVIOR_MAX_BUDGET_USD="${2:?missing --max-behavior-budget-usd value}"
+      shift 2
+      ;;
+    --behavior-hosts)
+      BEHAVIOR_HOSTS="${2:?missing --behavior-hosts value}"
+      shift 2
+      ;;
     --skip-runtime-verify)
       SKIP_RUNTIME_VERIFY=1
       shift
@@ -98,6 +132,13 @@ if [ "$SKIP_RUNTIME_VERIFY" -eq 1 ] && { [ "$COMMIT_CHANGES" -eq 1 ] || [ "$PUSH
   echo "Refusing --skip-runtime-verify with --commit or --push; production release gates are mandatory." >&2
   exit 2
 fi
+if [ "$RUN_PUBLIC_BEHAVIOR_EVAL" -eq 1 ] && [ -z "$BEHAVIOR_MAX_BUDGET_USD" ]; then
+  echo "--run-public-behavior-eval requires --max-behavior-budget-usd." >&2
+  exit 2
+fi
+if [ -z "$PUBLIC_EVIDENCE_ROOT" ]; then
+  PUBLIC_EVIDENCE_ROOT="$EVIDENCE_ROOT"
+fi
 
 if [ "$ALLOW_DIRTY_SOURCE" -ne 1 ] && [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
   echo "Source checkout is dirty. Commit/stash first, or pass --allow-dirty-source knowing only $SOURCE_REF is published." >&2
@@ -118,6 +159,9 @@ cleanup() {
   fi
   if [ "$KEEP_WORKTREE" -ne 1 ] && [ -e "$WORKTREE_DIR/.git" ]; then
     git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_DIR" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$PUBLIC_INSTALL_HOME" ] && [ -d "$PUBLIC_INSTALL_HOME" ]; then
+    rm -rf "$PUBLIC_INSTALL_HOME"
   fi
 }
 trap cleanup EXIT
@@ -144,10 +188,27 @@ fi
 git -C "$REPO_ROOT" worktree add --detach "$SOURCE_WORKTREE_DIR" "$SOURCE_REF"
 git -C "$REPO_ROOT" worktree add "$WORKTREE_DIR" "$TARGET_BRANCH"
 
+mkdir -p "$EVIDENCE_ROOT" "$PUBLIC_EVIDENCE_ROOT"
+EVIDENCE_ROOT="$(cd "$EVIDENCE_ROOT" && pwd)"
+PUBLIC_EVIDENCE_ROOT="$(cd "$PUBLIC_EVIDENCE_ROOT" && pwd)"
+case "$EVIDENCE_ROOT/" in
+  "$WORKTREE_DIR/"*)
+    echo "Release evidence must stay outside the public worktree." >&2
+    exit 2
+    ;;
+esac
+case "$PUBLIC_EVIDENCE_ROOT/" in
+  "$WORKTREE_DIR/"*)
+    echo "Public behavior evidence must stay outside the public worktree." >&2
+    exit 2
+    ;;
+esac
+PUBLIC_INSTALL_HOME="$(mktemp -d "${TMPDIR:-/tmp}/novel-assistant-public-install.XXXXXX")"
+
 node "$SOURCE_WORKTREE_DIR/scripts/sanitize-github-public-tree.js" --repo-root "$SOURCE_WORKTREE_DIR" --write --json
 
 NOVEL_ASSISTANT_UPDATE_SOURCE_URL="$PUBLIC_REPO_URL" \
-NOVEL_ASSISTANT_UPDATE_BRANCH="main" \
+NOVEL_ASSISTANT_UPDATE_BRANCH="$TARGET_BRANCH" \
 NOVEL_ASSISTANT_INCLUDE_PRIVATE=0 \
   bash "$SOURCE_WORKTREE_DIR/scripts/build-oh-story-bundle.sh"
 
@@ -159,10 +220,11 @@ node "$SOURCE_WORKTREE_DIR/scripts/sync-sanitized-release-tree.js" \
   --json
 
 node "$WORKTREE_DIR/scripts/public-release-audit.js" --repo-root "$WORKTREE_DIR" --json
-git -C "$WORKTREE_DIR" diff --check
 
 if [ "$SKIP_RUNTIME_VERIFY" -ne 1 ]; then
-  node "$WORKTREE_DIR/scripts/production-smoke-matrix.js" --repo-root "$WORKTREE_DIR" --json
+  RELEASE_RUN_ID="public-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  DETERMINISTIC_RECEIPT="$EVIDENCE_ROOT/private/production-repair/$RELEASE_RUN_ID/deterministic/summary.json"
+  node "$WORKTREE_DIR/scripts/production-smoke-matrix.js" --repo-root "$WORKTREE_DIR" --receipt-out "$DETERMINISTIC_RECEIPT" --json
   bats "$WORKTREE_DIR/tests/test-workflow-v3-new-short-e2e.bats"
   node "$WORKTREE_DIR/scripts/workflow-state-machine.js" templates --json > "$WORKTREE_DIR/.public-workflow-templates.json"
   node - "$WORKTREE_DIR" "$WORKTREE_DIR/.public-workflow-templates.json" <<'NODE'
@@ -219,7 +281,42 @@ console.log(JSON.stringify({
 }, null, 2));
 NODE
   rm -f "$WORKTREE_DIR/.public-workflow-templates.json"
+
+  for host in claude codex zcode; do
+    target="$PUBLIC_INSTALL_HOME/.$host/skills/novel-assistant"
+    mkdir -p "$(dirname "$target")"
+    rsync -a --delete "$WORKTREE_DIR/skills/novel-assistant/" "$target/"
+  done
+  if [ "$RUN_PUBLIC_BEHAVIOR_EVAL" -eq 1 ]; then
+    for scenario in route-single-entry write-only-section-6 review-1-200 deconstruction-health-stop review-repair-staged-gate chapter-commit-conflict; do
+      run_id="public-${scenario}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+      (
+        cd "$WORKTREE_DIR"
+        node scripts/behavior-eval.js run \
+          --execute-paid \
+          --paid-confirmation "$run_id" \
+          --max-budget-usd "$BEHAVIOR_MAX_BUDGET_USD" \
+          --scenario "$scenario" \
+          --hosts "$BEHAVIOR_HOSTS" \
+          --skill-dir "$WORKTREE_DIR/skills/novel-assistant" \
+          --run-id "$run_id" \
+          --reports-root "$PUBLIC_EVIDENCE_ROOT" \
+          --json
+      )
+    done
+  fi
+  node "$WORKTREE_DIR/scripts/production-release-gate.js" \
+    --repo-root "$WORKTREE_DIR" \
+    --profile public \
+    --evidence-root "$EVIDENCE_ROOT" \
+    --public-evidence-root "$PUBLIC_EVIDENCE_ROOT" \
+    --install-root "$PUBLIC_INSTALL_HOME" \
+    --json
+else
+  echo "Skipped runtime verification and production gate for diagnostic preview."
 fi
+
+git -C "$WORKTREE_DIR" diff --check
 
 if [ "$COMMIT_CHANGES" -eq 1 ]; then
   git -C "$WORKTREE_DIR" add -A

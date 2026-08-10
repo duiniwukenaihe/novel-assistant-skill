@@ -314,6 +314,31 @@ function isManagedShortProject(root) {
     && String(projectState.active_write_workflow_id || ''));
 }
 
+function isShortStoryProject(root) {
+  if (isManagedShortProject(root)) return true;
+  const outline = path.join(root, '小节大纲.md');
+  if (!pathHasContent(outline)) return false;
+
+  const proseDirectory = path.join(root, '正文');
+  try {
+    const proseStat = fs.lstatSync(proseDirectory);
+    if (!proseStat.isSymbolicLink() && proseStat.isDirectory()) {
+      const hasSectionProse = fs.readdirSync(proseDirectory, { withFileTypes: true })
+        .some(entry => entry.isFile() && /^第\s*0*\d+\s*节.*\.(?:md|txt)$/iu.test(entry.name));
+      if (hasSectionProse) return true;
+    }
+  } catch (_) {
+    // Fall through to the root-level Brief signal.
+  }
+
+  try {
+    return fs.readdirSync(root, { withFileTypes: true })
+      .some(entry => entry.isFile() && /^写作Brief_第\s*0*\d+\s*节\.md$/iu.test(entry.name));
+  } catch (_) {
+    return false;
+  }
+}
+
 function readJsonIfExists(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -473,6 +498,7 @@ module.exports = {
   ensureCanonicalWritePolicy,
   isCanonicalTarget,
   isManagedShortProject,
+  isShortStoryProject,
   loadCanonicalWritePolicy,
   normalizeTargets,
   normalizeWindowsTarget,

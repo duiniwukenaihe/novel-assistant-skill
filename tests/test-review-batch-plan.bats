@@ -114,7 +114,7 @@ NODE
       '{"chapterKey":"v01-c002","globalDraftOrder":2,"volume":"第1卷","chars":800,"staticRiskTags":["prose"],"boundaryTags":[]}' \
       > "$PROJECT/evidence/chapter-evidence.jsonl"
 
-    node "$REPO/scripts/review-batch-plan.js" "$PROJECT" --scope 1-2 --dimensions plot,canon,character,prose --agents-available story-explorer,consistency-checker,narrative-writer --write --json > "$TMP_DIR/dispatch-plan.json"
+    node "$REPO/scripts/review-batch-plan.js" "$PROJECT" --scope 1-2 --dimensions plot,canon,character,prose --agents-available story-architect,consistency-checker,narrative-writer --write --json > "$TMP_DIR/dispatch-plan.json"
 
     node - "$TMP_DIR/dispatch-plan.json" "$PROJECT/evidence/review-batch-plan.json" <<'NODE'
 const fs=require('fs');
@@ -124,7 +124,7 @@ const batch=out.batches[0];
 if (!Array.isArray(batch.evidence_signals) || !batch.evidence_signals.includes('character_drift') || !batch.evidence_signals.includes('prose')) throw new Error(JSON.stringify(batch));
 if (!batch.dispatch_plan || batch.dispatch_plan.retryPolicy!=='missing_dimension_once') throw new Error(JSON.stringify(batch));
 const roles=batch.dispatch_plan.roles.map((role)=>role.subagent_type);
-for (const role of ['story-explorer','narrative-writer']) if (!roles.includes(role)) throw new Error(JSON.stringify(batch.dispatch_plan));
+for (const role of ['story-architect','narrative-writer']) if (!roles.includes(role)) throw new Error(JSON.stringify(batch.dispatch_plan));
 if (roles.length !== 2) throw new Error(`small evidence batch should cap parallel review at 2: ${JSON.stringify(batch.dispatch_plan)}`);
 if (roles.includes('character-designer')) throw new Error('missing optional role must be deferred instead of forcing solo fallback');
 if (!batch.dispatch_plan.deferredDimensions.includes('character')) throw new Error(JSON.stringify(batch.dispatch_plan));

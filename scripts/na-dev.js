@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const { spawnSync } = require('child_process');
 const path = require('path');
+const { resolveInstallTargets, verifyBundleTarget, verifyRuntimeTarget } = require('./lib/install-target-resolver');
 
 const USAGE = `Usage: node scripts/na-dev.js <command> [args...]
 
@@ -42,11 +43,7 @@ Commands:
 `;
 
 const repoRoot = path.resolve(__dirname, '..');
-const localPrivateInstallTargets = [
-  path.join(process.env.HOME || '', '.claude', 'skills', 'novel-assistant'),
-  path.join(process.env.HOME || '', '.codex', 'skills', 'novel-assistant'),
-  path.join(process.env.HOME || '', '.zcode', 'skills', 'novel-assistant')
-];
+const localPrivateInstallTargets = resolveInstallTargets({});
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -77,6 +74,10 @@ function installLocalPrivate() {
   for (const target of localPrivateInstallTargets) {
     run('mkdir', ['-p', path.dirname(target)]);
     run('rsync', ['-a', '--delete', 'skills/novel-assistant/', `${target}/`]);
+    const verification = verifyBundleTarget(path.join(repoRoot, 'skills', 'novel-assistant'), target);
+    if (!verification.ok) throw new Error(`local private install mirror mismatch: ${target}`);
+    const runtime = verifyRuntimeTarget(target, 'private');
+    if (!runtime.ok) throw new Error(`local private install runtime mismatch: ${target}`);
   }
 
   run('node', ['-e', `
@@ -114,6 +115,7 @@ switch (command || 'help') {
       'tests/test-workflow-v3-engine.bats',
       'tests/test-workflow-v3-new-project.bats',
       'tests/test-workflow-v3-feedback.bats',
+      'tests/test-workflow-v3-feedback-planning-transaction.bats',
       'tests/test-workflow-v3-planning.bats',
       'tests/test-workflow-v3-section-loop.bats',
       'tests/test-workflow-v3-closure.bats',
